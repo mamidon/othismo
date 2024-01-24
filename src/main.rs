@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use rusqlite::{Connection, OpenFlags, Result};
 
 #[derive(Parser)]
 struct CliArguments {
@@ -37,7 +38,7 @@ enum SubCommands {
     SendMessage {},
 }
 
-fn main() {
+fn main() -> Result<()> {
     let command = CliArguments::parse();
 
     if let Some(image_name) = command.image_name {
@@ -70,19 +71,29 @@ fn main() {
             }) => {
                 eprintln!("Specify the image name _after_ the new-image command");
             },
-            None => eprintln!("No sub command specified")
+            None => {eprintln!("No sub command specified");}
         }
     } else {
         match command.sub_command {
             Some(SubCommands::NewImage {
                 image_name
                  }) => {
-                println!("new-image {}", image_name);
+                let image_path = image_name.clone() + ".simg";
+                if let Ok(_) = std::fs::metadata(&image_path) {
+                    eprintln!("There is already an image file at {}", image_path);
+                    return Ok(());
+                }
+
+                let connection = Connection::open(image_name.clone() + ".simg")?;
+
+                connection.execute(include_str!("./sql_scripts/create_image_schema.sql"), ())?;
+                println!("Image {} created", image_name);
             },
             _ => {
                 eprintln!("This sub-command needs the relevant image name specified before it");
             }
         }
-    }
+    };
 
+    Ok(())
 }
