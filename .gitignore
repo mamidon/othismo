@@ -1,1 +1,13 @@
-/target
+# Rust Cargo files
+target/
+Cargo.lock
+
+# IntelliJ IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+*.iws
+/out/
+/.idea_modules/
+/.gradle/
