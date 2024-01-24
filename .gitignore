@@ -11,3 +11,6 @@ Cargo.lock
 /out/
 /.idea_modules/
 /.gradle/
+
+# mamidon files
+*.sqlite
