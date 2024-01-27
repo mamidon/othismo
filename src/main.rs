@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use crate::solidarity::image::ImageFile;
 
 mod solidarity {
     use std::result;
@@ -82,8 +83,7 @@ mod solidarity {
             pub fn import_module<P: AsRef<Path>>(mut self, file_path: P, namespace_path: &str) -> Result<()> {
                 let wasm_bytes = std::fs::read(file_path.as_ref().canonicalize()?)?;
 
-                let mut store = Store::default();
-                Module::new(&store, &wasm_bytes)?;
+                Module::new(&Store::default(), &wasm_bytes)?;
 
                 self.file.execute("INSERT INTO module (path, wasm) VALUES (?,?)", params![
                     namespace_path,
@@ -137,10 +137,14 @@ fn main() -> solidarity::Result<()> {
     let command = CliArguments::parse();
 
     if let Some(image_name) = command.image_name {
+        let mut image = ImageFile::open(image_name.clone() + ".simg")?;
+
         match command.sub_command {
             Some(SubCommands::ImportModule {
                 module_name
-            }) => { unimplemented!() }
+            }) => {
+                image.import_module(module_name, "foo")?;
+            }
             Some(SubCommands::RemoveModule {
                 module_name
             }) => {
