@@ -25,7 +25,7 @@ fn file_can_import_modules() {
     let modules = file.list_modules().unwrap();
 
     assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0].0, "/test/module");
+    assert_eq!(modules[0], "/test/module");
 }
 
 
@@ -37,4 +37,18 @@ fn file_can_not_import_over_existing_modules() {
     let result = file.import_module_bytes("/test/module", &WASM);
 
     assert!(matches!(result, Err(Errors::Solidarity(SolidarityError::ModuleAlreadyExists))));
+}
+
+
+#[test]
+fn file_can_delete_modules() {
+    let mut file = ImageFile::create_in_memory().unwrap();
+
+    file.import_module_bytes("/test/module", &WASM).unwrap();
+
+    file.remove_object("/test/module").unwrap();
+
+    let modules = file.list_modules().unwrap();
+
+    assert_eq!(modules.len(), 0);
 }

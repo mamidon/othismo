@@ -6,38 +6,13 @@ use wasmer::{Module, Store};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ModuleAlreadyExists};
 use crate::solidarity::{Errors, Result};
 
-#[derive(Debug)]
-pub struct Name(String);
-
-impl Name {
-    pub fn new(name: &str) -> Name {
-        Name(name.to_string())
-    }
-}
-
-impl PartialEq<Self> for Name {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
-    }
-}
-
-impl Eq for Name {
-
-}
-
-impl Hash for Name {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
-
 pub enum Object {
     Module,
     Instance(wasmer::Instance)
 }
 pub struct Image {
     file: ImageFile,
-    name_space: HashMap<Name, Object>
+    name_space: HashMap<String, Object>
 }
 
 impl Image {
@@ -95,7 +70,7 @@ impl ImageFile {
     }
 
     fn import_module_bytes(&mut self, namespace_path: &str, wasm_bytes: &Vec<u8>) -> Result<()> {
-        if self.list_modules()?.contains(&Name(namespace_path.to_string())) {
+        if self.list_modules()?.contains(&namespace_path.to_string()) {
             return Err(Errors::Solidarity(ModuleAlreadyExists))
         }
 
@@ -104,28 +79,47 @@ impl ImageFile {
         self.file.execute("INSERT INTO module (wasm) VALUES (?)", params![wasm_bytes])?;
         let row_id = self.file.last_insert_rowid();
 
-        self.upsert_name(&Name::new(namespace_path), Some(row_id), None)?;
+        self.upsert_name(namespace_path, Some(row_id), None)?;
 
         Ok(())
     }
 
-    pub fn remove_module<P: AsRef<Path>>(&mut self, name: Name) -> Result<()> {
-        self.file.execute(r#"
-        DELETE FROM module M
-        inner join namespace N on N.module_key = M.module_key
-        WHERE path = ?"#, params![name.0])?;
-
+    pub fn remove_object(&mut self, name: &str) -> Result<()> {
+        // basically garbage collect
         self.file.execute(r#"
         DELETE FROM namespace
-        WHERE path = ?"#, params![name.0])?;
+        WHERE path = ?"#, params![name])?;
+
+        self.file.execute(r#"
+        DELETE FROM instance
+        WHERE module_key NOT IN (
+            SELECT M.module_key
+            FROM module M
+            INNER JOIN namespace N ON N.module_key = M.module_key
+            WHERE path = ?
+        ) or instance_key NOT IN (
+            SELECT M.module_key
+            FROM module M
+            INNER JOIN namespace N ON N.module_key = M.module_key
+            WHERE path = ?
+        )"#, params![name, name])?;
+
+        self.file.execute(r#"
+        DELETE FROM module
+        WHERE module_key NOT IN (
+            SELECT M.module_key
+            FROM module M
+            INNER JOIN namespace N ON N.module_key = M.module_key
+            WHERE path = ?
+        )"#, params![name])?;
 
         Ok(())
     }
 
-    pub fn list_modules(&self) -> Result<Vec<Name>> {
+    pub fn list_modules(&self) -> Result<Vec<String>> {
         let mut statement = self.file.prepare("SELECT path FROM namespace WHERE module_key IS NOT NULL")?;
         let module_names = statement.query_map([], |row| {
-            Ok(Name(row.get(0)?))
+            Ok(row.get(0)?)
         })?;
 
         let mut rows = Vec::new();
@@ -136,11 +130,11 @@ impl ImageFile {
         return Ok(rows)
     }
 
-    fn upsert_name(&mut self, name: &Name, module_key: Option<i64>, instance_key: Option<i64>) -> Result<()> {
+    fn upsert_name(&mut self, name: &str, module_key: Option<i64>, instance_key: Option<i64>) -> Result<()> {
         self.file.execute(
             "INSERT OR REPLACE INTO namespace (path, module_key, instance_key) VALUES (?,?,?)",
             params![
-            name.0,
+            name,
             module_key,
             instance_key,
         ])?;
