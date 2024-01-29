@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, params};
 use wasmer::{Module, Store};
-use crate::solidarity::Error::ImageAlreadyExists;
+use crate::solidarity::SolidarityError::{ImageAlreadyExists, ModuleAlreadyExists};
 use crate::solidarity::{Errors, Result};
 
 #[derive(Debug)]
@@ -70,6 +70,17 @@ impl ImageFile {
         })
     }
 
+    fn create_in_memory() -> Result<ImageFile> {
+        let connection = Connection::open_in_memory()?;
+
+        connection.execute_batch(include_str!("../sql_scripts/create_image_schema.sql"))?;
+
+        Ok(ImageFile {
+            path_name: PathBuf::from("/in_memory"),
+            file: connection
+        })
+    }
+
     pub fn open<P: AsRef<Path>>(path: P) -> Result<ImageFile> {
         Ok(ImageFile {
             path_name: path.as_ref().to_path_buf(),
@@ -79,6 +90,14 @@ impl ImageFile {
 
     pub fn import_module<P: AsRef<Path>>(&mut self, file_path: P, namespace_path: &str) -> Result<()> {
         let wasm_bytes = std::fs::read(file_path.as_ref().canonicalize()?)?;
+
+        self.import_module_bytes(namespace_path, &wasm_bytes)
+    }
+
+    fn import_module_bytes(&mut self, namespace_path: &str, wasm_bytes: &Vec<u8>) -> Result<()> {
+        if self.list_modules()?.contains(&Name(namespace_path.to_string())) {
+            return Err(Errors::Solidarity(ModuleAlreadyExists))
+        }
 
         Module::new(&Store::default(), &wasm_bytes)?;
 
@@ -91,7 +110,14 @@ impl ImageFile {
     }
 
     pub fn remove_module<P: AsRef<Path>>(&mut self, name: Name) -> Result<()> {
-        self.file.execute("DELETE FROM module WHERE path = ?", params![name.0])?;
+        self.file.execute(r#"
+        DELETE FROM module M
+        inner join namespace N on N.module_key = M.module_key
+        WHERE path = ?"#, params![name.0])?;
+
+        self.file.execute(r#"
+        DELETE FROM namespace
+        WHERE path = ?"#, params![name.0])?;
 
         Ok(())
     }
@@ -122,3 +148,6 @@ impl ImageFile {
         return Ok(());
     }
 }
+
+#[cfg(test)]
+mod tests;
