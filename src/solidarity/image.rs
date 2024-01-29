@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use wasmer::{Module, Store};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ModuleAlreadyExists};
 use crate::solidarity::{Errors, Result};
@@ -70,7 +70,7 @@ impl ImageFile {
     }
 
     fn import_module_bytes(&mut self, namespace_path: &str, wasm_bytes: &Vec<u8>) -> Result<()> {
-        if self.list_modules()?.contains(&namespace_path.to_string()) {
+        if self.list_objects(Some(namespace_path))?.len() > 0 {
             return Err(Errors::Solidarity(ModuleAlreadyExists))
         }
 
@@ -116,18 +116,45 @@ impl ImageFile {
         Ok(())
     }
 
-    pub fn list_modules(&self) -> Result<Vec<String>> {
-        let mut statement = self.file.prepare("SELECT path FROM namespace WHERE module_key IS NOT NULL")?;
-        let module_names = statement.query_map([], |row| {
-            Ok(row.get(0)?)
-        })?;
+    pub fn object_exists(&self, name: &str) -> Result<bool> {
+        let namespace_key: Option<i64> = self.file.query_row(
+            "select count(*) from namespace where path = ?",
+            params![name],
+            |row| row.get(0)
+        ).optional()?;
 
-        let mut rows = Vec::new();
-        for row in module_names {
-            rows.push(row?);
+        return Ok(namespace_key.is_some());
+    }
+
+    pub fn list_objects(&self, prefix: Option<&str>) -> Result<Vec<String>> {
+        match prefix {
+            None => {
+                let mut statement = self.file.prepare("SELECT path FROM namespace")?;
+                let module_names = statement.query_map([], |row| {
+                    Ok(row.get(0)?)
+                })?;
+
+                let mut rows = Vec::new();
+                for row in module_names {
+                    rows.push(row?);
+                }
+
+                Ok(rows)
+            },
+            Some(prefix) => {
+                let mut statement = self.file.prepare("SELECT path FROM namespace WHERE path LIKE '?%'")?;
+                let module_names = statement.query_map([], |row| {
+                    Ok(row.get(0)?)
+                })?;
+
+                let mut rows = Vec::new();
+                for row in module_names {
+                    rows.push(row?);
+                }
+
+                Ok(rows)
+            }
         }
-
-        return Ok(rows)
     }
 
     fn upsert_name(&mut self, name: &str, module_key: Option<i64>, instance_key: Option<i64>) -> Result<()> {
