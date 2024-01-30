@@ -2,14 +2,44 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
-use wasmer::{Module, Store};
-use crate::solidarity::SolidarityError::{ImageAlreadyExists, ModuleAlreadyExists};
+use wasmer::{MemoryView, Store};
+use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists};
 use crate::solidarity::{Errors, Result};
 
 pub enum Object {
-    Module,
+    Module(wasmer::Module),
     Instance(wasmer::Instance)
 }
+
+impl Object {
+    pub fn as_kind_str(&self) -> &'static str {
+        match self {
+            Object::Module(_) => "MODULE",
+            Object::Instance(_) => "INSTANCE"
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            Object::Module(module) => module.serialize()
+                .expect("Only valid modules should exist")
+                .to_vec(),
+            Object::Instance(instance) => instance.exports.get_memory("memory")
+                .map(|memory| memory.view(&Store::default()).read())
+                .or(Vec::new())
+        }
+    }
+}
+
+pub enum LinkKind {
+    InstanceOf
+}
+
+pub struct Link {
+    kind: LinkKind,
+    from: Object
+}
+
 pub struct Image {
     file: ImageFile,
     name_space: HashMap<String, Object>
@@ -63,24 +93,12 @@ impl ImageFile {
         })
     }
 
-    pub fn import_module<P: AsRef<Path>>(&mut self, file_path: P, namespace_path: &str) -> Result<()> {
-        let wasm_bytes = std::fs::read(file_path.as_ref().canonicalize()?)?;
-
-        self.import_module_bytes(namespace_path, &wasm_bytes)
-    }
-
-    fn import_module_bytes(&mut self, namespace_path: &str, wasm_bytes: &Vec<u8>) -> Result<()> {
-        if self.list_objects(Some(namespace_path))?.len() > 0 {
-            return Err(Errors::Solidarity(ModuleAlreadyExists))
+    pub fn import_object(&mut self, name: &str, object: Object) -> Result<()> {
+        if self.object_exists(name)? {
+            return Err(Errors::Solidarity(ObjectAlreadyExists));
         }
 
-        Module::new(&Store::default(), &wasm_bytes)?;
-
-        self.file.execute("INSERT INTO module (wasm) VALUES (?)", params![wasm_bytes])?;
-        let row_id = self.file.last_insert_rowid();
-
-        self.upsert_name(namespace_path, Some(row_id), None)?;
-
+        self.insert_object(name, "", ob)
         Ok(())
     }
 
@@ -126,47 +144,29 @@ impl ImageFile {
         return Ok(namespace_key.is_some());
     }
 
-    pub fn list_objects(&self, prefix: Option<&str>) -> Result<Vec<String>> {
-        match prefix {
-            None => {
-                let mut statement = self.file.prepare("SELECT path FROM namespace")?;
-                let module_names = statement.query_map([], |row| {
-                    Ok(row.get(0)?)
-                })?;
+    fn insert_object(&mut self, name: &str, kind: &str, bytes: &Vec<u8>) -> Result<()> {
+        self.file.execute(
+            "INSERT INTO object (kind, bytes) VALUES (?, ?)",
+            params![
+                kind,
+                bytes
+            ])?;
+        let row_id = self.file.last_insert_rowid();
 
-                let mut rows = Vec::new();
-                for row in module_names {
-                    rows.push(row?);
-                }
+        self.upsert_name(name, row_id)?;
 
-                Ok(rows)
-            },
-            Some(prefix) => {
-                let mut statement = self.file.prepare("SELECT path FROM namespace WHERE path LIKE '?%'")?;
-                let module_names = statement.query_map([], |row| {
-                    Ok(row.get(0)?)
-                })?;
-
-                let mut rows = Vec::new();
-                for row in module_names {
-                    rows.push(row?);
-                }
-
-                Ok(rows)
-            }
-        }
+        Ok(())
     }
 
-    fn upsert_name(&mut self, name: &str, module_key: Option<i64>, instance_key: Option<i64>) -> Result<()> {
+    fn upsert_name(&mut self, name: &str, object_key: i64) -> Result<()> {
         self.file.execute(
-            "INSERT OR REPLACE INTO namespace (path, module_key, instance_key) VALUES (?,?,?)",
+            "INSERT OR REPLACE INTO namespace (path, object_key) VALUES (?,?)",
             params![
             name,
-            module_key,
-            instance_key,
+            object_key
         ])?;
 
-        return Ok(());
+        Ok(())
     }
 }
 

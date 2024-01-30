@@ -6,7 +6,7 @@ pub mod image;
 #[derive(Debug)]
 pub enum SolidarityError {
     ImageAlreadyExists,
-    ModuleAlreadyExists
+    ObjectAlreadyExists
 }
 
 pub type Result<T, E=Errors> = result::Result<T,E>;

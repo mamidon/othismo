@@ -1,22 +1,23 @@
-create table module
-(
-    module_key INTEGER PRIMARY KEY,
-    wasm       BLOB not null
-);
-
-create table instance
-(
-    instance_key    INTEGER PRIMARY KEY,
-    module_key      INTEGER,
-    memory          BLOB not null,
-    FOREIGN KEY (module_key) REFERENCES module(module_key)
-);
-
 create table namespace
 (
     path            TEXT PRIMARY KEY,
-    module_key      INTEGER,
-    instance_key    INTEGER,
-    FOREIGN KEY (module_key) REFERENCES module(module_key),
-    FOREIGN KEY (instance_key) REFERENCES instance(instance_key)
+    object_key      INTEGER not null,
+    FOREIGN KEY (object_key) REFERENCES object(object_key)
 );
+
+create table object
+(
+    object_key  INTEGER PRIMARY KEY,
+    kind        TEXT CHECK ( kind IN ('MODULE', 'INSTANCE') ) not null,
+    bytes       BLOB not null,
+);
+
+create table link
+(
+    link_key    INTEGER PRIMARY KEY,
+    from_object_key     INTEGER not null,
+    to_object_key       INTEGER not null,
+    kind                TEXT CHECK ( kind IN ('INSTANCE_OF') ),
+    FOREIGN KEY (from_object_key) REFERENCES object(object_key),
+    FOREIGN KEY (to_object_key) REFERENCES  object(object_key)
+)
