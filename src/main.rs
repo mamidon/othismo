@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use crate::solidarity::image::ImageFile;
+use crate::solidarity::image::{ImageFile, Object};
 
 mod solidarity;
 
@@ -50,12 +50,8 @@ fn main() -> solidarity::Result<()> {
             Some(SubCommands::ImportModule {
                 module_name
             }) => {
-                image.import_module(module_name, "foo")?;
-
-                let modules = image.list_modules()?;
-                for m in modules {
-                    println!("{:?}", m);
-                }
+                let module = std::fs::read(&module_name)?;
+                image.import_object(&module_name, Object::new_module(&module))?;
             }
             Some(SubCommands::RemoveModule {
                 module_name

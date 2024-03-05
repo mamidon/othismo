@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
-use wasmer::{MemoryView, Store};
+use wasmer::{Module, Store};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists};
 use crate::solidarity::{Errors, Result};
 
@@ -25,9 +24,14 @@ impl Object {
                 .expect("Only valid modules should exist")
                 .to_vec(),
             Object::Instance(instance) => instance.exports.get_memory("memory")
-                .map(|memory| memory.view(&Store::default()).read())
-                .or(Vec::new())
+                .map(|memory| memory.view(&Store::default()).copy_to_vec()
+                    .expect("Why should this fail?"))
+                .expect("to_bytes failed")
         }
+    }
+
+    pub fn new_module(bytes: &Vec<u8>) -> Object {
+        Object::Module(Module::new(&Store::default(), bytes).unwrap())
     }
 }
 
@@ -98,7 +102,8 @@ impl ImageFile {
             return Err(Errors::Solidarity(ObjectAlreadyExists));
         }
 
-        self.insert_object(name, "", ob)
+        self.insert_object(name, object.as_kind_str(), &object.to_bytes())?;
+
         Ok(())
     }
 
@@ -141,7 +146,10 @@ impl ImageFile {
             |row| row.get(0)
         ).optional()?;
 
-        return Ok(namespace_key.is_some());
+        return match namespace_key {
+            Some(count) => Ok(count > 0),
+            None => Ok(false)
+        };
     }
 
     fn insert_object(&mut self, name: &str, kind: &str, bytes: &Vec<u8>) -> Result<()> {

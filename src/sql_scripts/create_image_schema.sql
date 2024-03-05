@@ -9,7 +9,7 @@ create table object
 (
     object_key  INTEGER PRIMARY KEY,
     kind        TEXT CHECK ( kind IN ('MODULE', 'INSTANCE') ) not null,
-    bytes       BLOB not null,
+    bytes       BLOB not null
 );
 
 create table link
