@@ -51,7 +51,7 @@ fn main() -> solidarity::Result<()> {
                 module_name
             }) => {
                 let module = std::fs::read(&module_name)?;
-                image.import_object(&module_name, Object::new_module(&module))?;
+                image.import_object(&module_name, Object::new_module(&module)?)?;
             }
             Some(SubCommands::RemoveModule {
                 module_name

@@ -17,11 +17,23 @@ lazy_static! {
 }
 
 #[test]
+fn file_can_import_modules() {
+    let mut file = ImageFile::create_in_memory().unwrap();
+
+    file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
+
+    let modules = file.list_objects("/test/").unwrap();
+
+    assert_eq!(modules.len(), 1);
+    assert_eq!(modules[0], "/test/module");
+}
+
+#[test]
 fn file_can_not_import_over_existing_modules() {
     let mut file = ImageFile::create_in_memory().unwrap();
 
-    file.import_object("/test/module", Object::new_module(&WASM)).unwrap();
-    let result =     file.import_object("/test/module", Object::new_module(&WASM));
+    file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
+    let result =     file.import_object("/test/module", Object::new_module(&WASM).unwrap());
 
     assert!(matches!(result, Err(Errors::Solidarity(SolidarityError::ObjectAlreadyExists))));
 }
@@ -31,7 +43,7 @@ fn file_can_not_import_over_existing_modules() {
 fn file_can_delete_modules() {
     let mut file = ImageFile::create_in_memory().unwrap();
 
-    file.import_object("/test/module", Object::new_module(&WASM)).unwrap();
+    file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
 
     file.remove_object("/test/module").unwrap();
 }

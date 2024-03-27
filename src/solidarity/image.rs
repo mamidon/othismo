@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
-use wasmer::{Module, Store};
-use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists};
-use crate::solidarity::{Errors, Result};
+use wasmer::{imports, Instance, Module, Store};
+use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
+use crate::solidarity::{Errors, Result,};
 
 pub enum Object {
-    Module(wasmer::Module),
-    Instance(wasmer::Instance)
+    Module(Module),
+    Instance(Instance)
 }
 
 impl Object {
@@ -30,8 +30,19 @@ impl Object {
         }
     }
 
-    pub fn new_module(bytes: &Vec<u8>) -> Object {
-        Object::Module(Module::new(&Store::default(), bytes).unwrap())
+    pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
+        Ok(Object::Module(Module::new(&Store::default(), bytes)?))
+    }
+
+    pub fn new_instance(module: &Object) -> Result<Object> {
+        let wasmer_module = match module {
+            Object::Module(inner_module) => inner_module,
+            _ => panic!("Should only pass in a module here")
+        };
+
+        let instance = Instance::new(&mut Store::default(), wasmer_module, &imports! {})?;
+
+        panic!();
     }
 }
 
@@ -108,33 +119,30 @@ impl ImageFile {
     }
 
     pub fn remove_object(&mut self, name: &str) -> Result<()> {
-        // basically garbage collect
+        let object_key = self.get_object_key(name)?;
+
+        let references: Option<i64> = self.file.query_row(r#"
+            select
+                count(*)
+            from link L
+            inner join object O on O.object_key = L.to_object_key
+            inner join namespace NS on NS.object_key = O.object_key
+            where NS.path = ?"#,
+            params![name],
+            |row| row.get(0)
+        ).optional()?;
+
+        if references.unwrap_or(0) > 0 {
+            return Err(Errors::Solidarity(ObjectNotFree));
+        }
+
         self.file.execute(r#"
         DELETE FROM namespace
-        WHERE path = ?"#, params![name])?;
+        WHERE object_key = ?"#, params![object_key])?;
 
         self.file.execute(r#"
-        DELETE FROM instance
-        WHERE module_key NOT IN (
-            SELECT M.module_key
-            FROM module M
-            INNER JOIN namespace N ON N.module_key = M.module_key
-            WHERE path = ?
-        ) or instance_key NOT IN (
-            SELECT M.module_key
-            FROM module M
-            INNER JOIN namespace N ON N.module_key = M.module_key
-            WHERE path = ?
-        )"#, params![name, name])?;
-
-        self.file.execute(r#"
-        DELETE FROM module
-        WHERE module_key NOT IN (
-            SELECT M.module_key
-            FROM module M
-            INNER JOIN namespace N ON N.module_key = M.module_key
-            WHERE path = ?
-        )"#, params![name])?;
+        DELETE FROM object where object_key = ?
+        "#, params![object_key])?;
 
         Ok(())
     }
@@ -149,6 +157,37 @@ impl ImageFile {
         return match namespace_key {
             Some(count) => Ok(count > 0),
             None => Ok(false)
+        };
+    }
+
+    pub fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
+        let mut statement = self.file.prepare(r#"
+            SELECT
+                NS.path
+            FROM object O
+            INNER JOIN namespace NS on NS.object_key = O.object_key
+            WHERE path LIKE ? || '%'"#)?;
+        let mut rows = statement.query(params![prefix])?;
+
+        let mut names: Vec<String> = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            names.push(row.get(0)?)
+        }
+
+        Ok(names)
+    }
+
+    fn get_object_key(&self, name: &str) -> Result<i64> {
+        let object_key: Option<i64> = self.file.query_row(
+            "select object_key from namespace where path = ?",
+            params![name],
+            |row| row.get(0)
+        ).optional()?;
+
+        return match object_key {
+            Some(key) => Ok(key),
+            None => Err(Errors::Solidarity(ObjectDoesNotExist))
         };
     }
 
@@ -175,6 +214,10 @@ impl ImageFile {
         ])?;
 
         Ok(())
+    }
+
+    fn object_row_to_enum(kind: &str, bytes: &Vec<u8>) -> Object {
+        unimplemented!()
     }
 }
 

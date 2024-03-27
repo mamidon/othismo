@@ -1,12 +1,20 @@
 use std::result;
-use wasmer::CompileError;
+use wasmer::{CompileError, InstantiationError};
 
 pub mod image;
 
 #[derive(Debug)]
 pub enum SolidarityError {
     ImageAlreadyExists,
-    ObjectAlreadyExists
+    ObjectAlreadyExists,
+    ObjectDoesNotExist,
+    ObjectNotFree
+}
+
+#[derive(Debug)]
+pub enum WasmerError {
+    Compile(CompileError),
+    Instantiation(InstantiationError)
 }
 
 pub type Result<T, E=Errors> = result::Result<T,E>;
@@ -15,7 +23,7 @@ pub enum Errors {
     Solidarity(SolidarityError),
     Rusqlite(rusqlite::Error),
     Io(std::io::Error),
-    Wasmer(wasmer::CompileError)
+    Wasmer(WasmerError)
 }
 
 impl From<rusqlite::Error> for Errors {
@@ -38,6 +46,12 @@ impl From<SolidarityError> for Errors {
 
 impl From<CompileError> for Errors {
     fn from(value: CompileError) -> Self {
-        Errors::Wasmer(value)
+        Errors::Wasmer(WasmerError::Compile(value))
+    }
+}
+
+impl From<InstantiationError> for Errors {
+    fn from(value: InstantiationError) -> Self {
+        Errors::Wasmer(WasmerError::Instantiation(value))
     }
 }
