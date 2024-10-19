@@ -16,3 +16,5 @@ Cargo.lock
 *.sqlite
 *.simg
 *.wasm
+
+.DS_Store
