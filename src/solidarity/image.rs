@@ -1,13 +1,15 @@
+use core::panic;
 use std::collections::HashMap;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
-use wasmer::{imports, Instance, Module, Store};
+use wasmbin::Module;
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
 use crate::solidarity::{Errors, Result,};
 
 pub enum Object {
-    Module(Module),
-    Instance(Instance)
+    Module(wasmbin::Module),
+    Instance(wasmbin::Module)
 }
 
 impl Object {
@@ -19,30 +21,42 @@ impl Object {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
+        fn to_vec(module: &wasmbin::Module) -> Vec<u8> {
+            let mut buffer = Vec::new();
+            module.encode_into(BufWriter::new(&mut buffer));
+
+            buffer
+        }
+
+
         match self {
-            Object::Module(module) => module.serialize()
-                .expect("Only valid modules should exist")
-                .to_vec(),
-            Object::Instance(instance) => instance.exports.get_memory("memory")
-                .map(|memory| memory.view(&Store::default()).copy_to_vec()
-                    .expect("Why should this fail?"))
-                .expect("to_bytes failed")
+            Object::Module(module) => to_vec(module),
+            Object::Instance(instance) => to_vec(instance)
+        }
+    }
+
+    pub fn from_tuple(kind: &str, bytes: Vec<u8>) -> Result<Object> {
+        match (kind) {
+            "MODULE" => Ok(Object::Module(Module::decode_from(bytes.as_slice())?)),
+            "INSTANCE" => Ok(Object::Instance(Module::decode_from(bytes.as_slice())?)),
+            _ => panic!()
         }
     }
 
     pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
-        Ok(Object::Module(Module::new(&Store::default(), bytes)?))
+        Ok(Object::Module(Module::decode_from(bytes.as_slice())?))
     }
 
-    pub fn new_instance(module: &Object) -> Result<Object> {
-        let wasmer_module = match module {
+    pub fn new_instance(object: &Object) -> Result<Object> {
+
+        let module = match object {
             Object::Module(inner_module) => inner_module,
             _ => panic!("Should only pass in a module here")
         };
 
-        let instance = Instance::new(&mut Store::default(), wasmer_module, &imports! {})?;
+        let instance = module.clone();
 
-        panic!();
+        Ok(Object::Instance(instance))
     }
 }
 
@@ -116,6 +130,21 @@ impl ImageFile {
         self.insert_object(name, object.as_kind_str(), &object.to_bytes())?;
 
         Ok(())
+    }
+
+    pub fn get_object(&self, name: &str) -> Result<Object> {
+        self.file.query_row(
+            "select 
+                kind, bytes
+            from object o
+            inner join namespace n on n.object_key = o.object_key
+            where n.path = ?",
+            params![name],
+            |row|  Ok(Object::from_tuple(
+                row.get::<usize, String>(0).map(|name| name)?.as_str(), 
+                row.get(1)?
+            )) 
+        )?
     }
 
     pub fn remove_object(&mut self, name: &str) -> Result<()> {
@@ -214,10 +243,6 @@ impl ImageFile {
         ])?;
 
         Ok(())
-    }
-
-    fn object_row_to_enum(kind: &str, bytes: &Vec<u8>) -> Object {
-        unimplemented!()
     }
 }
 

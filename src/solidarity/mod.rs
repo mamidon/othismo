@@ -1,5 +1,6 @@
 use std::result;
-use wasmer::{CompileError, InstantiationError};
+use wasmbin::io::DecodeError;
+use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError};
 
 pub mod image;
 
@@ -14,7 +15,18 @@ pub enum SolidarityError {
 #[derive(Debug)]
 pub enum WasmerError {
     Compile(CompileError),
-    Instantiation(InstantiationError)
+    Instantiation(InstantiationError),
+    Export(ExportError),
+}
+
+#[derive(Debug)]
+pub enum WasmParserError {
+    BinaryReaderError(BinaryReaderError)
+}
+
+#[derive(Debug)]
+pub enum WasmBinError {
+    DecodeError(DecodeError)
 }
 
 pub type Result<T, E=Errors> = result::Result<T,E>;
@@ -23,7 +35,9 @@ pub enum Errors {
     Solidarity(SolidarityError),
     Rusqlite(rusqlite::Error),
     Io(std::io::Error),
-    Wasmer(WasmerError)
+    Wasmer(WasmerError),
+    WasmParser(WasmParserError),
+    WasmBin(WasmBinError)
 }
 
 impl From<rusqlite::Error> for Errors {
@@ -53,5 +67,23 @@ impl From<CompileError> for Errors {
 impl From<InstantiationError> for Errors {
     fn from(value: InstantiationError) -> Self {
         Errors::Wasmer(WasmerError::Instantiation(value))
+    }
+}
+
+impl From<ExportError> for Errors {
+    fn from(value: ExportError) -> Self {
+        Errors::Wasmer(WasmerError::Export(value))
+    }
+}
+
+impl From<BinaryReaderError> for Errors {
+    fn from(value: BinaryReaderError) -> Self {
+        Errors::WasmParser(WasmParserError::BinaryReaderError(value))
+    }
+}
+
+impl From<DecodeError> for Errors {
+    fn from(value: DecodeError) -> Self {
+        Errors::WasmBin(WasmBinError::DecodeError(value))
     }
 }
