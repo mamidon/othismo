@@ -40,7 +40,10 @@ enum SubCommands {
         #[arg()]
         instance_name: String,
     },
-    SendMessage {},
+    SendMessage {
+        #[arg()]
+        instance_name: String,
+    },
     ListObjects {},
     ParseModule {
         #[arg()]
@@ -85,8 +88,10 @@ fn main() -> solidarity::Result<()> {
             }) => {
                 image.remove_object(&instance_name)?;
             }
-            Some(SubCommands::SendMessage {}) => {
-                
+            Some(SubCommands::SendMessage {
+                instance_name
+            }) => {
+                execution::send_message(&mut image, &instance_name)?;
             },
             Some(SubCommands::NewImage {
                 image_name: _
