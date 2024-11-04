@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use crate::solidarity::{Errors, SolidarityError};
-use crate::solidarity::image::{ImageFile, Object};
+use crate::solidarity::image::{Image, Object};
 
 lazy_static! {
     static ref WASM: Vec<u8> = {
@@ -18,7 +18,7 @@ lazy_static! {
 
 #[test]
 fn file_can_import_modules() {
-    let mut file = ImageFile::create_in_memory().unwrap();
+    let mut file = Image::create_in_memory().unwrap();
 
     file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
 
@@ -30,7 +30,7 @@ fn file_can_import_modules() {
 
 #[test]
 fn file_can_not_import_over_existing_modules() {
-    let mut file = ImageFile::create_in_memory().unwrap();
+    let mut file = Image::create_in_memory().unwrap();
 
     file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
     let result =     file.import_object("/test/module", Object::new_module(&WASM).unwrap());
@@ -41,7 +41,7 @@ fn file_can_not_import_over_existing_modules() {
 
 #[test]
 fn file_can_delete_modules() {
-    let mut file = ImageFile::create_in_memory().unwrap();
+    let mut file = Image::create_in_memory().unwrap();
 
     file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
 

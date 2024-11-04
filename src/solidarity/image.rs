@@ -70,26 +70,12 @@ pub struct Link {
 }
 
 pub struct Image {
-    file: ImageFile,
-    name_space: HashMap<String, Object>
-}
-
-impl Image {
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Image> {
-        Ok(Image {
-            file: ImageFile::open(path)?,
-            name_space: HashMap::new(),
-        })
-    }
-}
-
-pub struct ImageFile {
     path_name: PathBuf,
     file: Connection,
 }
 
-impl ImageFile {
-    pub fn create<P: AsRef<Path>>(path: P) -> Result<ImageFile> {
+impl Image {
+    pub fn create<P: AsRef<Path>>(path: P) -> Result<Image> {
         if let Ok(_) = std::fs::metadata(&path) {
             Err(ImageAlreadyExists)?
         }
@@ -98,25 +84,25 @@ impl ImageFile {
 
         connection.execute_batch(include_str!("../sql_scripts/create_image_schema.sql"))?;
 
-        Ok(ImageFile {
+        Ok(Image {
             path_name: path.as_ref().to_path_buf(),
             file: connection
         })
     }
 
-    fn create_in_memory() -> Result<ImageFile> {
+    fn create_in_memory() -> Result<Image> {
         let connection = Connection::open_in_memory()?;
 
         connection.execute_batch(include_str!("../sql_scripts/create_image_schema.sql"))?;
 
-        Ok(ImageFile {
+        Ok(Image {
             path_name: PathBuf::from("/in_memory"),
             file: connection
         })
     }
 
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<ImageFile> {
-        Ok(ImageFile {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Image> {
+        Ok(Image {
             path_name: path.as_ref().to_path_buf(),
             file: Connection::open(path)?
         })

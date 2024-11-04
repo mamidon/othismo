@@ -2,10 +2,11 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand};
-use crate::solidarity::image::{ImageFile, Object};
+use crate::solidarity::image::{Image, Object};
 
 mod solidarity;
 mod prototype;
+mod execution;
 
 #[derive(Parser)]
 struct CliArguments {
@@ -51,7 +52,7 @@ fn main() -> solidarity::Result<()> {
     let command = CliArguments::parse();
 
     if let Some(image_name) = command.image_name {
-        let mut image = ImageFile::open(image_name.clone() + ".simg")?;
+        let mut image = Image::open(image_name.clone() + ".simg")?;
 
         match command.sub_command {
             Some(SubCommands::ImportModule {
@@ -62,9 +63,9 @@ fn main() -> solidarity::Result<()> {
                 image.import_object(&module_namespace_name, Object::new_module(&module)?)?;
             }
             Some(SubCommands::RemoveModule {
-                module_name: _
+                module_name
             }) => {
-                unimplemented!()
+                image.remove_object(&module_name)?;
             }
             Some(SubCommands::InstantiateInstance {
                 module_name,
@@ -80,12 +81,12 @@ fn main() -> solidarity::Result<()> {
                 image.import_object(&instance_name, Object::Instance(module))?;
             }
             Some(SubCommands::DeleteInstance {
-                instance_name: _
+                instance_name
             }) => {
-                unimplemented!()
+                image.remove_object(&instance_name)?;
             }
             Some(SubCommands::SendMessage {}) => {
-                unimplemented!()
+                
             },
             Some(SubCommands::NewImage {
                 image_name: _
@@ -106,7 +107,7 @@ fn main() -> solidarity::Result<()> {
                 image_name
                  }) => {
                 let image_path = image_name.clone() + ".simg";
-                solidarity::image::ImageFile::create(image_path)?;
+                solidarity::image::Image::create(image_path)?;
 
                 println!("Image created");
             },
