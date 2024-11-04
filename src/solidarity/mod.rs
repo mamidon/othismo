@@ -1,6 +1,6 @@
 use std::result;
 use wasmbin::io::DecodeError;
-use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError};
+use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError, RuntimeError};
 
 pub mod image;
 
@@ -17,6 +17,7 @@ pub enum WasmerError {
     Compile(CompileError),
     Instantiation(InstantiationError),
     Export(ExportError),
+    RuntimeError(RuntimeError),
 }
 
 #[derive(Debug)]
@@ -73,6 +74,12 @@ impl From<InstantiationError> for Errors {
 impl From<ExportError> for Errors {
     fn from(value: ExportError) -> Self {
         Errors::Wasmer(WasmerError::Export(value))
+    }
+}
+
+impl From<RuntimeError> for Errors {
+    fn from(value: RuntimeError) -> Self {
+        Errors::Wasmer(WasmerError::RuntimeError(value))
     }
 }
 
