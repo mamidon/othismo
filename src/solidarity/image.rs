@@ -7,9 +7,48 @@ use wasmbin::Module;
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
 use crate::solidarity::{Errors, Result,};
 
+pub struct InstanceAtRest(wasmbin::Module);
+pub struct ModuleAtRest(wasmbin::Module);
+
 pub enum Object {
-    Module(wasmbin::Module),
-    Instance(wasmbin::Module)
+    Module(ModuleAtRest),
+    Instance(InstanceAtRest)
+}
+
+impl InstanceAtRest {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        self.0.encode_into(BufWriter::new(&mut buffer));
+
+        buffer
+    }
+}
+
+impl ModuleAtRest {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        self.0.encode_into(BufWriter::new(&mut buffer));
+
+        buffer
+    }
+}
+
+impl From<wasmbin::Module> for InstanceAtRest {
+    fn from(value: wasmbin::Module) -> Self {
+        InstanceAtRest(value)
+    }
+}
+
+impl From<ModuleAtRest> for InstanceAtRest {
+    fn from(value: ModuleAtRest) -> Self {
+        InstanceAtRest(value.0)
+    }
+}
+
+impl From<wasmbin::Module> for ModuleAtRest {
+    fn from(value: wasmbin::Module) -> Self {
+        ModuleAtRest(value)
+    }
 }
 
 impl Object {
@@ -30,21 +69,21 @@ impl Object {
 
 
         match self {
-            Object::Module(module) => to_vec(module),
-            Object::Instance(instance) => to_vec(instance)
+            Object::Module(module) => module.to_bytes(),
+            Object::Instance(instance) => instance.to_bytes()
         }
     }
 
     pub fn from_tuple(kind: &str, bytes: Vec<u8>) -> Result<Object> {
         match (kind) {
-            "MODULE" => Ok(Object::Module(Module::decode_from(bytes.as_slice())?)),
-            "INSTANCE" => Ok(Object::Instance(Module::decode_from(bytes.as_slice())?)),
+            "MODULE" => Ok(Object::Module(Module::decode_from(bytes.as_slice())?.into())),
+            "INSTANCE" => Ok(Object::Instance(Module::decode_from(bytes.as_slice())?.into())),
             _ => panic!()
         }
     }
 
     pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
-        Ok(Object::Module(Module::decode_from(bytes.as_slice())?))
+        Ok(Object::Module(Module::decode_from(bytes.as_slice())?.into()))
     }
 
     pub fn new_instance(object: &Object) -> Result<Object> {
@@ -54,9 +93,9 @@ impl Object {
             _ => panic!("Should only pass in a module here")
         };
 
-        let instance = module.clone();
+        let instance = module.0.clone();
 
-        Ok(Object::Instance(instance))
+        Ok(Object::Instance(instance.into()))
     }
 }
 

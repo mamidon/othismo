@@ -2,7 +2,7 @@ use std::io::BufWriter;
 
 use wasmer::{imports, Global, Instance, Store, TypedFunction, Value};
 
-use crate::solidarity::image::{Image, Object};
+use crate::solidarity::image::{Image, InstanceAtRest, Object};
 use crate::solidarity::{Errors, Result, SolidarityError};
 
 struct Session<'s> {
@@ -12,15 +12,12 @@ struct Session<'s> {
 
 struct InstanceSession {
     globals: Vec<Global>,
+    module: InstanceAtRest,
     instance: Instance
 }
 
 impl InstanceSession {
-    pub fn from_wasmbin_module(store: &mut Store, wasmbin_instance_module: &wasmbin::Module) -> Result<InstanceSession> {
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut writer = BufWriter::new(&mut buffer);
-        wasmbin_instance_module.encode_into(writer)?;
-
+    pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
         let globals = vec![
             Global::new(store, Value::F32(42.0)),
             Global::new_mut(store, Value::F32(32.0))
@@ -32,11 +29,13 @@ impl InstanceSession {
             }
         };
 
+        let buffer = instance_at_rest.to_bytes();
         let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;
         let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &environment)?;
 
         Ok(InstanceSession {
             globals: globals,
+            module: instance_at_rest,
             instance: wasmer_instance
         })
     }
@@ -60,25 +59,19 @@ impl InstanceSession {
 
 pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
     let object = image.get_object(instance_name)?;
-    let instance_module = match object {
-        Object::Instance(instance) => instance,
+    let instance_at_rest = match object {
+        Object::Instance(instance_at_rest) => instance_at_rest,
         Object::Module(_) => Err(SolidarityError::ObjectDoesNotExist)?
     };
 
     let mut store = Store::default();
-    let instance_session = InstanceSession::from_wasmbin_module(&mut store, &instance_module)?;
-
+    let instance_session = InstanceSession::from_instance_at_rest(
+        &mut store, 
+        instance_at_rest
+    )?;
 
     instance_session.print_globals(&mut store);
     instance_session.call_function(&mut store)?;
     instance_session.print_globals(&mut store);
     Ok(())
-}
-
-fn from_wasmbin_to_wasmer_module(store: &Store, wasmbin: &wasmbin::Module) -> Result<wasmer::Module> {
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut writer = BufWriter::new(&mut buffer);
-
-    wasmbin.encode_into(writer)?;
-    Ok(wasmer::Module::new(store, &buffer)?)
 }

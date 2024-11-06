@@ -81,7 +81,7 @@ fn main() -> solidarity::Result<()> {
                     Object::Module(module) => module
                 };
 
-                image.import_object(&instance_name, Object::Instance(module))?;
+                image.import_object(&instance_name, Object::Instance(module.into()))?;
             }
             Some(SubCommands::DeleteInstance {
                 instance_name
