@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
+use wasmbin::builtins::UnparsedBytes;
+use wasmbin::io::Decode;
+use wasmbin::sections::{payload, CustomSection, Kind, RawCustomSection, Section};
 use wasmbin::Module;
+use wasmer::Global;
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
 use crate::solidarity::{Errors, Result,};
 
@@ -15,12 +19,43 @@ pub enum Object {
     Instance(InstanceAtRest)
 }
 
+struct StateAtRest(String);
+
+impl Decode for StateAtRest {
+    fn decode(r: &mut impl std::io::Read) -> std::result::Result<Self, wasmbin::io::DecodeError> {
+        let mut buffer: Vec<u8> = Vec::new();
+        r.read_to_end(&mut buffer);
+
+        Ok(StateAtRest(String::from_utf8(buffer)?))
+    }
+}
+
 impl InstanceAtRest {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         self.0.encode_into(BufWriter::new(&mut buffer));
 
         buffer
+    }
+
+    pub fn persist_globals(&mut self, globals: Vec<(Vec<String>, Global)>) -> Result<wasmbin::io::DecodeError> {
+        let payload = RawCustomSection {
+            name: "mamidon".to_string(),
+            data: UnparsedBytes {
+                bytes: b"Hello, world!".to_vec()
+            }
+        };
+
+        for section in self.0.sections.iter() {
+            if let Section::Custom(custom_blob) = section {
+                let foo = custom_blob.try_contents()?;
+                if let CustomSection::Other(raw) = foo {
+                    
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

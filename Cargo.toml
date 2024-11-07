@@ -9,6 +9,5 @@ edition = "2021"
 clap = { version = "4.4.18", features = ["derive"] }
 lazy_static = "1.4.0"
 rusqlite = { version = "0.30.0", features = ["bundled"] }
-wasm-encoder = "0.212.0"
 wasmbin = "0.8.1"
 wasmer = "4.2.5"

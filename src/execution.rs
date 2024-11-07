@@ -11,7 +11,7 @@ struct Session<'s> {
 }
 
 struct InstanceSession {
-    globals: Vec<Global>,
+    globals: Vec<(Vec<String>, Global)>,
     module: InstanceAtRest,
     instance: Instance
 }
@@ -19,13 +19,13 @@ struct InstanceSession {
 impl InstanceSession {
     pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
         let globals = vec![
-            Global::new(store, Value::F32(42.0)),
-            Global::new_mut(store, Value::F32(32.0))
+            (vec!["env".to_string(), "some".to_string()], Global::new(store, Value::F32(42.0))),
+            (vec!["env".to_string(), "other".to_string()], Global::new_mut(store, Value::F32(32.0)))
         ];
         let environment = imports! {
             "env" => {
-                "some" => globals[0].clone(),
-                "other" => globals[1].clone(),
+                "some" => globals[0].1.clone(),
+                "other" => globals[1].1.clone(),
             }
         };
 
@@ -52,8 +52,14 @@ impl InstanceSession {
 
     pub fn print_globals(&self, store: &mut Store) {
         for global in self.globals.iter() {
-            println!("{:?}", global.get(store))
+            println!("{:?}", global.1.get(store))
         }
+    }
+}
+
+impl From<InstanceSession> for InstanceAtRest {
+    fn from(value: InstanceSession) -> Self {
+        
     }
 }
 
