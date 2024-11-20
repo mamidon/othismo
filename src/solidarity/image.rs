@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
-use wasmbin::builtins::UnparsedBytes;
+use wasmbin::builtins::{Blob, Lazy, UnparsedBytes};
 use wasmbin::io::Decode;
 use wasmbin::sections::{payload, CustomSection, Kind, RawCustomSection, Section};
 use wasmbin::Module;
@@ -38,7 +38,7 @@ impl InstanceAtRest {
         buffer
     }
 
-    pub fn persist_globals(&mut self, globals: Vec<(Vec<String>, Global)>) -> Result<wasmbin::io::DecodeError> {
+    pub fn persist_state_storage_section(&mut self) -> Result<()> {
         let payload = RawCustomSection {
             name: "mamidon".to_string(),
             data: UnparsedBytes {
@@ -46,14 +46,24 @@ impl InstanceAtRest {
             }
         };
 
-        for section in self.0.sections.iter() {
+        println!("section count: {}", self.0.sections.len());
+        for section in self.0.sections.iter_mut() {
             if let Section::Custom(custom_blob) = section {
-                let foo = custom_blob.try_contents()?;
-                if let CustomSection::Other(raw) = foo {
-                    
+                let decoded_blob = custom_blob.try_contents_mut()?;
+                if let CustomSection::Other(raw) = decoded_blob {
+                    if (raw.name == payload.name) {
+                        raw.data = payload.data.clone();
+                        
+                        println!("mutated existing section: {}", self.0.sections.len());
+                        return Ok(());
+                    }
                 }
             }
         }
+
+        self.0.sections.push(Section::Custom(Blob { contents: Lazy::from(payload::Custom::Other(payload))}));
+
+        println!("section count: {}", self.0.sections.len());
 
         Ok(())
     }

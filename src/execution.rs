@@ -19,13 +19,11 @@ struct InstanceSession {
 impl InstanceSession {
     pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
         let globals = vec![
-            (vec!["env".to_string(), "some".to_string()], Global::new(store, Value::F32(42.0))),
-            (vec!["env".to_string(), "other".to_string()], Global::new_mut(store, Value::F32(32.0)))
+            (vec!["env".to_string(), "g".to_string()], Global::new_mut(store, Value::I32(42))),
         ];
         let environment = imports! {
             "env" => {
-                "some" => globals[0].1.clone(),
-                "other" => globals[1].1.clone(),
+                "g" => globals[0].1.clone(),
             }
         };
 
@@ -41,12 +39,12 @@ impl InstanceSession {
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
-        let set_some: TypedFunction<(f32), ()> = self.instance
+        let set_some: TypedFunction<(), ()> = self.instance
         .exports
-        .get_function("set_other")?
+        .get_function("f")?
         .typed(store)?;
 
-        set_some.call(store, 100.0)?;
+        set_some.call(store)?;
         Ok(())
     }
 
@@ -59,7 +57,7 @@ impl InstanceSession {
 
 impl From<InstanceSession> for InstanceAtRest {
     fn from(value: InstanceSession) -> Self {
-        
+        value.module
     }
 }
 
@@ -79,5 +77,10 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
     instance_session.print_globals(&mut store);
     instance_session.call_function(&mut store)?;
     instance_session.print_globals(&mut store);
+    
+    let mut dehydrated_instance = InstanceAtRest::from(instance_session);
+    dehydrated_instance.persist_state_storage_section();
+    image.remove_object(instance_name)?;
+    image.import_object(instance_name, Object::Instance(dehydrated_instance))?;
     Ok(())
 }
