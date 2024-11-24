@@ -2,7 +2,9 @@ use core::panic;
 use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use bson::Document;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use wasmbin::builtins::{Blob, Lazy, UnparsedBytes};
 use wasmbin::io::Decode;
 use wasmbin::sections::{payload, CustomSection, Kind, RawCustomSection, Section};
@@ -19,16 +21,8 @@ pub enum Object {
     Instance(InstanceAtRest)
 }
 
-struct StateAtRest(String);
-
-impl Decode for StateAtRest {
-    fn decode(r: &mut impl std::io::Read) -> std::result::Result<Self, wasmbin::io::DecodeError> {
-        let mut buffer: Vec<u8> = Vec::new();
-        r.read_to_end(&mut buffer);
-
-        Ok(StateAtRest(String::from_utf8(buffer)?))
-    }
-}
+#[derive(Serialize, Deserialize)]
+pub struct StateAtRest(String);
 
 impl InstanceAtRest {
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -38,11 +32,24 @@ impl InstanceAtRest {
         buffer
     }
 
-    pub fn persist_state_storage_section(&mut self) -> Result<()> {
+    fn persist_state_storage_section(&mut self) -> Result<()> {
+
+        let buffer = {
+            let state = StateAtRest("Hello, world".to_owned());
+            let mut document = Document::new();
+            let mut buffer = Vec::new();
+            
+            document.insert("instance_state", bson::to_bson(&state)?);
+            document.to_writer(BufWriter::new(&mut buffer));
+    
+            buffer
+        };
+
+
         let payload = RawCustomSection {
             name: "mamidon".to_string(),
             data: UnparsedBytes {
-                bytes: b"Hello, world!".to_vec()
+                bytes: buffer
             }
         };
 
@@ -86,7 +93,10 @@ impl From<wasmbin::Module> for InstanceAtRest {
 
 impl From<ModuleAtRest> for InstanceAtRest {
     fn from(value: ModuleAtRest) -> Self {
-        InstanceAtRest(value.0)
+        let mut instance = InstanceAtRest(value.0);
+        instance.persist_state_storage_section().expect("Error dehydrating instance");
+
+        instance
     }
 }
 

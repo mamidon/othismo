@@ -79,7 +79,6 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
     instance_session.print_globals(&mut store);
     
     let mut dehydrated_instance = InstanceAtRest::from(instance_session);
-    dehydrated_instance.persist_state_storage_section();
     image.remove_object(instance_name)?;
     image.import_object(instance_name, Object::Instance(dehydrated_instance))?;
     Ok(())
