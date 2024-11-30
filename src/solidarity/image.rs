@@ -9,7 +9,7 @@ use wasmbin::builtins::{Blob, Lazy, UnparsedBytes};
 use wasmbin::io::Decode;
 use wasmbin::sections::{payload, CustomSection, Kind, RawCustomSection, Section};
 use wasmbin::Module;
-use wasmer::Global;
+use wasmer::{Global, GlobalType, Store, Type};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
 use crate::solidarity::{Errors, Result,};
 
@@ -22,8 +22,35 @@ pub enum Object {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct StateAtRest(String);
+pub enum GlobalAtRest {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64)
+}
 
+impl From<(&wasmer::Global, &mut Store)> for GlobalAtRest {
+    fn from(tuple: (&wasmer::Global, &mut Store)) -> Self {
+        let (global, store) = tuple;
+
+        match global.get(store) {
+            wasmer::Value::I32(i) => GlobalAtRest::I32(i),
+            wasmer::Value::I64(i) => GlobalAtRest::I32(i),
+            wasmer::Value::F32(f) => GlobalAtRest::F32(f),
+            wasmer::Value::F64(f) => GlobalAtRest::F64(f),
+            wasmer::Value::ExternRef(extern_ref) => todo!(),
+            wasmer::Value::FuncRef(function) => todo!(),
+            wasmer::Value::V128(_) => todo!(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StateAtRest{
+    globals: HashMap<String, GlobalAtRest>
+}
+
+// TODO InstanceAtRest must provide ways to read & write dehydrated state to consumers
 impl InstanceAtRest {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
@@ -32,9 +59,10 @@ impl InstanceAtRest {
         buffer
     }
 
-    fn persist_state_storage_section(&mut self) -> Result<()> {
+    pub fn persist_state_storage_section(&mut self) -> Result<()> {
 
         let buffer = {
+            // todo, accept state at rest as a parameter
             let state = StateAtRest("Hello, world".to_owned());
             let mut document = Document::new();
             let mut buffer = Vec::new();
@@ -53,7 +81,6 @@ impl InstanceAtRest {
             }
         };
 
-        println!("section count: {}", self.0.sections.len());
         for section in self.0.sections.iter_mut() {
             if let Section::Custom(custom_blob) = section {
                 let decoded_blob = custom_blob.try_contents_mut()?;
@@ -70,8 +97,6 @@ impl InstanceAtRest {
 
         self.0.sections.push(Section::Custom(Blob { contents: Lazy::from(payload::Custom::Other(payload))}));
 
-        println!("section count: {}", self.0.sections.len());
-
         Ok(())
     }
 }
@@ -84,6 +109,7 @@ impl ModuleAtRest {
         buffer
     }
 }
+
 
 impl From<wasmbin::Module> for InstanceAtRest {
     fn from(value: wasmbin::Module) -> Self {
