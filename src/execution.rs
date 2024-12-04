@@ -1,6 +1,6 @@
 use std::io::BufWriter;
 
-use wasmer::{imports, Global, Instance, Store, TypedFunction, Value};
+use wasmer::{imports, Global, Imports, Instance, Store, TypedFunction, Value};
 
 use crate::solidarity::image::{Image, InstanceAtRest, Object};
 use crate::solidarity::{Errors, Result, SolidarityError};
@@ -21,11 +21,14 @@ impl InstanceSession {
         let globals = vec![
             (vec!["env".to_string(), "g".to_string()], Global::new_mut(store, Value::I32(42))),
         ];
-        let environment = imports! {
+        let environment_opld = imports! {
             "env" => {
                 "g" => globals[0].1.clone(),
             }
         };
+
+        let mut environment = Imports::new();
+        environment.
 
         let buffer = instance_at_rest.to_bytes();
         let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;

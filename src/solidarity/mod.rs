@@ -39,7 +39,8 @@ pub enum Errors {
     Wasmer(WasmerError),
     WasmParser(WasmParserError),
     WasmBin(WasmBinError),
-    Bson(bson::ser::Error)
+    BsonSerialize(bson::ser::Error),
+    BsonDeserialize(bson::de::Error)
 }
 
 impl From<rusqlite::Error> for Errors {
@@ -98,6 +99,12 @@ impl From<DecodeError> for Errors {
 
 impl From<bson::ser::Error> for Errors {
     fn from(value: bson::ser::Error) -> Self {
-        Errors::Bson(value)
+        Errors::BsonSerialize(value)
+    }
+}
+
+impl From<bson::de::Error> for Errors {
+    fn from(value: bson::de::Error) -> Self {
+        Errors::BsonDeserialize(value)
     }
 }

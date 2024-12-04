@@ -35,7 +35,7 @@ impl From<(&wasmer::Global, &mut Store)> for GlobalAtRest {
 
         match global.get(store) {
             wasmer::Value::I32(i) => GlobalAtRest::I32(i),
-            wasmer::Value::I64(i) => GlobalAtRest::I32(i),
+            wasmer::Value::I64(i) => GlobalAtRest::I64(i),
             wasmer::Value::F32(f) => GlobalAtRest::F32(f),
             wasmer::Value::F64(f) => GlobalAtRest::F64(f),
             wasmer::Value::ExternRef(extern_ref) => todo!(),
@@ -52,6 +52,50 @@ pub struct StateAtRest{
 
 // TODO InstanceAtRest must provide ways to read & write dehydrated state to consumers
 impl InstanceAtRest {
+    pub fn find_or_create_state(&self) -> Result<StateAtRest> {
+        // Find a pre-existing state blob
+        for section in self.0.sections.iter() {
+            if let Section::Custom(custom_blob) = section {
+                let decoded_blob = custom_blob.try_contents()?;
+                if let CustomSection::Other(raw) = decoded_blob {
+                    if (raw.name == "othismo") {
+                        let state: StateAtRest = bson::from_slice(&raw.data)?;
+                        return Ok(state);
+                    }
+                }
+            }
+        }
+
+        // create a new state blob
+        let mut state = StateAtRest {
+            globals: HashMap::new()
+        };
+
+        panic!("this is where I left off.");
+        /*
+         Anything accessible to the outside world is named in the Exports section.
+         Those names are mapped to an index in one of the WASM tables, e.g. globals.
+         Fetch those mappings, then use them to read in the default values of globals et al.
+        */
+
+        if let Some(global_section) = self.0.find_std_section::<wasmbin::sections::payload::Global>() {
+            for global in global_section.contents.try_contents()? {
+                assert!(global.init.len() == 1, "Multiple init instructions for a global?");
+                let value = match &global.init[0] {
+                    wasmbin::instructions::Instruction::I32Const(int32) => GlobalAtRest::I32(*int32),
+                    wasmbin::instructions::Instruction::I64Const(int64) => GlobalAtRest::I64(*int64),
+                    wasmbin::instructions::Instruction::F32Const(float32) => GlobalAtRest::F32(float32.value),
+                    wasmbin::instructions::Instruction::F64Const(float64) => GlobalAtRest::F64(float64.value),
+                    _ => panic!("Unexpected global init instruction")
+                };
+
+                state.globals.insert(global., v)
+            }
+        }
+
+        unimplemented!()
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         self.0.encode_into(BufWriter::new(&mut buffer));
@@ -63,7 +107,9 @@ impl InstanceAtRest {
 
         let buffer = {
             // todo, accept state at rest as a parameter
-            let state = StateAtRest("Hello, world".to_owned());
+            let state = StateAtRest {
+                globals: HashMap::new()
+            };
             let mut document = Document::new();
             let mut buffer = Vec::new();
             
