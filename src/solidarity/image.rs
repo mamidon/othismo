@@ -1,4 +1,5 @@
 use core::panic;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use wasmbin::builtins::{Blob, Lazy, UnparsedBytes};
 use wasmbin::io::Decode;
-use wasmbin::sections::{payload, CustomSection, Kind, RawCustomSection, Section};
+use wasmbin::sections::{payload, CustomSection, ImportDesc, Kind, RawCustomSection, Section};
 use wasmbin::Module;
 use wasmer::{Global, GlobalType, Store, Type};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
@@ -23,21 +24,57 @@ pub enum Object {
 
 #[derive(Serialize, Deserialize)]
 pub enum GlobalAtRest {
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64)
+    I32(i32, GlobalMutability),
+    I64(i64, GlobalMutability),
+    F32(f32, GlobalMutability),
+    F64(f64, GlobalMutability)
+}
+
+impl GlobalAtRest {
+    pub fn mutability(&self) -> &GlobalMutability {
+        match self {
+            GlobalAtRest::I32(_, global_mutability) => global_mutability,
+            GlobalAtRest::I64(_, global_mutability) => global_mutability,
+            GlobalAtRest::F32(_, global_mutability) => global_mutability,
+            GlobalAtRest::F64(_, global_mutability) => global_mutability,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum GlobalMutability {
+    Const,
+    Var
+}
+
+impl From<wasmer::Mutability> for GlobalMutability {
+    fn from(mutability: wasmer::Mutability) -> Self {
+        match mutability {
+            wasmer::Mutability::Const => GlobalMutability::Const,
+            wasmer::Mutability::Var => GlobalMutability::Var,
+        }
+    }
+}
+
+impl From<GlobalMutability> for wasmer::Mutability {
+    fn from(mutability: GlobalMutability) -> Self {
+        match mutability {
+            GlobalMutability::Const => wasmer::Mutability::Const,
+            GlobalMutability::Var => wasmer::Mutability::Var,
+        }
+    }
 }
 
 impl From<(&wasmer::Global, &mut Store)> for GlobalAtRest {
     fn from(tuple: (&wasmer::Global, &mut Store)) -> Self {
         let (global, store) = tuple;
+        let mutability = global.ty(store).mutability.into();
 
         match global.get(store) {
-            wasmer::Value::I32(i) => GlobalAtRest::I32(i),
-            wasmer::Value::I64(i) => GlobalAtRest::I64(i),
-            wasmer::Value::F32(f) => GlobalAtRest::F32(f),
-            wasmer::Value::F64(f) => GlobalAtRest::F64(f),
+            wasmer::Value::I32(i) => GlobalAtRest::I32(i, mutability),
+            wasmer::Value::I64(i) => GlobalAtRest::I64(i, mutability),
+            wasmer::Value::F32(f) => GlobalAtRest::F32(f, mutability),
+            wasmer::Value::F64(f) => GlobalAtRest::F64(f, mutability),
             wasmer::Value::ExternRef(extern_ref) => todo!(),
             wasmer::Value::FuncRef(function) => todo!(),
             wasmer::Value::V128(_) => todo!(),
@@ -45,9 +82,20 @@ impl From<(&wasmer::Global, &mut Store)> for GlobalAtRest {
     }
 }
 
+impl From<&GlobalAtRest> for wasmer::Value {
+    fn from(value: &GlobalAtRest) -> Self {
+        match value {
+            GlobalAtRest::I32(v, _) => wasmer::Value::I32(*v),
+            GlobalAtRest::I64(v, _) => wasmer::Value::I64(*v),
+            GlobalAtRest::F32(v, _) => wasmer::Value::F32(*v),
+            GlobalAtRest::F64(v, _) => wasmer::Value::F64(*v),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct StateAtRest{
-    globals: HashMap<String, GlobalAtRest>
+    pub globals: HashMap<String, GlobalAtRest>
 }
 
 // TODO InstanceAtRest must provide ways to read & write dehydrated state to consumers
@@ -71,30 +119,34 @@ impl InstanceAtRest {
             globals: HashMap::new()
         };
 
-        panic!("this is where I left off.");
-        /*
-         Anything accessible to the outside world is named in the Exports section.
-         Those names are mapped to an index in one of the WASM tables, e.g. globals.
-         Fetch those mappings, then use them to read in the default values of globals et al.
-        */
+        if let Some(import_section) = self.0.find_std_section::<wasmbin::sections::payload::Import>() {
+            for import in import_section.contents.try_contents()? {
+                match &import.desc {
+                    ImportDesc::Func(func) => todo!(),
+                    ImportDesc::Global(global) => {
+                        let mutability = match global.mutable {
+                            true => GlobalMutability::Var,
+                            false => GlobalMutability::Const
+                        };
 
-        if let Some(global_section) = self.0.find_std_section::<wasmbin::sections::payload::Global>() {
-            for global in global_section.contents.try_contents()? {
-                assert!(global.init.len() == 1, "Multiple init instructions for a global?");
-                let value = match &global.init[0] {
-                    wasmbin::instructions::Instruction::I32Const(int32) => GlobalAtRest::I32(*int32),
-                    wasmbin::instructions::Instruction::I64Const(int64) => GlobalAtRest::I64(*int64),
-                    wasmbin::instructions::Instruction::F32Const(float32) => GlobalAtRest::F32(float32.value),
-                    wasmbin::instructions::Instruction::F64Const(float64) => GlobalAtRest::F64(float64.value),
-                    _ => panic!("Unexpected global init instruction")
-                };
-
-                state.globals.insert(global., v)
+                        let value = match &global.value_type {
+                            wasmbin::types::ValueType::V128 => todo!(),
+                            wasmbin::types::ValueType::F64 => GlobalAtRest::F64(0.0, mutability),
+                            wasmbin::types::ValueType::F32 => GlobalAtRest::F32(0.0, mutability),
+                            wasmbin::types::ValueType::I32 => GlobalAtRest::I32(0, mutability),
+                            wasmbin::types::ValueType::I64 => GlobalAtRest::I64(0, mutability),
+                            wasmbin::types::ValueType::Ref(ref_type) => todo!(),
+                        };
+                        state.globals.insert(format!("{}.{}", import.path.module, import.path.name), value);
+                    },
+                    ImportDesc::Mem(mem) => todo!(),
+                    ImportDesc::Table(table) => todo!(),
+                }
             }
         }
 
-        unimplemented!()
-    }
+        Ok(state)
+     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
