@@ -6,13 +6,17 @@ use std::path::{Path, PathBuf};
 use bson::Document;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use wasmbin::builtins::{Blob, Lazy, UnparsedBytes};
+use wasmbin::builtins::{Blob, FloatConst, Lazy, UnparsedBytes};
+use wasmbin::indices::{GlobalId, TypeId};
+use wasmbin::instructions::Instruction;
 use wasmbin::io::Decode;
-use wasmbin::sections::{payload, CustomSection, ImportDesc, Kind, RawCustomSection, Section};
+use wasmbin::sections::{payload, CustomSection, Export, Global, Import, ImportDesc, Kind, RawCustomSection, Section};
 use wasmbin::Module;
-use wasmer::{Global, GlobalType, Store, Type};
+use wasmer::{GlobalType, Store, Type};
 use crate::solidarity::SolidarityError::{ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree};
 use crate::solidarity::{Errors, Result,};
+
+use super::SolidarityError;
 
 pub struct InstanceAtRest(wasmbin::Module);
 pub struct ModuleAtRest(wasmbin::Module);
@@ -206,6 +210,68 @@ impl ModuleAtRest {
 
         buffer
     }
+
+    fn export_imported_globals(mut module: wasmbin::Module) -> Result<wasmbin::Module, Errors> {
+        let extracted_globals = ModuleAtRest::extract_imported_globals(&mut module)?;
+        ModuleAtRest::export_extracted_globals(&mut module, extracted_globals)?;
+
+        Ok(module)
+     }
+
+     fn export_extracted_globals(module: &mut wasmbin::Module, extracted_globals: Vec<Global>) -> Result<(), Errors> {
+        let global_section = module.find_or_insert_std_section(|| payload::Global::default());
+        let mut existing_globals = global_section.contents.try_contents_mut()?;
+
+        for global in extracted_globals.iter() {
+            existing_globals.push(global.clone());
+        }
+
+        let exports_section = module.find_or_insert_std_section(|| payload::Export::default());
+        let mut existing_exports = exports_section.contents.try_contents_mut()?;
+
+        for (index, global) in extracted_globals.iter().enumerate().rev() {
+            let name = format!("othismo_global_{}", index);
+            let id: GlobalId = (index as u32).into();
+
+            existing_exports.insert(0, Export {
+                name,
+                desc: wasmbin::sections::ExportDesc::Global(id)
+            });
+        }
+
+        Ok(())
+     }
+
+     fn extract_imported_globals(module: &mut wasmbin::Module) -> Result<Vec<wasmbin::sections::Global>, Errors> {
+        let import_section = module.find_or_insert_std_section(|| payload::Import::default());
+        let mut imports = import_section.contents.try_contents_mut()?;
+        let mut globals: Vec<wasmbin::sections::Global> = Vec::new();
+
+        while let Some(index) = imports.iter().position(|import| matches!(import.desc, ImportDesc::Global(_))) {
+            let Import { path, desc } = &imports[index];
+
+            globals.push(match desc {
+                ImportDesc::Global(ty) => {
+                    Global {
+                        ty: ty.clone(),
+                        init: match &ty.value_type {
+                            wasmbin::types::ValueType::F64 => vec![Instruction::F64Const(FloatConst { value: 0f64 })],
+                            wasmbin::types::ValueType::F32 => vec![Instruction::F32Const(FloatConst { value: 0f32 })],
+                            wasmbin::types::ValueType::I64 => vec![Instruction::I64Const(0)],
+                            wasmbin::types::ValueType::I32 => vec![Instruction::I32Const(0)],
+                            wasmbin::types::ValueType::Ref(_) => Err(SolidarityError::UnsupportedModuleDefinition("reference_type_global".to_string()))?,
+                            wasmbin::types::ValueType::V128 => Err(SolidarityError::UnsupportedModuleDefinition("simd_global".to_string()))?,
+                        }
+                    }
+                },
+                _ => panic!()
+            });
+
+            imports.remove(index);
+        }
+
+        Ok(globals)
+     }
 }
 
 
@@ -224,9 +290,11 @@ impl From<ModuleAtRest> for InstanceAtRest {
     }
 }
 
-impl From<wasmbin::Module> for ModuleAtRest {
-    fn from(value: wasmbin::Module) -> Self {
-        ModuleAtRest(value)
+impl TryFrom<wasmbin::Module> for ModuleAtRest {
+    type Error=Errors;
+
+    fn try_from(module: wasmbin::Module) -> std::result::Result<Self, Self::Error> {
+        Ok(ModuleAtRest(ModuleAtRest::export_imported_globals(module)?))
     }
 }
 
@@ -255,14 +323,14 @@ impl Object {
 
     pub fn from_tuple(kind: &str, bytes: Vec<u8>) -> Result<Object> {
         match (kind) {
-            "MODULE" => Ok(Object::Module(Module::decode_from(bytes.as_slice())?.into())),
+            "MODULE" => Ok(Object::Module(Module::decode_from(bytes.as_slice())?.try_into()?)),
             "INSTANCE" => Ok(Object::Instance(Module::decode_from(bytes.as_slice())?.into())),
             _ => panic!()
         }
     }
 
     pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
-        Ok(Object::Module(Module::decode_from(bytes.as_slice())?.into()))
+        Ok(Object::Module(Module::decode_from(bytes.as_slice())?.try_into()?))
     }
 
     pub fn new_instance(object: &Object) -> Result<Object> {

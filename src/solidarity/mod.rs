@@ -9,7 +9,8 @@ pub enum SolidarityError {
     ImageAlreadyExists,
     ObjectAlreadyExists,
     ObjectDoesNotExist,
-    ObjectNotFree
+    ObjectNotFree,
+    UnsupportedModuleDefinition(String)
 }
 
 #[derive(Debug)]
