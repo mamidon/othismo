@@ -3,6 +3,7 @@ use crate::solidarity::SolidarityError::{
 };
 use crate::solidarity::{Errors, Result};
 use bson::Document;
+use wasmbin::types::{Limits, MemType};
 use core::panic;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -11,11 +12,12 @@ use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use wasmbin::builtins::{Blob, FloatConst, Lazy, UnparsedBytes};
-use wasmbin::indices::{GlobalId, TypeId};
+use wasmbin::indices::{GlobalId, MemId, TypeId};
 use wasmbin::instructions::Instruction;
 use wasmbin::io::Decode;
 use wasmbin::sections::{
-    payload, CustomSection, Export, Global, Import, ImportDesc, Kind, RawCustomSection, Section,
+    payload, CustomSection, Export, ExportDesc, Global, Import, ImportDesc, Kind, RawCustomSection,
+    Section,
 };
 use wasmbin::Module;
 use wasmer::{GlobalType, Store, Type};
@@ -30,78 +32,6 @@ pub enum Object {
     Instance(InstanceAtRest),
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum GlobalAtRest {
-    I32(i32, GlobalMutability),
-    I64(i64, GlobalMutability),
-    F32(f32, GlobalMutability),
-    F64(f64, GlobalMutability),
-}
-
-impl GlobalAtRest {
-    pub fn mutability(&self) -> &GlobalMutability {
-        match self {
-            GlobalAtRest::I32(_, global_mutability) => global_mutability,
-            GlobalAtRest::I64(_, global_mutability) => global_mutability,
-            GlobalAtRest::F32(_, global_mutability) => global_mutability,
-            GlobalAtRest::F64(_, global_mutability) => global_mutability,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum GlobalMutability {
-    Const,
-    Var,
-}
-
-impl From<wasmer::Mutability> for GlobalMutability {
-    fn from(mutability: wasmer::Mutability) -> Self {
-        match mutability {
-            wasmer::Mutability::Const => GlobalMutability::Const,
-            wasmer::Mutability::Var => GlobalMutability::Var,
-        }
-    }
-}
-
-impl From<GlobalMutability> for wasmer::Mutability {
-    fn from(mutability: GlobalMutability) -> Self {
-        match mutability {
-            GlobalMutability::Const => wasmer::Mutability::Const,
-            GlobalMutability::Var => wasmer::Mutability::Var,
-        }
-    }
-}
-
-impl From<(&wasmer::Global, &mut Store)> for GlobalAtRest {
-    fn from(tuple: (&wasmer::Global, &mut Store)) -> Self {
-        let (global, store) = tuple;
-        let mutability = global.ty(store).mutability.into();
-
-        match global.get(store) {
-            wasmer::Value::I32(i) => GlobalAtRest::I32(i, mutability),
-            wasmer::Value::I64(i) => GlobalAtRest::I64(i, mutability),
-            wasmer::Value::F32(f) => GlobalAtRest::F32(f, mutability),
-            wasmer::Value::F64(f) => GlobalAtRest::F64(f, mutability),
-            wasmer::Value::ExternRef(extern_ref) => todo!(),
-            wasmer::Value::FuncRef(function) => todo!(),
-            wasmer::Value::V128(_) => todo!(),
-        }
-    }
-}
-
-impl From<&GlobalAtRest> for wasmer::Value {
-    fn from(value: &GlobalAtRest) -> Self {
-        match value {
-            GlobalAtRest::I32(v, _) => wasmer::Value::I32(*v),
-            GlobalAtRest::I64(v, _) => wasmer::Value::I64(*v),
-            GlobalAtRest::F32(v, _) => wasmer::Value::F32(*v),
-            GlobalAtRest::F64(v, _) => wasmer::Value::F64(*v),
-        }
-    }
-}
-
-// TODO InstanceAtRest must provide ways to read & write dehydrated state to consumers
 impl InstanceAtRest {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
@@ -110,7 +40,7 @@ impl InstanceAtRest {
         buffer
     }
 
-    pub fn set_export(&mut self, name: &str, value: wasmer::Value) -> Result<()> {
+    pub fn set_exported_global(&mut self, name: &str, value: wasmer::Value) -> Result<()> {
         let global_index = {
             let export = self
                 .0
@@ -133,12 +63,11 @@ impl InstanceAtRest {
             .get_mut(global_index)
             .unwrap();
 
-        println!("setting export '{}' from '{:?}' to '{:?}'", name, global.init[0], value);
         match global.ty.value_type {
             wasmbin::types::ValueType::F64 => {
                 let float = match value {
                     wasmer::Value::F64(f) => f,
-                    _ => panic!()
+                    _ => panic!(),
                 };
 
                 global.init = vec![Instruction::F64Const(FloatConst { value: float })]
@@ -146,27 +75,27 @@ impl InstanceAtRest {
             wasmbin::types::ValueType::F32 => {
                 let float = match value {
                     wasmer::Value::F32(f) => f,
-                    _ => panic!()
+                    _ => panic!(),
                 };
 
                 global.init = vec![Instruction::F32Const(FloatConst { value: float })]
-            },
+            }
             wasmbin::types::ValueType::I64 => {
                 let int = match value {
                     wasmer::Value::I64(i) => i,
-                    _ => panic!()
+                    _ => panic!(),
                 };
 
                 global.init = vec![Instruction::I64Const(int)]
-            },
+            }
             wasmbin::types::ValueType::I32 => {
                 let int = match value {
                     wasmer::Value::I32(i) => i,
-                    _ => panic!()
+                    _ => panic!(),
                 };
 
                 global.init = vec![Instruction::I32Const(int)]
-            },
+            }
             _ => unimplemented!("Only global int & float exports supported"),
         };
 
@@ -180,6 +109,70 @@ impl ModuleAtRest {
         self.0.encode_into(BufWriter::new(&mut buffer));
 
         buffer
+    }
+
+    fn remove_memory_imports(module: &mut wasmbin::Module) -> Result<Vec<Limits>, Errors> {
+        let mut limits = Vec::new();
+
+        let mut imports = module
+            .find_or_insert_std_section(|| payload::Import::default())
+            .try_contents_mut()?;
+
+        let mut index = 0;
+        while index < imports.len() {
+            if let ImportDesc::Mem(memory_type) = &imports[index].desc {
+                limits.push(memory_type.limits.clone());
+                imports.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+
+        return Ok(limits);
+    }
+
+    fn add_memory_segments(module: &mut wasmbin::Module, limits: &Vec<Limits>) -> Result<usize, Errors> {
+        if (limits.len() == 0) {
+            return Ok(0);
+        }
+
+        let mut memories = module.find_or_insert_std_section(|| payload::Memory::default()).try_contents_mut()?;
+        for limit in limits {
+            memories.push(MemType { 
+                limits: limit.clone()
+            });
+        }
+
+        return Ok(limits.len());
+    }
+
+    fn add_memory_exports(module: &mut wasmbin::Module, imports_to_replace: usize) -> Result<usize, Errors> {
+        let memory_count = {
+            if let Some(memory_section) = module.find_std_section::<payload::Memory>() {
+                memory_section.contents.try_contents()?.len()
+            } else {
+                0
+            }
+        };
+
+        let exports = module
+            .find_or_insert_std_section(|| payload::Export::default())
+            .try_contents_mut()?;
+        let exports_already_existing = exports.iter().map(|e| &e.desc).filter(|e| matches!(e, ExportDesc::Mem(_))).count();
+        
+        assert!(memory_count <= 1, "WASM only supports up to 1 memory, for now");
+        
+        if imports_to_replace > 0 || (memory_count - exports_already_existing) > 0 {
+            exports.push(Export {
+                desc: ExportDesc::Mem(MemId {
+                    index: 0,
+                }),
+                name: format!("othismo_memory_{}", 0),
+            });
+            Ok(1)
+        } else {
+            Ok(0)
+        }
     }
 
     fn export_imported_globals(mut module: wasmbin::Module) -> Result<wasmbin::Module, Errors> {
@@ -279,8 +272,13 @@ impl From<ModuleAtRest> for InstanceAtRest {
 impl TryFrom<wasmbin::Module> for ModuleAtRest {
     type Error = Errors;
 
-    fn try_from(module: wasmbin::Module) -> std::result::Result<Self, Self::Error> {
-        Ok(ModuleAtRest(ModuleAtRest::export_imported_globals(module)?))
+    fn try_from(mut module: wasmbin::Module) -> std::result::Result<Self, Self::Error> {
+        module = ModuleAtRest::export_imported_globals(module)?;
+        let limits = ModuleAtRest::remove_memory_imports(&mut module)?;
+        ModuleAtRest::add_memory_segments(&mut module, &limits);
+        ModuleAtRest::add_memory_exports(&mut module, limits.len())?;
+
+        Ok(ModuleAtRest(module))
     }
 }
 

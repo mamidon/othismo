@@ -2,7 +2,7 @@ use std::io::BufWriter;
 
 use wasmer::{imports, Global, Imports, Instance, Store, TypedFunction, Value};
 
-use crate::solidarity::image::{GlobalMutability, Image, InstanceAtRest, Object};
+use crate::solidarity::image::{Image, InstanceAtRest, Object};
 use crate::solidarity::{Errors, Result, SolidarityError};
 
 struct Session<'s> {
@@ -11,7 +11,7 @@ struct Session<'s> {
 }
 
 struct InstanceSession {
-    module: InstanceAtRest,
+    instance_at_rest: InstanceAtRest,
     instance: Instance
 }
 
@@ -22,20 +22,26 @@ impl InstanceSession {
         let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {})?;
 
         Ok(InstanceSession {
-            module: instance_at_rest,
+            instance_at_rest,
             instance: wasmer_instance
         })
     }
 
     pub fn into_instance_at_rest(mut self, store: &mut Store) -> Result<InstanceAtRest> {
         for (name, value) in self.instance.exports {
-            match value {
-                wasmer::Extern::Global(global) => self.module.set_export(&name, global.get(store))?,
-                _ => continue
+            if let wasmer::Extern::Global(global) = &value {
+                self.instance_at_rest.set_exported_global(&name, global.get(store))?;
+            }
+
+            if let wasmer::Extern::Memory(memory) = &value {
+                println!("memory desc: {:?}", memory.ty(store));
+                let view = memory.view(store);
+                
             }
         }
+        
 
-        Ok(self.module)
+        Ok(self.instance_at_rest)
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
