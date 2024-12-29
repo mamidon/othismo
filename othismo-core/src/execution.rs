@@ -45,11 +45,13 @@ impl InstanceSession {
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
-        let set_some: TypedFunction<(), ()> = self.instance
-        .exports
-        .get_function("increment")?
-        .typed(store)?;
+        let init: TypedFunction<(), ()> = self.instance.exports.get_function("init")?.typed(store)?;
+        let set_some: TypedFunction<(), (i32)> = self.instance
+            .exports
+            .get_function("increment")?
+            .typed(store)?;
 
+        init.call(store)?;
         set_some.call(store)?;
         Ok(())
     }
