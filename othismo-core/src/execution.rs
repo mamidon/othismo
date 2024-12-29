@@ -36,7 +36,7 @@ impl InstanceSession {
             if let wasmer::Extern::Memory(memory) = &value {
                 println!("memory desc: {:?}", memory.ty(store));
                 let view = memory.view(store);
-                
+                println!("instance memory length: {:?}", view.data_size());
             }
         }
         
