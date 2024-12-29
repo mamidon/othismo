@@ -2,9 +2,9 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand};
-use crate::solidarity::image::{Image, Object};
+use crate::othismo::image::{Image, Object};
 
-mod solidarity;
+mod othismo;
 mod prototype;
 mod execution;
 
@@ -51,7 +51,7 @@ enum SubCommands {
     }
 }
 
-fn main() -> solidarity::Result<()> {
+fn main() -> othismo::Result<()> {
     let command = CliArguments::parse();
 
     if let Some(image_name) = command.image_name {
@@ -112,7 +112,7 @@ fn main() -> solidarity::Result<()> {
                 image_name
                  }) => {
                 let image_path = image_name.clone() + ".simg";
-                solidarity::image::Image::create(image_path)?;
+                othismo::image::Image::create(image_path)?;
 
                 println!("Image created");
             },

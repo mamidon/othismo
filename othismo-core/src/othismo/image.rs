@@ -1,7 +1,7 @@
-use crate::solidarity::SolidarityError::{
+use crate::othismo::OthismoError::{
     ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree,
 };
-use crate::solidarity::{Errors, Result};
+use crate::othismo::{Errors, Result};
 use bson::Document;
 use wasmbin::types::{Limits, MemType};
 use core::panic;
@@ -22,7 +22,7 @@ use wasmbin::sections::{
 use wasmbin::Module;
 use wasmer::{GlobalType, Store, Type};
 
-use super::SolidarityError;
+use super::OthismoError;
 
 pub struct InstanceAtRest(wasmbin::Module);
 pub struct ModuleAtRest(wasmbin::Module);
@@ -238,12 +238,12 @@ impl ModuleAtRest {
                         wasmbin::types::ValueType::I64 => vec![Instruction::I64Const(0)],
                         wasmbin::types::ValueType::I32 => vec![Instruction::I32Const(0)],
                         wasmbin::types::ValueType::Ref(_) => {
-                            Err(SolidarityError::UnsupportedModuleDefinition(
+                            Err(OthismoError::UnsupportedModuleDefinition(
                                 "reference_type_global".to_string(),
                             ))?
                         }
                         wasmbin::types::ValueType::V128 => Err(
-                            SolidarityError::UnsupportedModuleDefinition("simd_global".to_string()),
+                            OthismoError::UnsupportedModuleDefinition("simd_global".to_string()),
                         )?,
                     },
                 },
@@ -384,7 +384,7 @@ impl Image {
 
     pub fn import_object(&mut self, name: &str, object: Object) -> Result<()> {
         if self.object_exists(name)? {
-            return Err(Errors::Solidarity(ObjectAlreadyExists));
+            return Err(Errors::Othismo(ObjectAlreadyExists));
         }
 
         self.insert_object(name, object.as_kind_str(), &object.to_bytes())?;
@@ -428,7 +428,7 @@ impl Image {
             .optional()?;
 
         if references.unwrap_or(0) > 0 {
-            return Err(Errors::Solidarity(ObjectNotFree));
+            return Err(Errors::Othismo(ObjectNotFree));
         }
 
         self.file.execute(
@@ -496,7 +496,7 @@ impl Image {
 
         return match object_key {
             Some(key) => Ok(key),
-            None => Err(Errors::Solidarity(ObjectDoesNotExist)),
+            None => Err(Errors::Othismo(ObjectDoesNotExist)),
         };
     }
 

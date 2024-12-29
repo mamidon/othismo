@@ -3,7 +3,7 @@ use std::{any::type_name_of_val, fs::File, io::{BufReader, BufWriter}};
 use wasmbin::sections::{payload, Data, DataInit};
 use wasmer::Store;
 
-use crate::solidarity::{Result, SolidarityError};
+use crate::othismo::{Result, OthismoError};
 
 pub fn dehydrate_instance(module_name: &str, instance_name: &str, instance: &wasmer::Instance) -> Result<()> {
     let store = Store::default();

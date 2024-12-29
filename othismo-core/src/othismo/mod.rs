@@ -5,7 +5,7 @@ use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, Instantia
 pub mod image;
 
 #[derive(Debug)]
-pub enum SolidarityError {
+pub enum OthismoError {
     ImageAlreadyExists,
     ObjectAlreadyExists,
     ObjectDoesNotExist,
@@ -34,7 +34,7 @@ pub enum WasmBinError {
 pub type Result<T, E=Errors> = result::Result<T,E>;
 #[derive(Debug)]
 pub enum Errors {
-    Solidarity(SolidarityError),
+    Othismo(OthismoError),
     Rusqlite(rusqlite::Error),
     Io(std::io::Error),
     Wasmer(WasmerError),
@@ -56,9 +56,9 @@ impl From<std::io::Error> for Errors {
     }
 }
 
-impl From<SolidarityError> for Errors {
-    fn from(value: SolidarityError) -> Self {
-        Errors::Solidarity(value)
+impl From<OthismoError> for Errors {
+    fn from(value: OthismoError) -> Self {
+        Errors::Othismo(value)
     }
 }
 

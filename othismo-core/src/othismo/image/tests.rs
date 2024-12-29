@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
-use crate::solidarity::{Errors, SolidarityError};
-use crate::solidarity::image::{Image, Object};
+use crate::othismo::{Errors, OthismoError};
+use crate::othismo::image::{Image, Object};
 
 lazy_static! {
     static ref WASM: Vec<u8> = {
@@ -35,7 +35,7 @@ fn file_can_not_import_over_existing_modules() {
     file.import_object("/test/module", Object::new_module(&WASM).unwrap()).unwrap();
     let result =     file.import_object("/test/module", Object::new_module(&WASM).unwrap());
 
-    assert!(matches!(result, Err(Errors::Solidarity(SolidarityError::ObjectAlreadyExists))));
+    assert!(matches!(result, Err(Errors::Othismo(OthismoError::ObjectAlreadyExists))));
 }
 
 
