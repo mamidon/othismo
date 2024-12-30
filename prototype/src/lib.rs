@@ -1,18 +1,26 @@
-static mut COUNTER: Option<Box<i32>> = None;
-
+static mut BUFFER: [u8; 5] = *b"HELLO";
+static mut HEAP: Option<Box<String>> = None;
 
 #[no_mangle]
 pub extern "C" fn increment() -> i32 {
-    let counter_ref = unsafe { COUNTER.as_mut() };
+    let text_ref = unsafe { BUFFER.as_mut() };
 
-    if let Some(counter) = counter_ref {
-        **counter += 1;
-    } else {
-        unsafe {
-            COUNTER = Some(Box::new(0xDEAD))
-        };
+    unsafe {
+        BUFFER = *b"NOOPE";
     }
 
-    let count = unsafe { COUNTER.as_mut().unwrap() };
-    **count
+    let heap_ptr = unsafe {
+        match HEAP.as_mut() {
+            None => {
+                HEAP = Some(Box::new("START".to_string()));
+            },
+            Some(text) => {
+                text.push_str("NOPE");
+            }
+        };
+
+        HEAP.as_ref().unwrap().as_ptr()
+    };
+
+    heap_ptr as i32
 }
