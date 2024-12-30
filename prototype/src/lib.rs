@@ -1,17 +1,18 @@
 static mut COUNTER: Option<Box<i32>> = None;
 
-#[no_mangle]
-pub extern "C" fn start() {
-    unsafe {
-        COUNTER = Some(Box::new(0));
-    }
-}
 
 #[no_mangle]
 pub extern "C" fn increment() -> i32 {
-    unsafe {
-        let counter = COUNTER.as_mut().unwrap();
+    let counter_ref = unsafe { COUNTER.as_mut() };
+
+    if let Some(counter) = counter_ref {
         **counter += 1;
-        **counter
+    } else {
+        unsafe {
+            COUNTER = Some(Box::new(0xDEAD))
+        };
     }
+
+    let count = unsafe { COUNTER.as_mut().unwrap() };
+    **count
 }

@@ -38,29 +38,28 @@ impl InstanceSession {
                 
                 let page_size_in_bytes = 1024;
                 let view = memory.view(store);
-                let mut buffer: Vec<u8> = Vec::with_capacity(page_size_in_bytes);
+                let mut buffer: Vec<u8> = std::iter::repeat(0).take(page_size_in_bytes).collect();
+
+                let mut skipped = 0;
+                let mut persisted = 0;
 
                 for offset in 0..(view.data_size() / page_size_in_bytes as u64) {
-                    view.read(offset, &mut buffer);
-
+                    view.read(offset*page_size_in_bytes as u64, &mut buffer)?;
                     if (buffer.iter().all(|&byte| byte == 0)) {
+                        skipped += 1;
                         continue;
                     }
 
+                    persisted += 1;
                     self.instance_at_rest.add_data_segment(offset as i32, &buffer);
                 }
+
+                println!("skipped {}, persisted {}", skipped, persisted);
             }
         }
         
 
         Ok(self.instance_at_rest)
-    }
-
-    pub fn call_init(&self, store: &mut Store) -> Result<()> {
-        let init: TypedFunction<(), ()> = self.instance.exports.get_function("init")?.typed(store)?;
-        init.call(store)?;
-
-        Ok(())
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
@@ -69,7 +68,10 @@ impl InstanceSession {
             .get_function("increment")?
             .typed(store)?;
 
-        set_some.call(store)?;
+        println!("calling");
+        let result = set_some.call(store)?;
+        println!("incremented to: {}", result);
+
         Ok(())
     }
 }

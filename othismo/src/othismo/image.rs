@@ -5,6 +5,7 @@ use crate::othismo::{Errors, Result};
 use bson::Document;
 use wasmbin::types::{Limits, MemType};
 use core::panic;
+use std::fmt::format;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -207,38 +208,56 @@ impl ModuleAtRest {
         }
     }
 
-    fn export_imported_globals(mut module: wasmbin::Module) -> Result<wasmbin::Module, Errors> {
+    fn export_all_globals(mut module: wasmbin::Module) -> Result<wasmbin::Module, Errors> {
         let extracted_globals = ModuleAtRest::extract_imported_globals(&mut module)?;
-        ModuleAtRest::export_extracted_globals(&mut module, extracted_globals)?;
-
+        ModuleAtRest::replace_extracted_globals(&mut module, extracted_globals)?;
+        ModuleAtRest::add_missing_global_exports(&mut module)?;
         Ok(module)
     }
 
-    fn export_extracted_globals(
+    fn replace_extracted_globals(
         module: &mut wasmbin::Module,
         extracted_globals: Vec<Global>,
     ) -> Result<(), Errors> {
         let global_section = module.find_or_insert_std_section(|| payload::Global::default());
         let mut existing_globals = global_section.contents.try_contents_mut()?;
 
-        for global in extracted_globals.iter() {
-            existing_globals.push(global.clone());
+        for global in extracted_globals.iter().rev() {
+            existing_globals.insert(0, global.clone());
         }
+
+        Ok(())
+    }
+
+    fn add_missing_global_exports(
+        module: &mut wasmbin::Module
+    ) -> Result<(), Errors> {
+        let global_section = module.find_or_insert_std_section(|| payload::Global::default());
+        let existing_global_indices: Vec<u32> = global_section.contents.try_contents()?.iter().enumerate().map(|(index, global)| index as u32).collect();
+        
+        println!("existing global index {:?}", existing_global_indices);
 
         let exports_section = module.find_or_insert_std_section(|| payload::Export::default());
         let mut existing_exports = exports_section.contents.try_contents_mut()?;
 
-        for (index, global) in extracted_globals.iter().enumerate().rev() {
-            let name = format!("othismo_global_{}", index);
-            let id: GlobalId = (index as u32).into();
+        let existing_global_export_indices: Vec<u32> = existing_exports.iter().filter_map(|e| match e.desc {
+            ExportDesc::Global(global_id) => Some(global_id.index),
+            _ => None
+        }).collect();
 
-            existing_exports.insert(
-                0,
-                Export {
-                    name,
-                    desc: wasmbin::sections::ExportDesc::Global(id),
-                },
-            );
+        println!("existing global export index {:?}", existing_global_export_indices);
+
+        let missing: Vec<_> = existing_global_indices.iter()
+            .filter(|&&gi| existing_global_export_indices.iter().find(|&&ei| gi == ei) == None)
+            .collect();
+        println!("missing global export indices {:?}", missing);
+
+        for missing_global_export_index in missing {
+            let name = format!("othismo_global_{}", missing_global_export_index);
+            existing_exports.push(Export {
+                name,
+                desc: wasmbin::sections::ExportDesc::Global(GlobalId { index: *missing_global_export_index })
+            });
         }
 
         Ok(())
@@ -256,7 +275,7 @@ impl ModuleAtRest {
             .position(|import| matches!(import.desc, ImportDesc::Global(_)))
         {
             let Import { path, desc } = &imports[index];
-
+            println!("extracting imported global '{}' at index {}", format!("{}.{}", path.module, path.name), globals.len());
             globals.push(match desc {
                 ImportDesc::Global(ty) => Global {
                     ty: ty.clone(),
@@ -305,7 +324,7 @@ impl TryFrom<wasmbin::Module> for ModuleAtRest {
     type Error = Errors;
 
     fn try_from(mut module: wasmbin::Module) -> std::result::Result<Self, Self::Error> {
-        module = ModuleAtRest::export_imported_globals(module)?;
+        module = ModuleAtRest::export_all_globals(module)?;
         let limits = ModuleAtRest::remove_memory_imports(&mut module)?;
         ModuleAtRest::add_memory_segments(&mut module, &limits);
         ModuleAtRest::add_memory_exports(&mut module, limits.len())?;

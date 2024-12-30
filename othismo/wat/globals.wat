@@ -3,6 +3,10 @@
   (import "env" "global_int" (global $imported_int (mut i32)))
   (import "env" "global_float" (global $imported_float (mut f32)))
 
+  ;; regular globals
+  (global $some_int (mut i32) (i32.const 52))
+  (global $some_float (mut f32) (f32.const 6.14))
+
   ;; Export globals 
   (global $exported_int (export "result_int") (mut i32) (i32.const 42))
   (global $exported_float (export "result_float") (mut f32) (f32.const 3.14))
