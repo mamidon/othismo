@@ -18,9 +18,9 @@ struct InstanceSession {
 impl InstanceSession {
     pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
         let buffer = instance_at_rest.to_bytes();
-        let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;
+        let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;    
         let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {})?;
-        
+    
         Ok(InstanceSession {
             instance_at_rest,
             instance: wasmer_instance
@@ -43,8 +43,9 @@ impl InstanceSession {
                 let mut skipped = 0;
                 let mut persisted = 0;
 
-                for offset in 0..(view.data_size() / page_size_in_bytes as u64) {
-                    view.read(offset*page_size_in_bytes as u64, &mut buffer)?;
+                for index in 0..(view.data_size() / page_size_in_bytes as u64) {
+                    let offset = index * page_size_in_bytes as u64;
+                    view.read(offset, &mut buffer)?;
 
                     if (buffer.iter().all(|&byte| byte == 0)) {
                         skipped += 1;
@@ -52,14 +53,16 @@ impl InstanceSession {
                     }
 
                     persisted += 1;
-                    self.instance_at_rest.add_data_segment((offset*page_size_in_bytes as u64) as i32, &buffer);
+                    self.instance_at_rest.add_data_segment(offset as i32, &buffer);
                 }
 
-                println!("skipped {}, persisted {}", skipped, persisted);
+                // Possibly resize memory section to ensure we have enough memory
+                self.instance_at_rest.resize_memory(view.data_size())?;
             }
         }
         
-
+        self.instance_at_rest.strip_start_function()?;
+        
         Ok(self.instance_at_rest)
     }
 
@@ -69,9 +72,7 @@ impl InstanceSession {
             .get_function("increment")?
             .typed(store)?;
 
-        println!("calling");
         let result = set_some.call(store)?;
-        println!("incremented to: {}", result);
 
         Ok(())
     }
@@ -90,10 +91,10 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
         instance_at_rest
     )?;
 
-    //instance_session.call_function(&mut store)?;
+    instance_session.call_function(&mut store)?;
     
-    /*let mut dehydrated_instance = instance_session.into_instance_at_rest(&mut store)?;
+    let mut dehydrated_instance = instance_session.into_instance_at_rest(&mut store)?;
     image.remove_object(instance_name)?;
-    image.import_object(instance_name, Object::Instance(dehydrated_instance))?;*/
+    image.import_object(instance_name, Object::Instance(dehydrated_instance))?;
     Ok(())
 }

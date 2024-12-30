@@ -134,6 +134,30 @@ impl InstanceAtRest {
 
         Ok(())
     }
+
+    pub fn strip_start_function(&mut self) -> Result<()> {
+        let index_of = self.0.sections.iter().enumerate().find_map(|(index, section)| match section.try_as::<payload::Start>() {
+            Some(_) => Some(index),
+            None => None
+        });
+
+        if let Some(index) = index_of {
+            self.0.sections.remove(index);
+        }
+
+        Ok(())
+    }
+
+    pub fn resize_memory(&mut self, target_bytes: u64) -> Result<()> {
+        let memories = self.0.find_or_insert_std_section(|| payload::Memory::default()).try_contents_mut()?;
+
+        assert!(memories.len() <= 1);
+        for memory in memories {
+            memory.limits.min = std::cmp::max(memory.limits.min, (target_bytes / 65536) as u32);
+        }
+
+        Ok(())
+    }
 }
 
 impl ModuleAtRest {
