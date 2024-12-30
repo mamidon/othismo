@@ -45,10 +45,7 @@ impl InstanceSession {
 
                 for offset in 0..(view.data_size() / page_size_in_bytes as u64) {
                     view.read(offset*page_size_in_bytes as u64, &mut buffer)?;
-                    if (buffer.iter().all(|&byte| byte == 0)) {
-                        skipped += 1;
-                        continue;
-                    }
+                    
 
                     persisted += 1;
                     self.instance_at_rest.add_data_segment(offset as i32, &buffer);

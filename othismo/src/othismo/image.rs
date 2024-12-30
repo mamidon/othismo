@@ -137,6 +137,15 @@ impl InstanceAtRest {
 }
 
 impl ModuleAtRest {
+    pub fn import(mut module: wasmbin::Module) -> Result<Self> {
+        module = ModuleAtRest::export_all_globals(module)?;
+        let limits = ModuleAtRest::remove_memory_imports(&mut module)?;
+        ModuleAtRest::add_memory_segments(&mut module, &limits);
+        ModuleAtRest::add_memory_exports(&mut module, limits.len())?;
+
+        Ok(ModuleAtRest(module))
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         self.0.encode_into(BufWriter::new(&mut buffer));
@@ -320,16 +329,9 @@ impl From<ModuleAtRest> for InstanceAtRest {
     }
 }
 
-impl TryFrom<wasmbin::Module> for ModuleAtRest {
-    type Error = Errors;
-
-    fn try_from(mut module: wasmbin::Module) -> std::result::Result<Self, Self::Error> {
-        module = ModuleAtRest::export_all_globals(module)?;
-        let limits = ModuleAtRest::remove_memory_imports(&mut module)?;
-        ModuleAtRest::add_memory_segments(&mut module, &limits);
-        ModuleAtRest::add_memory_exports(&mut module, limits.len())?;
-
-        Ok(ModuleAtRest(module))
+impl From<wasmbin::Module> for ModuleAtRest {
+    fn from(value: wasmbin::Module) -> Self {
+        ModuleAtRest(value)
     }
 }
 
@@ -358,7 +360,7 @@ impl Object {
     pub fn from_tuple(kind: &str, bytes: Vec<u8>) -> Result<Object> {
         match (kind) {
             "MODULE" => Ok(Object::Module(
-                Module::decode_from(bytes.as_slice())?.try_into()?,
+                Module::decode_from(bytes.as_slice())?.into(),
             )),
             "INSTANCE" => Ok(Object::Instance(
                 Module::decode_from(bytes.as_slice())?.into(),
@@ -368,9 +370,9 @@ impl Object {
     }
 
     pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
-        Ok(Object::Module(
-            Module::decode_from(bytes.as_slice())?.try_into()?,
-        ))
+        let mut module = Module::decode_from(bytes.as_slice())?;
+    
+        Ok(Object::Module(ModuleAtRest::import(module)?))
     }
 
     pub fn new_instance(object: &Object) -> Result<Object> {
