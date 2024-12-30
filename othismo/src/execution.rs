@@ -20,7 +20,7 @@ impl InstanceSession {
         let buffer = instance_at_rest.to_bytes();
         let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;
         let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {})?;
-
+        
         Ok(InstanceSession {
             instance_at_rest,
             instance: wasmer_instance
@@ -36,7 +36,7 @@ impl InstanceSession {
             if let wasmer::Extern::Memory(memory) = &value {
                 self.instance_at_rest.clear_data_segments();                
                 
-                let page_size_in_bytes = 1024;
+                let page_size_in_bytes = 64;
                 let view = memory.view(store);
                 let mut buffer: Vec<u8> = std::iter::repeat(0).take(page_size_in_bytes).collect();
 
@@ -45,10 +45,6 @@ impl InstanceSession {
 
                 for offset in 0..(view.data_size() / page_size_in_bytes as u64) {
                     view.read(offset*page_size_in_bytes as u64, &mut buffer)?;
-                    
-                    if offset == 1088 {
-                        println!("buffer: {:02x?}", buffer);
-                    }
 
                     if (buffer.iter().all(|&byte| byte == 0)) {
                         skipped += 1;
@@ -56,7 +52,7 @@ impl InstanceSession {
                     }
 
                     persisted += 1;
-                    self.instance_at_rest.add_data_segment(offset as i32, &buffer);
+                    self.instance_at_rest.add_data_segment((offset*page_size_in_bytes as u64) as i32, &buffer);
                 }
 
                 println!("skipped {}, persisted {}", skipped, persisted);
@@ -94,10 +90,10 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
         instance_at_rest
     )?;
 
-    instance_session.call_function(&mut store)?;
+    //instance_session.call_function(&mut store)?;
     
-    let mut dehydrated_instance = instance_session.into_instance_at_rest(&mut store)?;
+    /*let mut dehydrated_instance = instance_session.into_instance_at_rest(&mut store)?;
     image.remove_object(instance_name)?;
-    image.import_object(instance_name, Object::Instance(dehydrated_instance))?;
+    image.import_object(instance_name, Object::Instance(dehydrated_instance))?;*/
     Ok(())
 }

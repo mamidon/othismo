@@ -3,8 +3,6 @@ static mut HEAP: Option<Box<String>> = None;
 
 #[no_mangle]
 pub extern "C" fn increment() -> i32 {
-    let text_ref = unsafe { BUFFER.as_mut() };
-
     unsafe {
         BUFFER = *b"NOOPE";
     }
@@ -19,7 +17,8 @@ pub extern "C" fn increment() -> i32 {
             }
         };
 
-        HEAP.as_ref().unwrap().as_ptr()
+        let s = HEAP.as_ref().unwrap();
+        s.as_ptr()
     };
 
     heap_ptr as i32
