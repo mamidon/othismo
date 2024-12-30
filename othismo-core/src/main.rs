@@ -5,7 +5,6 @@ use clap::{Parser, Subcommand};
 use crate::othismo::image::{Image, Object};
 
 mod othismo;
-mod prototype;
 mod execution;
 
 #[derive(Parser)]
@@ -45,10 +44,6 @@ enum SubCommands {
         instance_name: String,
     },
     ListObjects {},
-    ParseModule {
-        #[arg()]
-        module_name: String
-    }
 }
 
 fn main() -> othismo::Result<()> {
@@ -115,9 +110,6 @@ fn main() -> othismo::Result<()> {
                 othismo::image::Image::create(image_path)?;
 
                 println!("Image created");
-            },
-            Some(SubCommands::ParseModule { module_name }) => {
-                prototype::parse_module_2(module_name)?
             },
             _ => {
                 eprintln!("This sub-command needs the relevant image name specified before it");
