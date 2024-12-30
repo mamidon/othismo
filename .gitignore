@@ -18,3 +18,4 @@ Cargo.lock
 *.wasm
 
 .DS_Store
+playground/
