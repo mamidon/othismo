@@ -16,8 +16,7 @@ use wasmbin::indices::{GlobalId, MemId, TypeId};
 use wasmbin::instructions::Instruction;
 use wasmbin::io::Decode;
 use wasmbin::sections::{
-    payload, CustomSection, Export, ExportDesc, Global, Import, ImportDesc, Kind, RawCustomSection,
-    Section,
+    payload, CustomSection, Data, DataInit, Export, ExportDesc, Global, Import, ImportDesc, Kind, RawCustomSection, Section
 };
 use wasmbin::Module;
 use wasmer::{GlobalType, Store, Type};
@@ -39,7 +38,7 @@ impl InstanceAtRest {
 
         buffer
     }
-
+    
     pub fn set_exported_global(&mut self, name: &str, value: wasmer::Value) -> Result<()> {
         let global_index = {
             let export = self
@@ -98,6 +97,39 @@ impl InstanceAtRest {
             }
             _ => unimplemented!("Only global int & float exports supported"),
         };
+
+        Ok(())
+    }
+
+    pub fn clear_data_segments(&mut self) -> Result<()> {
+        if let Some(data_count_section) = self.0.find_std_section_mut::<payload::DataCount>() {
+            if let Ok(data_count) = data_count_section.try_contents_mut() {
+                *data_count = 0;
+            }
+        }
+        
+        if let Some(data_section) = self.0.find_std_section_mut::<payload::Data>() {
+            let data_segments = data_section.try_contents_mut()?;
+            data_segments.clear();
+        }
+
+        Ok(())
+    }
+
+    pub fn add_data_segment(&mut self, offset: i32, bytes: &[u8]) -> Result<()> {
+        if let Some(data_count_section) = self.0.find_std_section_mut::<payload::DataCount>() {
+            if let Ok(data_count) = data_count_section.try_contents_mut() {
+                *data_count += 1;
+            }
+        }
+        
+        if let Some(data_section) = self.0.find_std_section_mut::<payload::Data>() {
+            let data_segments = data_section.try_contents_mut()?;
+            data_segments.push(Data {
+                init: DataInit::Active { offset: vec![Instruction::I32Const(offset)] },
+                blob: bytes.into()
+            });
+        }
 
         Ok(())
     }

@@ -34,9 +34,21 @@ impl InstanceSession {
             }
 
             if let wasmer::Extern::Memory(memory) = &value {
-                println!("memory desc: {:?}", memory.ty(store));
+                self.instance_at_rest.clear_data_segments();                
+                
+                let page_size_in_bytes = 1024;
                 let view = memory.view(store);
-                println!("instance memory length: {:?}", view.data_size());
+                let mut buffer: Vec<u8> = Vec::with_capacity(page_size_in_bytes);
+
+                for offset in 0..(view.data_size() / page_size_in_bytes as u64) {
+                    view.read(offset, &mut buffer);
+
+                    if (buffer.iter().all(|&byte| byte == 0)) {
+                        continue;
+                    }
+
+                    self.instance_at_rest.add_data_segment(offset as i32, &buffer);
+                }
             }
         }
         
@@ -44,14 +56,19 @@ impl InstanceSession {
         Ok(self.instance_at_rest)
     }
 
-    pub fn call_function(&self, store: &mut Store) -> Result<()> {
+    pub fn call_init(&self, store: &mut Store) -> Result<()> {
         let init: TypedFunction<(), ()> = self.instance.exports.get_function("init")?.typed(store)?;
+        init.call(store)?;
+
+        Ok(())
+    }
+
+    pub fn call_function(&self, store: &mut Store) -> Result<()> {
         let set_some: TypedFunction<(), (i32)> = self.instance
             .exports
             .get_function("increment")?
             .typed(store)?;
 
-        init.call(store)?;
         set_some.call(store)?;
         Ok(())
     }

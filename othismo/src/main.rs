@@ -98,7 +98,6 @@ fn main() -> othismo::Result<()> {
                     println!("{}", name);
                 }
             }
-            Some(SubCommands::ParseModule { module_name }) => eprintln!("Not a sub command"),
             None => {eprintln!("No sub command specified");}
         }
     } else {
