@@ -1,2 +1,8 @@
 #!/bin/bash
-cargo build
+cargo build --package prototype --target wasm32-unknown-unknown
+cargo build --package othismo
+
+rm -rf ./playground
+mkdir ./playground
+cp ./target/debug/othismo ./playground
+cp ./target/wasm32-unknown-unknown/debug/prototype.wasm ./playground

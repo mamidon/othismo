@@ -1,7 +1,7 @@
 static mut COUNTER: Option<Box<i32>> = None;
 
 #[no_mangle]
-pub extern "C" fn init() {
+pub extern "C" fn start() {
     unsafe {
         COUNTER = Some(Box::new(0));
     }
