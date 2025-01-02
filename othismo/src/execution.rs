@@ -1,6 +1,6 @@
 use std::io::BufWriter;
 
-use wasmer::{imports, Global, Imports, Instance, Store, TypedFunction, Value};
+use wasmer::{imports, Function, FunctionEnv, Global, Imports, Instance, Memory, MemoryView, Store, TypedFunction, Value};
 
 use crate::othismo::image::{Image, InstanceAtRest, Object};
 use crate::othismo::{Errors, Result, OthismoError};
@@ -8,6 +8,10 @@ use crate::othismo::{Errors, Result, OthismoError};
 struct Session<'s> {
     image: &'s mut Image,
     store: Store,
+}
+
+struct Environment {
+    memory: Option<Memory>
 }
 
 struct InstanceSession {
@@ -18,8 +22,18 @@ struct InstanceSession {
 impl InstanceSession {
     pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
         let buffer = instance_at_rest.to_bytes();
-        let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;    
-        let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {})?;
+        let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;   
+        // todo create a context which stores a reference to the memory 
+        let env = FunctionEnv::new(store, Environment { memory: None });
+        let trampoline = Function::new_typed_with_env(store, &env, native::send_message);
+
+        let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {
+            "othismo" => {
+                "send_message" => trampoline
+            }
+        })?;
+
+        env.as_mut(store).memory = Some(wasmer_instance.exports.get_memory("memory").unwrap().clone());
     
         Ok(InstanceSession {
             instance_at_rest,
@@ -67,13 +81,25 @@ impl InstanceSession {
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
-        let set_some: TypedFunction<(), (i32)> = self.instance
+        let prepare_inbox: TypedFunction<(u32), (u32)> = self.instance
             .exports
-            .get_function("increment")?
+            .get_function("prepare_inbox")?
             .typed(store)?;
 
-        let result = set_some.call(store)?;
+        let message_received: TypedFunction<(), ()> = self.instance
+            .exports
+            .get_function("message_received")?
+            .typed(store)?;
 
+        let message = "Hello, world!".to_string();
+        let result = prepare_inbox.call(store, message.len() as u32)?;
+
+        let memory = self.instance.exports.get_memory("memory")?;
+        let view = memory.view(store);
+        view.write(result as u64, message.as_bytes());
+
+        message_received.call(store)?;
+        
         Ok(())
     }
 }
@@ -97,4 +123,21 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
     image.remove_object(instance_name)?;
     image.import_object(instance_name, Object::Instance(dehydrated_instance))?;
     Ok(())
+}
+
+mod native {
+    use wasmer::FunctionEnvMut;
+
+    use super::Environment;
+
+    pub fn send_message(mut env: FunctionEnvMut<Environment>, head: u32, length: u32) {
+        println!("native::send_message({}, {})", head, length);
+
+        let (environment, store) = env.data_and_store_mut();
+        let view = environment.memory.as_mut().expect("Native functions need access to linear memory").view(&store);
+        let mut buffer: Vec<u8> = vec![0; length as usize];
+        view.read(head as u64, buffer.as_mut_slice());
+        
+        println!("\"{}\"", String::from_utf8(buffer).unwrap());
+    }
 }

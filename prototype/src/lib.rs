@@ -64,6 +64,7 @@ impl Drop for MailBox {
     }
 }
 
+#[link(wasm_import_module = "othismo")]
 unsafe extern "C" {
     unsafe fn send_message(bytes: *const u8, length: usize);
 }
