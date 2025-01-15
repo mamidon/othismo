@@ -129,6 +129,12 @@ Directory names cannot conflict with existing objects.
 }
 ```
 
+### othismo.namespace.sym_link
+TODO -- redirects all messages at a particular path to another path
+### othismo.namespace.mount
+TODO -- redirects all namespace operations at or below /some/path to a particular instance
+TODO -- how are mount & sym links different.. are they?
+
 ### othismo.http.request
 Represents a received HTTP request.
 ```
@@ -173,4 +179,34 @@ Anything can respond with an error
         "message": "A human friendly message"
     }
 }
+```
+
+
+## Configuring the server, with files
+
+```
+othismo new-image image
+# othismo always exists in the namespace at /othismo
+othismo image import-module othismo.http
+othismo image import-module othismo.blobs
+
+# import the actual custom code, which maps HTTP requests to blob responses
+othismo image import-module prototype
+
+# /modules contains othismo.http, othismo.blobs, prototype
+
+
+# instantiate a web server
+# also creates a folder /server/sites/ & /server/content/ where handlers or content for requests are found, hopefully
+# also creates a folder /controller/content/ where 
+othismo image instantiate-instance othismo.http server
+othismo image instantiate-instance prototype controller
+othismo image instantiate-instance othismo.blobs content
+
+# import all files in ./www/ into blob storage
+othismo image send-message /content cp=./www/
+othismo image mount /content /server/content/othismo.com
+
+# requests to the host othismo.com will be handled by /
+othismo image sym-link /controller /server.sites/othismo.com 
 ```

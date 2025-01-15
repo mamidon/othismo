@@ -29,7 +29,7 @@ Table Stakes
     - [ ] `othismo.console` module, which echoes messages to console
     - [ ] `othismo.namespace` module, For enumerating the namespace.  Also support delegating parts of the namespace to some instance.
     - [ ] `othismo.http` module, simple HTTP pass thru
-    - [ ] `othismo.files` module, simple blob storage of files imported via CLI, but exposed via namespace
+    - [ ] `othismo.blobs` module, simple blob storage of files imported via CLI, but exposed via namespace
 
 Web Server of Files
 
