@@ -28,10 +28,9 @@ Instead of having multiple parameters, we encode everything inside the message v
 
 ### prepare_inbox(length: i32) -> (i32)
 Given a minimum required length; the inbox buffer is 
-resized if necessary.  Returns a pointer to the head of the inbox buffer.
+resized if necessary.  Returns a pointer to an appropriate buffer.
 
-The host can keep track of the inbox size itself to avoid unecessary
-resizing.
+The host must call this for every message it wishes to place in the inbox.
 
 ### message_received() -> ()
 Triggers logic in the guest module to process whichever message has been placed into the inbox.
@@ -119,6 +118,16 @@ The response is:
 }
 ```
 
+### othismo.namespace.make_path
+Create directories required for a path.
+Directory names cannot conflict with existing objects.
+```
+{
+    "othismo.namespace.make_path": {
+        "path": "/some/fully/qualified/path"
+    }
+}
+```
 
 ### othismo.http.request
 Represents a received HTTP request.
