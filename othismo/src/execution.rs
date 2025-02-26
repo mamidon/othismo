@@ -42,7 +42,7 @@ impl InstanceSession {
     }
 
     pub fn into_instance_at_rest(mut self, store: &mut Store) -> Result<InstanceAtRest> {
-        for (name, value) in self.instance.exports {
+        for (name, value) in &self.instance.exports {
             if let wasmer::Extern::Global(global) = &value {
                 self.instance_at_rest.set_exported_global(&name, global.get(store))?;
             }
@@ -74,6 +74,10 @@ impl InstanceSession {
                 self.instance_at_rest.resize_memory(view.data_size())?;
             }
         }
+
+        if let Some((name, desc)) = self.instance.exports.iter().find(|e| e.0.eq("_othismo_start")) {
+            self.call_othismo_start(store)?;
+        }
         
         self.instance_at_rest.strip_start_function()?;
         
@@ -99,6 +103,19 @@ impl InstanceSession {
         view.write(result as u64, message.as_bytes());
 
         message_received.call(store)?;
+        
+        Ok(())
+    }
+
+    pub fn call_othismo_start(&self, store: &mut Store) -> Result<()> {
+        let othismo_start: TypedFunction<(), ()> = self.instance
+            .exports
+            .get_function("_othismo_start")?
+            .typed(store)?;
+
+        let result = othismo_start.call(store)?;
+
+        let memory = self.instance.exports.get_memory("memory")?;
         
         Ok(())
     }

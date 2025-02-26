@@ -12,6 +12,12 @@ fn outbox() -> &'static mut MailBox {
 
     unsafe { OUTBOX.get_or_insert(Box::new(MailBox::default())) }
 }
+static mut COUNTER: u32 = 0;
+
+#[no_mangle]
+pub extern "C" fn _othismo_start() {
+    unsafe { COUNTER += 3 };
+}
 
 struct MailBox {
     buffer: Vec<u8>
@@ -69,9 +75,10 @@ pub unsafe extern "C" fn message_received() {
     let inbox = inbox();
     
     let message = inbox.take();
-
-    outbox.resize(message.len());
-    outbox.as_mut_slice().copy_from_slice(message.as_slice());
+    
+    let length = std::cmp::min(COUNTER as usize, message.len());
+    outbox.resize(length);
+    outbox.as_mut_slice().copy_from_slice(&message.as_slice()[..length]);
 
     let outbox_slice = outbox.as_slice();
     send_message(outbox_slice.as_ptr(), outbox_slice.len());

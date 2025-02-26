@@ -21,7 +21,7 @@ use wasmbin::sections::{
 };
 use wasmbin::Module;
 use wasmer::{GlobalType, Store, Type};
-
+use wasmbin::sections::Section::Start;
 use super::OthismoError;
 
 pub struct InstanceAtRest(wasmbin::Module);
