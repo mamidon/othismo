@@ -35,10 +35,17 @@ impl InstanceSession {
 
         env.as_mut(store).memory = Some(wasmer_instance.exports.get_memory("memory").unwrap().clone());
     
-        Ok(InstanceSession {
+        let instance_session = InstanceSession {
             instance_at_rest,
             instance: wasmer_instance
-        })
+        };
+
+        if let Some((name, desc)) = instance_session.instance.exports.iter().find(|e| e.0.eq("_othismo_start")) {
+            println!("invoking _othismo_start");
+            instance_session.call_othismo_start(store)?;
+        }
+
+        Ok(instance_session)
     }
 
     pub fn into_instance_at_rest(mut self, store: &mut Store) -> Result<InstanceAtRest> {
@@ -74,12 +81,6 @@ impl InstanceSession {
                 self.instance_at_rest.resize_memory(view.data_size())?;
             }
         }
-
-        if let Some((name, desc)) = self.instance.exports.iter().find(|e| e.0.eq("_othismo_start")) {
-            self.call_othismo_start(store)?;
-        }
-        
-        self.instance_at_rest.strip_start_function()?;
         
         Ok(self.instance_at_rest)
     }
