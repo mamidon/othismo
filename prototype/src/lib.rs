@@ -16,7 +16,11 @@ static mut COUNTER: u32 = 0;
 
 #[no_mangle]
 pub extern "C" fn _othismo_start() {
-    unsafe { COUNTER += 3 };
+    unsafe {
+        if COUNTER == 0 {
+            COUNTER += 3;
+        }
+    };
 }
 
 struct MailBox {
@@ -57,7 +61,7 @@ impl Default for MailBox {
 
 #[link(wasm_import_module = "othismo")]
 extern "C" {
-    fn send_message(bytes: *const u8, length: usize);
+    fn send_message(bytes: *const u8, length: usize) -> u32;
 }
 
 #[no_mangle]

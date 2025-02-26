@@ -37,7 +37,7 @@ Triggers logic in the guest module to process whichever message has been placed 
 
 ### send_message(length: i32, buffer: i32) -> (i32)
 Tells the host that a message exists in the outbox.
-The length of a response, placed into the inbox, is returned.
+The length of a response placed into the inbox, if any, is returned.
 
 If no response is returned, the length is 0.
 

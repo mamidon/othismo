@@ -148,7 +148,7 @@ mod native {
 
     use super::Environment;
 
-    pub fn send_message(mut env: FunctionEnvMut<Environment>, head: u32, length: u32) {
+    pub fn send_message(mut env: FunctionEnvMut<Environment>, head: u32, length: u32) -> u32 {
         println!("native::send_message({}, {})", head, length);
 
         let (environment, store) = env.data_and_store_mut();
@@ -157,5 +157,7 @@ mod native {
         view.read(head as u64, buffer.as_mut_slice());
         
         println!("\"{}\"", String::from_utf8(buffer).unwrap());
+
+        return 0;
     }
 }
