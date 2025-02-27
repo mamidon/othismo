@@ -3,6 +3,7 @@ use wasmbin::io::DecodeError;
 use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError, MemoryAccessError, RuntimeError};
 
 pub mod image;
+pub mod namespace;
 
 #[derive(Debug)]
 pub enum OthismoError {
