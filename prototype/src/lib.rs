@@ -1,3 +1,6 @@
+use tasks::Task;
+
+static mut COUNTER: u32 = 0;
 
 #[allow(static_mut_refs)] // wasm is single threaded
 fn inbox() -> &'static mut MailBox {
@@ -9,10 +12,17 @@ fn inbox() -> &'static mut MailBox {
 #[allow(static_mut_refs)] // wasm is single threaded
 fn outbox() -> &'static mut MailBox {
     static mut OUTBOX: Option<Box<MailBox>> = None;
-
+    
     unsafe { OUTBOX.get_or_insert(Box::new(MailBox::default())) }
 }
-static mut COUNTER: u32 = 0;
+
+async fn user_publish_message(message: &[u8]) -> () {
+    ()
+}
+
+async fn user_process_message(message: &[u8]) -> () {
+    user_publish_message(message).await
+}
 
 #[no_mangle]
 pub extern "C" fn _othismo_start() {
@@ -87,3 +97,5 @@ pub unsafe extern "C" fn message_received() {
     let outbox_slice = outbox.as_slice();
     send_message(outbox_slice.as_ptr(), outbox_slice.len());
 }
+
+mod tasks;
