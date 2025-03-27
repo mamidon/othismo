@@ -3,12 +3,12 @@ default:
     just --list
 
 
-build-code:
+build:
     cargo build --package prototype --target wasm32-unknown-unknown
     cargo build --package othismo
 
 
-package: build-code
+package: build
     # Building & Placing Artifacts in ./playground 
     rm -r ./playground/*
     mkdir -p ./playground
