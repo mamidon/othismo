@@ -86,24 +86,29 @@ impl InstanceSession {
     }
 
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
-        let prepare_inbox: TypedFunction<(u32), (u32)> = self.instance
+        let allocate_message: TypedFunction<u32, u64> = self.instance
             .exports
-            .get_function("prepare_inbox")?
+            .get_function("allocate_message")?
             .typed(store)?;
-
-        let message_received: TypedFunction<(), ()> = self.instance
+        
+        let message_received: TypedFunction<(u32), ()> = self.instance
             .exports
             .get_function("message_received")?
             .typed(store)?;
 
         let message = "Hello, world!".to_string();
-        let result = prepare_inbox.call(store, message.len() as u32)?;
+        let packed_tuple = allocate_message.call(store, message.len() as u32)?;
+        let message_handle = (packed_tuple >> 32) as u32;
+        let message_buffer_ptr = (packed_tuple << 32) >> 32;
+        
+        println!("handle: {}, ptr: {}", message_handle, message_buffer_ptr);
 
         let memory = self.instance.exports.get_memory("memory")?;
         let view = memory.view(store);
-        view.write(result as u64, message.as_bytes());
-
-        message_received.call(store)?;
+        
+        view.write(message_buffer_ptr, message.as_bytes());
+        
+        message_received.call(store, message_handle)?;
         
         Ok(())
     }
@@ -148,15 +153,15 @@ mod native {
 
     use super::Environment;
 
-    pub fn send_message(mut env: FunctionEnvMut<Environment>, head: u32, length: u32) -> u32 {
-        println!("native::send_message({}, {})", head, length);
+    pub fn send_message(mut env: FunctionEnvMut<Environment>, handle: u64, head: u32, length: u32) -> u32 {
+        println!("native::send_message({}, {}, {})", handle, head, length);
 
         let (environment, store) = env.data_and_store_mut();
         let view = environment.memory.as_mut().expect("Native functions need access to linear memory").view(&store);
         let mut buffer: Vec<u8> = vec![0; length as usize];
         view.read(head as u64, buffer.as_mut_slice());
         
-        println!("\"{}\"", String::from_utf8(buffer).unwrap());
+        println!("\"{}\"", String::from_utf8(buffer).unwrap_or("bad_utf8".to_string()));
 
         return 0;
     }

@@ -132,6 +132,8 @@ mod tests {
 
         executor.spawn(async {});
 
+        executor.poll();
+
         // TODO 
         // Implement a type to hold the state of sending a message to WASM host and awaiting the response
         // That type needs to be tied into the send & receive message sys calls

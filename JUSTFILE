@@ -4,7 +4,7 @@ default:
 
 
 build:
-    cargo build --package prototype --target wasm32-unknown-unknown
+    RUSTFLAGS="-Ctarget-feature=+multivalue -Clink-args=-zstack-size=64000" cargo build --release --package prototype --target wasm32-unknown-unknown
     cargo build --package othismo
 
 
@@ -13,7 +13,7 @@ package: build
     rm -r ./playground/*
     mkdir -p ./playground
     cp ./target/debug/othismo ./playground
-    cp ./target/wasm32-unknown-unknown/debug/prototype.wasm ./playground
+    cp ./target/wasm32-unknown-unknown/release/prototype.wasm ./playground
 
 [working-directory: 'playground']
 dev: package
