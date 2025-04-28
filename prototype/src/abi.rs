@@ -1,12 +1,83 @@
-use std::{collections::HashMap, mem};
+use core::hash;
+use std::{collections::HashMap, future::Future, mem, task::Waker};
+
+use crate::tasks::TaskExecutor;
 
 /*
 https://blog.rust-lang.org/2024/09/24/webassembly-targets-change-in-default-target-features.html#disabling-on-by-default-webassembly-proposals
 https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
  */
 
-static mut COUNTER: u32 = 0;
+#[link(wasm_import_module = "othismo")]
+extern "C" {
+    fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32;
+}
 
+
+#[no_mangle]
+pub extern "C" fn _othismo_start() {
+
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _allocate_message(message_length: u32) -> u64 {
+    let inbox = inbox();
+
+    let (handle, ptr) = inbox.allocate(message_length as usize);
+
+    (handle.0 as u64) << 32 | ptr as u64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _message_received(message_handle: u32) {
+    let outbox = outbox();
+    let inbox = inbox();
+    
+    let message = inbox.as_slice(message_handle.into()).expect("The said there was a message in the Inbox, and there wasn't");
+
+    let (response_handle, response_ptr) = outbox.assign(message.to_vec());
+    
+    _send_message(response_handle.0 as u64, response_ptr, message.len());
+}
+
+pub fn send_message(message: Vec<u8>) {
+    let executor = executor();
+    let outbox = outbox();
+
+    let (handle, ptr) = outbox.assign(message);
+
+    let task = SendMessageTask {
+        request: handle,
+        response: None,
+        waker: None
+    };
+
+    executor.spawn(handle.0, task);
+
+    unsafe { _send_message(handle.0, ptr, message.len()) };
+}
+
+
+#[allow(static_mut_refs)] // wasm is single threaded
+fn executor() -> &'static mut TaskExecutor {
+    static mut EXECUTOR: Option<Box<TaskExecutor>> = None;
+
+    unsafe { EXECUTOR.get_or_insert(Box::new(TaskExecutor::new())) }
+}
+
+#[allow(static_mut_refs)] // wasm is single threaded
+fn inbox() -> &'static mut MailBox {
+    static mut INBOX: Option<Box<MailBox>> = None;
+
+    unsafe { INBOX.get_or_insert(Box::new(MailBox::default())) }
+}
+
+#[allow(static_mut_refs)] // wasm is single threaded
+fn outbox() -> &'static mut MailBox {
+    static mut OUTBOX: Option<Box<MailBox>> = None;
+    
+    unsafe { OUTBOX.get_or_insert(Box::new(MailBox::default())) }
+}
 
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -100,54 +171,16 @@ impl Default for MailBox {
     }
 }
 
-
-#[link(wasm_import_module = "othismo")]
-extern "C" {
-    fn send_message(handle: u64, bytes: *const u8, length: usize) -> u32;
+struct SendMessageTask {
+    request: MessageHandle,
+    response: Option<MessageHandle>,
+    waker: Option<Waker>
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn allocate_message(message_length: u32) -> u64 {
-    let inbox = inbox();
+impl Future for SendMessageTask {
+    type Output = ();
 
-    let (handle, ptr) = inbox.allocate(message_length as usize);
-
-    (handle.0 as u64) << 32 | ptr as u64
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn message_received(message_handle: u32) {
-    let outbox = outbox();
-    let inbox = inbox();
-    
-    let message = inbox.as_slice(message_handle.into()).expect("The said there was a message in the Inbox, and there wasn't");
-    let length = std::cmp::min(COUNTER as usize, message.len());
-
-    let (response_handle, response_ptr) = outbox.assign(message.to_vec());
-    
-    send_message(response_handle.0 as u64, response_ptr, message.len());
-}
-
-
-#[allow(static_mut_refs)] // wasm is single threaded
-fn inbox() -> &'static mut MailBox {
-    static mut INBOX: Option<Box<MailBox>> = None;
-
-    unsafe { INBOX.get_or_insert(Box::new(MailBox::default())) }
-}
-
-#[allow(static_mut_refs)] // wasm is single threaded
-fn outbox() -> &'static mut MailBox {
-    static mut OUTBOX: Option<Box<MailBox>> = None;
-    
-    unsafe { OUTBOX.get_or_insert(Box::new(MailBox::default())) }
-}
-
-#[no_mangle]
-pub extern "C" fn _othismo_start() {
-    unsafe {
-        if COUNTER == 0 {
-            COUNTER += 3;
-        }
-    };
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        todo!()
+    }
 }

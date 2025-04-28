@@ -6,12 +6,14 @@ use std::{
 };
 
 pub struct Task<T> {
+    id: u32,
     future: Pin<Box<dyn Future<Output = T>>>,
 }
 
 impl<T> Task<T> {
-    pub fn new(future: impl Future<Output = T> + 'static) -> Task<T> {
+    pub fn new(id: u32, future: impl Future<Output = T> + 'static) -> Task<T> {
         Task {
+            id,
             future: Box::pin(future),
         }
     }
@@ -28,7 +30,7 @@ pub struct TaskExecutor {
 
 struct Executor {
     ready: VecDeque<Task<()>>,
-    sleeping: HashMap<usize, Task<()>>,
+    sleeping: HashMap<u32, Task<()>>,
     tasks_started: usize,
     tasks_polled: usize,
     tasks_completed: usize,
@@ -36,11 +38,11 @@ struct Executor {
 
 struct TaskWaker {
     executor: TaskExecutor,
-    task_id: usize,
+    task_id: u32,
 }
 
 impl TaskWaker {
-    pub fn new(executor: TaskExecutor, task_id: usize) -> Waker {
+    pub fn new(executor: TaskExecutor, task_id: u32) -> Waker {
         let task_waker = Box::new(TaskWaker { executor, task_id });
         let raw = Box::into_raw(task_waker);
 
@@ -88,28 +90,28 @@ impl TaskExecutor {
         }
     }
 
-    pub fn spawn(&mut self, future: impl Future<Output = ()> + 'static) {
+    pub fn spawn(&mut self, task_id: u32, future: impl Future<Output = ()> + 'static) {
         let mut inner = self.inner.borrow_mut();
-        inner.ready.push_back(Task::new(future));
+        inner.ready.push_back(Task::new(task_id, future));
     }
 
-    pub fn poll(&mut self) {
+    pub fn run(&mut self) {
         let mut inner = self.inner.borrow_mut();
 
-        if let Some(mut task) = inner.ready.pop_front() {
+        while let Some(mut task) = inner.ready.pop_front() {
             inner.tasks_polled += 1;
-            let waker = TaskWaker::new(self.clone(), inner.tasks_polled);
+            let waker = TaskWaker::new(self.clone(), task.id);
 
             let mut context = Context::from_waker(&waker);
 
             match task.poll(&mut context) {
                 Poll::Ready(_) => inner.tasks_completed += 1,
-                Poll::Pending => inner.ready.push_back(task),
+                Poll::Pending => { inner.sleeping.insert(task.id, task); },
             }
         }
     }
 
-    pub(self) fn wake_task(&self, task_id: usize) {
+    pub(self) fn wake_task(&self, task_id: u32) {
         let mut inner = self.inner.borrow_mut();
 
         if let Some(task) = inner.sleeping.remove(&task_id) {
@@ -130,9 +132,9 @@ mod tests {
     fn can_test_async() {
         let mut executor = TaskExecutor::new();
 
-        executor.spawn(async {});
+        executor.spawn(0, async {});
 
-        executor.poll();
+        executor.run();
 
         // TODO 
         // Implement a type to hold the state of sending a message to WASM host and awaiting the response
