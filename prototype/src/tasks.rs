@@ -98,13 +98,14 @@ impl TaskExecutor {
 
         if let Some(mut task) = inner.ready.pop_front() {
             inner.tasks_polled += 1;
-            let waker = TaskWaker::new(self.clone(), inner.tasks_polled);
+            let task_id = inner.tasks_polled;
+            let waker = TaskWaker::new(self.clone(), task_id);
 
             let mut context = Context::from_waker(&waker);
 
             match task.poll(&mut context) {
                 Poll::Ready(_) => inner.tasks_completed += 1,
-                Poll::Pending => inner.ready.push_back(task),
+                Poll::Pending => { inner.sleeping.insert(task_id, task); },
             }
         }
     }
@@ -124,27 +125,84 @@ impl TaskExecutor {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc, task::{Poll, Waker}};
+
     use super::TaskExecutor;
+    
+    struct TestTask {
+        id: u32,
+        wakers: Rc<RefCell<HashMap<u32, Waker>>>
+    }
+
+    impl Future for TestTask {
+        type Output=();
+    
+        fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            
+            let waker_exists = self.wakers.borrow().get(&self.id).is_some();
+
+            if (waker_exists) {
+                return Poll::Ready(());
+            } else {
+                self.wakers.borrow_mut().insert(self.id, cx.waker().clone());
+                return Poll::Pending;
+            }
+        }
+    }
 
     #[test]
-    fn can_test_async() {
+    fn sleeping_tasks_wait_for_wakup() {
         let mut executor = TaskExecutor::new();
+        let wakers = wakers();
+        let task_a = TestTask::new(42, wakers.clone());
 
-        executor.spawn(async {});
+        executor.spawn(task_a);
 
         executor.poll();
 
-        // TODO 
-        // Implement a type to hold the state of sending a message to WASM host and awaiting the response
-        // That type needs to be tied into the send & receive message sys calls
-        // 
-        // I think Mailboxes need to store this intermediate state of which messages are incoming & outgoing
-        // Such that when the host calls back into us, we do a little bit of book keeping & then defer to the executor
-        // Until the user's code terminates (returns a response) or yields (sends a message).
-        // 
-        // At which point we do some more book keeping and call back into the host.
-        // I think this means we need to include an int ID with the message buffer... unless the message buffer ptr
-        // can serve as that ID? hmm...
+        assert_eq!(executor.tasks_completed(), 0);
+        assert_eq!(wakers.borrow().len(), 1);
+
+        wakers.borrow().get(&42).unwrap().wake_by_ref();
+
+        executor.poll();
+
         assert_eq!(executor.tasks_completed(), 1);
+    }
+
+    #[test]
+    fn multiple_sleeping_tasks_can_sleep() {
+        let mut executor = TaskExecutor::new();
+        let wakers = wakers();
+        let task_a = TestTask::new(42, wakers.clone());
+        let task_b = TestTask::new(52, wakers.clone());
+
+        executor.spawn(task_a);
+        executor.spawn(task_b);
+
+        executor.poll();
+        executor.poll();
+        executor.poll();
+
+        assert_eq!(executor.tasks_completed(), 0);
+        assert_eq!(wakers.borrow().len(), 2);
+
+        wakers.borrow().get(&42).unwrap().wake_by_ref();
+        executor.poll();
+
+        assert_eq!(executor.tasks_completed(), 1);
+
+        wakers.borrow().get(&52).unwrap().wake_by_ref();
+        executor.poll();
+    }
+
+    fn wakers() -> Rc<RefCell<HashMap<u32, Waker>>> {
+        Rc::new(RefCell::new(HashMap::new()))
+    }
+
+    impl TestTask {
+        fn new(id: u32, wakers: Rc<RefCell<HashMap<u32, Waker>>>) -> TestTask {
+            TestTask { id, wakers }
+        }
     }
 }
