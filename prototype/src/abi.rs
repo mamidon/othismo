@@ -1,5 +1,5 @@
 use core::hash;
-use std::{collections::HashMap, future::Future, mem, task::Waker};
+use std::{cell::RefCell, collections::HashMap, future::Future, mem, task::Waker};
 
 use crate::tasks::TaskExecutor;
 
@@ -8,9 +8,17 @@ https://blog.rust-lang.org/2024/09/24/webassembly-targets-change-in-default-targ
 https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
  */
 
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "othismo")]
 extern "C" {
     fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32;
+}
+
+
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
+pub extern "C" fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32 {
+    0
 }
 
 
@@ -29,34 +37,51 @@ pub unsafe extern "C" fn _allocate_message(message_length: u32) -> u64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn _message_received(message_handle: u32) {
-    let outbox = outbox();
-    let inbox = inbox();
-    
-    let message = inbox.as_slice(message_handle.into()).expect("The said there was a message in the Inbox, and there wasn't");
+pub unsafe extern "C" fn _run() {
+    let mut executor = executor();
 
-    let (response_handle, response_ptr) = outbox.assign(message.to_vec());
-    
-    _send_message(response_handle.0, response_ptr, message.len());
+    executor.run();
+
 }
 
-pub fn send_message(message: Vec<u8>) {
-    let executor = executor();
-    let outbox = outbox();
-    let length =  message.len();
-    let (handle, ptr) = outbox.assign(message);
+#[no_mangle]
+pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_handle: u32) {
+    let inbox = inbox();
 
-    let task = SendMessageTask {
+    match in_response_to_handle {
+        0 => {
+            executor().spawn(process_message(inbox.as_slice(message_handle.into()).expect("They said a message arrived")));
+        },
+        handle => {
+            match outbox().get(&handle.into()) {
+                Some(waker) => {
+                    waker.wake_by_ref();
+                },
+                None => {}
+            }
+        }
+    }
+}
+
+pub fn send_message(message: &[u8]) -> impl Future<Output = ()> {
+    let handle = MessageHandle(outbox().len() as u32);
+
+    let task = ReceiveResponseTask {
         request: handle,
-        response: None,
-        waker: None
     };
 
-    executor.spawn(task);
-
-    unsafe { _send_message(handle.0, ptr, length) };
+    executor().spawn(task);
+    unsafe { _send_message(handle.0, message.as_ptr(), message.len()) };
+    
+    ReceiveResponseHandleTask {
+        handle
+    }
 }
 
+async fn process_message(message: &[u8]) {
+    send_message(message).await;
+    send_message(message).await;
+}
 
 #[allow(static_mut_refs)] // wasm is single threaded
 fn executor() -> &'static mut TaskExecutor {
@@ -73,10 +98,10 @@ fn inbox() -> &'static mut MailBox {
 }
 
 #[allow(static_mut_refs)] // wasm is single threaded
-fn outbox() -> &'static mut MailBox {
-    static mut OUTBOX: Option<Box<MailBox>> = None;
+fn outbox() -> &'static mut HashMap<MessageHandle, Waker> {
+    static mut OUTBOX: Option<HashMap<MessageHandle, Waker>> = None;
     
-    unsafe { OUTBOX.get_or_insert(Box::new(MailBox::default())) }
+    unsafe { OUTBOX.get_or_insert(HashMap::new()) }
 }
 
 
@@ -171,16 +196,28 @@ impl Default for MailBox {
     }
 }
 
-struct SendMessageTask {
-    request: MessageHandle,
-    response: Option<MessageHandle>,
-    waker: Option<Waker>
+struct ReceiveResponseHandleTask {
+    handle: MessageHandle
 }
 
-impl Future for SendMessageTask {
+impl Future for ReceiveResponseHandleTask {
     type Output = ();
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         todo!()
+    }
+}
+
+struct ReceiveResponseTask {
+    request: MessageHandle,
+}
+
+impl Future for ReceiveResponseTask {
+    type Output = ();
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        outbox().insert(self.request, cx.waker().clone());
+
+        std::task::Poll::Pending
     }
 }

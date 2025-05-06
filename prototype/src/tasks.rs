@@ -93,6 +93,23 @@ impl TaskExecutor {
         inner.ready.push_back(Task::new(future));
     }
 
+    pub fn run(&mut self) {
+        let mut inner = self.inner.borrow_mut();
+
+        while let Some(mut task) = inner.ready.pop_front() {
+            inner.tasks_polled += 1;
+            let task_id = inner.tasks_polled;
+            let waker = TaskWaker::new(self.clone(), task_id);
+
+            let mut context = Context::from_waker(&waker);
+
+            match task.poll(&mut context) {
+                Poll::Ready(_) => inner.tasks_completed += 1,
+                Poll::Pending => { inner.sleeping.insert(task_id, task); },
+            }
+        }
+    }
+
     pub fn poll(&mut self) {
         let mut inner = self.inner.borrow_mut();
 
@@ -126,6 +143,8 @@ impl TaskExecutor {
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc, task::{Poll, Waker}};
+
+    use crate::abi;
 
     use super::TaskExecutor;
 
@@ -194,6 +213,11 @@ mod tests {
 
         wakers.borrow().get(&52).unwrap().wake_by_ref();
         executor.poll();
+    }
+
+    #[test]
+    fn foo() {
+        crate::abi::send_message(b"foo");
     }
 
     fn wakers() -> Rc<RefCell<HashMap<u32, Waker>>> {
