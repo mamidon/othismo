@@ -128,7 +128,7 @@ mod tests {
     use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc, task::{Poll, Waker}};
 
     use super::TaskExecutor;
-    
+
     struct TestTask {
         id: u32,
         wakers: Rc<RefCell<HashMap<u32, Waker>>>
@@ -136,9 +136,9 @@ mod tests {
 
     impl Future for TestTask {
         type Output=();
-    
+
         fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-            
+
             let waker_exists = self.wakers.borrow().get(&self.id).is_some();
 
             if (waker_exists) {
