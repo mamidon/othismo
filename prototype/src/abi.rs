@@ -37,13 +37,13 @@ pub unsafe extern "C" fn _message_received(message_handle: u32) {
 
     let (response_handle, response_ptr) = outbox.assign(message.to_vec());
     
-    _send_message(response_handle.0 as u64, response_ptr, message.len());
+    _send_message(response_handle.0, response_ptr, message.len());
 }
 
 pub fn send_message(message: Vec<u8>) {
     let executor = executor();
     let outbox = outbox();
-
+    let length =  message.len();
     let (handle, ptr) = outbox.assign(message);
 
     let task = SendMessageTask {
@@ -52,9 +52,9 @@ pub fn send_message(message: Vec<u8>) {
         waker: None
     };
 
-    executor.spawn(handle.0, task);
+    executor.spawn(task);
 
-    unsafe { _send_message(handle.0, ptr, message.len()) };
+    unsafe { _send_message(handle.0, ptr, length) };
 }
 
 
