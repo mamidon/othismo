@@ -29,7 +29,7 @@ impl InstanceSession {
 
         let wasmer_instance = wasmer::Instance::new(store, &wasmer_instance_module, &imports! {
             "othismo" => {
-                "send_message" => trampoline
+                "_send_message" => trampoline
             }
         })?;
 
@@ -88,12 +88,12 @@ impl InstanceSession {
     pub fn call_function(&self, store: &mut Store) -> Result<()> {
         let allocate_message: TypedFunction<u32, u64> = self.instance
             .exports
-            .get_function("allocate_message")?
+            .get_function("_allocate_message")?
             .typed(store)?;
         
-        let message_received: TypedFunction<(u32), ()> = self.instance
+        let message_received: TypedFunction<(u32, u32), ()> = self.instance
             .exports
-            .get_function("message_received")?
+            .get_function("_message_received")?
             .typed(store)?;
 
         let message = "Hello, world!".to_string();
@@ -108,7 +108,7 @@ impl InstanceSession {
         
         view.write(message_buffer_ptr, message.as_bytes());
         
-        message_received.call(store, message_handle)?;
+        message_received.call(store, message_handle, 0)?;
         
         Ok(())
     }
@@ -153,7 +153,7 @@ mod native {
 
     use super::Environment;
 
-    pub fn send_message(mut env: FunctionEnvMut<Environment>, handle: u64, head: u32, length: u32) -> u32 {
+    pub fn send_message(mut env: FunctionEnvMut<Environment>, handle: u32, head: u32, length: u32) -> u32 {
         println!("native::send_message({}, {}, {})", handle, head, length);
 
         let (environment, store) = env.data_and_store_mut();

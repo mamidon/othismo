@@ -1,7 +1,6 @@
 use core::hash;
 use std::{cell::RefCell, collections::HashMap, future::Future, mem, task::Waker};
-
-use crate::tasks::TaskExecutor;
+use crate::tasks::executor;
 
 /*
 https://blog.rust-lang.org/2024/09/24/webassembly-targets-change-in-default-target-features.html#disabling-on-by-default-webassembly-proposals
@@ -38,19 +37,22 @@ pub unsafe extern "C" fn _allocate_message(message_length: u32) -> u64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn _run() {
-    let mut executor = executor();
+    let executor = executor();
 
-    executor.run();
+    while (executor.try_tick()) {
+
+    }
 
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_handle: u32) {
     let inbox = inbox();
+    let executor = executor();
 
     match in_response_to_handle {
         0 => {
-            executor().spawn(process_message(inbox.as_slice(message_handle.into()).expect("They said a message arrived")));
+            executor.spawn(process_message(inbox.as_slice(message_handle.into()).expect("They said a message arrived"))).detach();
         },
         handle => {
             match outbox().get(&handle.into()) {
@@ -61,6 +63,11 @@ pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_h
             }
         }
     }
+
+    let mut x = 0;
+    while (executor.try_tick()) {
+        x += 1;
+    }
 }
 
 pub fn send_message(message: &[u8]) -> impl Future<Output = ()> {
@@ -70,24 +77,19 @@ pub fn send_message(message: &[u8]) -> impl Future<Output = ()> {
         request: handle,
     };
 
-    executor().spawn(task);
-    unsafe { _send_message(handle.0, message.as_ptr(), message.len()) };
+    let spawned_task = executor().spawn(task);
+
+    unsafe { _send_message(handle.0, message.as_ptr(), message.len()); }
     
-    ReceiveResponseHandleTask {
-        handle
-    }
+    spawned_task
 }
 
 async fn process_message(message: &[u8]) {
-    send_message(message).await;
-    send_message(message).await;
-}
+    let a = send_message(message);
+    let b = send_message(message);
 
-#[allow(static_mut_refs)] // wasm is single threaded
-fn executor() -> &'static mut TaskExecutor {
-    static mut EXECUTOR: Option<Box<TaskExecutor>> = None;
-
-    unsafe { EXECUTOR.get_or_insert(Box::new(TaskExecutor::new())) }
+    a.await;
+    b.await;
 }
 
 #[allow(static_mut_refs)] // wasm is single threaded
