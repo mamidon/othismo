@@ -24,6 +24,7 @@ use wasmer::{GlobalType, Store, Type};
 use wasmbin::sections::Section::Start;
 use super::OthismoError;
 
+#[derive(Clone)]
 pub struct InstanceAtRest(wasmbin::Module);
 pub struct ModuleAtRest(wasmbin::Module);
 

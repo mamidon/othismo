@@ -11,12 +11,19 @@ https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
 #[link(wasm_import_module = "othismo")]
 extern "C" {
     fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32;
+    fn _cast_message(handle: u32, bytes: *const u8, length: usize) -> u32;
 }
 
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
 pub extern "C" fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32 {
+    0
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
+pub extern "C" fn _cast_message(handle: u32, bytes: *const u8, length: usize) -> u32 {
     0
 }
 
@@ -63,7 +70,7 @@ pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_h
             }
         }
     }
-
+    
     let mut x = 0;
     while (executor.try_tick()) {
         x += 1;
@@ -198,18 +205,6 @@ impl Default for MailBox {
     }
 }
 
-struct ReceiveResponseHandleTask {
-    handle: MessageHandle
-}
-
-impl Future for ReceiveResponseHandleTask {
-    type Output = ();
-
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        todo!()
-    }
-}
-
 struct ReceiveResponseTask {
     request: MessageHandle,
 }
@@ -220,6 +215,9 @@ impl Future for ReceiveResponseTask {
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         outbox().insert(self.request, cx.waker().clone());
 
-        std::task::Poll::Pending
+        match inbox().as_slice(self.request) {
+            Some(_) => std::task::Poll::Ready(()),
+            None => std::task::Poll::Pending,
+        }
     }
 }
