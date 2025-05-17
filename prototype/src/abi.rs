@@ -10,20 +10,24 @@ https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "othismo")]
 extern "C" {
-    fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32;
-    fn _cast_message(handle: u32, bytes: *const u8, length: usize) -> u32;
+    fn _send_message(bytes: *const u8, length: usize) -> u32;
+    fn _cast_message(bytes: *const u8, length: usize) -> u32;
 }
 
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn _send_message(handle: u32, bytes: *const u8, length: usize) -> u32 {
-    0
+pub unsafe extern "C" fn _send_message(bytes: *mut u8, length: u32) -> u32 {
+    let slice = std::slice::from_raw_parts_mut(bytes, length as usize);
+
+    let (handle, _) = tests::sent_test_messages().assign(slice.into());
+
+    handle.0
 }
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn _cast_message(handle: u32, bytes: *const u8, length: usize) -> u32 {
+pub unsafe extern "C" fn _cast_message(bytes: *const u8, length: u32) -> u32 {
     0
 }
 
@@ -34,35 +38,33 @@ pub extern "C" fn _othismo_start() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn _allocate_message(message_length: u32) -> u64 {
+pub unsafe extern "C" fn _allocate_message(handle: u32, message_length: u32) -> *const u8 {
     let inbox = inbox();
 
-    let (handle, ptr) = inbox.allocate(message_length as usize);
-
-    (handle.0 as u64) << 32 | ptr as u64
+    inbox.allocate(handle.into(), message_length as usize)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _run() {
-    let executor = executor();
-
-    while (executor.try_tick()) {
-
+    loop {
+        if !executor().try_tick() {
+            break;
+        }
     }
-
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_handle: u32) {
+pub unsafe extern "C" fn _message_received(message_handle: u32, request_handle: u32) {
     let inbox = inbox();
     let executor = executor();
 
-    match in_response_to_handle {
+    match request_handle {
         0 => {
-            executor.spawn(process_message(inbox.as_slice(message_handle.into()).expect("They said a message arrived"))).detach();
+            let mut message = inbox.take(message_handle.into()).expect("They said a message arrived");
+            executor.spawn(process_message(message)).detach();
         },
         handle => {
-            match outbox().get(&handle.into()) {
+            match inflight_requests().get(&handle.into()) {
                 Some(waker) => {
                     waker.wake_by_ref();
                 },
@@ -70,29 +72,31 @@ pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_h
             }
         }
     }
-
-    let mut x = 0;
-    while (executor.try_tick()) {
-        x += 1;
-    }
 }
 
-pub fn send_message(message: &[u8]) -> impl Future<Output = ()> {
-    let handle = MessageHandle(outbox().len() as u32);
+pub fn send_message(mut message: Vec<u8>) -> impl Future<Output = Vec<u8>> {
+    let ptr = message.as_mut_ptr();
+    let len = message.len() as u32;
+    
+    let handle = unsafe { _send_message(ptr, len) };
 
     let task = ReceiveResponseTask {
-        request: handle,
+        request: handle.into(),
+        response: None
     };
 
-    let spawned_task = executor().spawn(task);
-
-    unsafe { _send_message(handle.0, message.as_ptr(), message.len()); }
-
-    spawned_task
+    executor().spawn(task)
 }
 
-async fn process_message(message: &[u8]) {
-    let a = send_message(message);
+pub fn cast_message(mut message: Vec<u8>) {
+    let ptr = message.as_mut_ptr();
+    let len = message.len() as u32;
+
+    unsafe { _send_message(ptr, len) };
+}
+
+async fn process_message(message: Vec<u8>) {
+    let a = send_message(message.clone());
     let b = send_message(message);
 
     a.await;
@@ -107,7 +111,7 @@ fn inbox() -> &'static mut MailBox {
 }
 
 #[allow(static_mut_refs)] // wasm is single threaded
-fn outbox() -> &'static mut HashMap<MessageHandle, Waker> {
+fn inflight_requests() -> &'static mut HashMap<MessageHandle, Waker> {
     static mut OUTBOX: Option<HashMap<MessageHandle, Waker>> = None;
     
     unsafe { OUTBOX.get_or_insert(HashMap::new()) }
@@ -123,70 +127,39 @@ impl From<u32> for MessageHandle {
     }
 }
 
-struct VolatileBuffer {
-    ptr: *const u8,
-    len: usize
-}
-
-impl VolatileBuffer {
-    pub fn empty(len: usize) -> VolatileBuffer {
-        let mut buffer = Vec::with_capacity(len);
-        let ptr = buffer.as_mut_ptr();
-        mem::forget(buffer);
-        VolatileBuffer { 
-            ptr, 
-            len
-        }
-    }
-
-    pub fn from_bytes(mut bytes: Vec<u8>) -> VolatileBuffer {
-        let len = bytes.len();
-        let ptr = bytes.as_mut_ptr();
-        mem::forget(bytes);
-        VolatileBuffer { 
-            ptr, 
-            len
-        }
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    pub fn as_ptr(&self) -> *const u8 {
-        self.ptr
-    }
-}
-
 struct MailBox {
     next_handle: MessageHandle,
-    buffers: HashMap<MessageHandle, VolatileBuffer>
+    buffers: HashMap<MessageHandle, Vec<u8>>
 }
 
 impl MailBox {
 
-    pub fn allocate(&mut self, length: usize) -> (MessageHandle, *const u8) {
-        let handle = self.take_next_handle();
-        let buffer = VolatileBuffer::empty(length);
-        let ptr = buffer.ptr;
+    pub fn allocate(&mut self, handle: MessageHandle, length: usize) -> *const u8 {
+        let mut buffer = Vec::new();
+        buffer.resize(length, 0);
+
+        let ptr = buffer.as_ptr();
 
         self.buffers.insert(handle, buffer);
 
-        (handle, ptr)
+        ptr
     }
 
     pub fn assign(&mut self, message: Vec<u8>) -> (MessageHandle, *const u8) {
         let handle = self.take_next_handle();
-        let buffer = VolatileBuffer::from_bytes(message);
-        let ptr = buffer.as_ptr();
+        let ptr = message.as_ptr();
 
-        self.buffers.insert(handle, buffer);
+        self.buffers.insert(handle, message);
 
         (handle, ptr)
     }
 
     pub fn as_slice(&self, handle: MessageHandle) -> Option<&[u8]> {
         self.buffers.get(&handle).map(|v| v.as_slice())
+    }
+
+    pub fn take(&mut self, handle: MessageHandle) -> Option<Vec<u8>> {
+        self.buffers.remove(&handle)
     }
 
     fn take_next_handle(&mut self) -> MessageHandle {
@@ -207,17 +180,65 @@ impl Default for MailBox {
 
 struct ReceiveResponseTask {
     request: MessageHandle,
+    response: Option<MessageHandle>
 }
 
 impl Future for ReceiveResponseTask {
-    type Output = ();
+    type Output = Vec<u8>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        outbox().insert(self.request, cx.waker().clone());
+        inflight_requests().insert(self.request, cx.waker().clone());
 
-        match inbox().as_slice(self.request) {
-            Some(_) => std::task::Poll::Ready(()),
+        match inbox().take(self.request) {
+            Some(response) => {
+                std::task::Poll::Ready(response)
+            },
             None => std::task::Poll::Pending,
+        }
+    }
+}
+
+mod tests {
+    use crate::abi::{_allocate_message, _message_received, _run, MessageHandle, MailBox};
+
+    #[allow(static_mut_refs)] // wasm is single threaded
+    pub(crate) fn sent_test_messages() -> &'static mut MailBox {
+        static mut TEST_OUTBOX: Option<Box<MailBox>> = None;
+
+        unsafe { TEST_OUTBOX.get_or_insert(Box::new(MailBox::default())) }
+    }
+
+
+    #[test]
+    fn two_messages_are_echoed_back() {
+        let message = b"Hello";
+        inject_message(1.into(), message);
+        run_until_idle();
+
+        assert!(sent_test_messages().buffers.len() == 2);
+        assert_eq!(sent_test_messages().take(0.into()), Some(b"Hello".into()));
+        assert_eq!(sent_test_messages().take(1.into()), Some(b"Hello".into()));
+    }
+
+    fn inject_message(handle: MessageHandle, message: &[u8]) {
+        unsafe { 
+            let ptr =_allocate_message(handle.0, message.len() as u32) as *mut u8;
+            std::ptr::copy_nonoverlapping(message.as_ptr(), ptr, message.len());
+            _message_received(handle.0, 0);
+         };
+    }
+
+    fn inject_response(handle: MessageHandle, message: &[u8], request: MessageHandle) {
+        unsafe { 
+            let ptr = _allocate_message(handle.0, message.len() as u32) as *mut u8;
+            std::ptr::copy_nonoverlapping(message.as_ptr(), ptr, message.len());
+            _message_received(handle.0, request.0);
+         };
+    }
+
+    fn run_until_idle() {
+        unsafe {
+            _run();
         }
     }
 }
