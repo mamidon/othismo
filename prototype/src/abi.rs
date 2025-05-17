@@ -70,7 +70,7 @@ pub unsafe extern "C" fn _message_received(message_handle: u32, in_response_to_h
             }
         }
     }
-    
+
     let mut x = 0;
     while (executor.try_tick()) {
         x += 1;
@@ -87,7 +87,7 @@ pub fn send_message(message: &[u8]) -> impl Future<Output = ()> {
     let spawned_task = executor().spawn(task);
 
     unsafe { _send_message(handle.0, message.as_ptr(), message.len()); }
-    
+
     spawned_task
 }
 

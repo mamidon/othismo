@@ -93,12 +93,12 @@ impl InstanceSession {
     pub fn receive_message(&self, store: &mut impl AsStoreMut, message: (u32, &[u8])) -> Result<()> {
         let allocate_message: TypedFunction<u32, u64> = self.instance
             .exports
-            .get_function("_allocate_message")?
+            .get_function("allocate_message")?
             .typed(store)?;
         
         let message_received: TypedFunction<(u32, u32), ()> = self.instance
             .exports
-            .get_function("_message_received")?
+            .get_function("message_received")?
             .typed(store)?;
 
         let packed_tuple = allocate_message.call(store, message.1.len() as u32)?;
@@ -164,7 +164,7 @@ mod native {
         let view = environment.memory.as_mut().unwrap().view(&store);
         let mut buffer: Vec<u8> = vec![0; length as usize];
         view.read(head as u64, buffer.as_mut_slice());
-        
+
         println!("\"{}\"", String::from_utf8(buffer).unwrap_or("bad_utf8".to_string()));
 
         environment.instance.as_mut().unwrap().receive_message(&mut store, (1, b"Response"));
