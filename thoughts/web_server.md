@@ -3,7 +3,8 @@
 When configuring an image; we’re importing modules & instantiating instances.  Somehow we have to wire up these
 Instances such that they can actually interact.
 
-Option A: Direct configuration via messaging instances.  (Need to bind instances to names or IDs)
+~~Option A: Direct configuration via messaging instances.  (Need to bind instances to names or IDs)~~
+
 Option B: Massive manipulation of the namespace, ala Plan9.
 
 
@@ -13,10 +14,7 @@ Instead of having multiple parameters, we encode everything inside the message v
 
 ```
 {
-  "othismo": {
-    "send_to": "/namespace/foo",
-    "reply_to": "/namespace/me" // optional
-  },
+  "othismo.send_to": "/namespace/foo",
   "acme.custom_message": {
     "foo": "bar"
   }
@@ -26,20 +24,31 @@ Instead of having multiple parameters, we encode everything inside the message v
 
 ## Syscalls
 
-### prepare_inbox(length: i32) -> (i32)
-Given a minimum required length; the inbox buffer is 
-resized if necessary.  Returns a pointer to an appropriate buffer.
-
+### _allocate_message(handle: u32, message_length: u32, request_handle: u32) -> *const u8
+Find and possibly allocate a buffer to receive a message with the specified handle.
 The host must call this for every message it wishes to place in the inbox.
 
-### message_received() -> ()
-Triggers logic in the guest module to process whichever message has been placed into the inbox.
+The request handle is optional, specify 0 if not relevant.
+The host MUST place a message in the provided buffer; the guest will assume it's
+available for processing during the next call to _run
 
-### send_message(length: i32, buffer: i32) -> (i32)
-Tells the host that a message exists in the outbox.
-The length of a response placed into the inbox, if any, is returned.
+### _run() -> ()
+Processes all messages received since the last call to _run.  Yields control when all tasks 
+are blocked awaiting I/O.
 
-If no response is returned, the length is 0.
+When this function returns, the host should not call this again until at least one message
+has been sent to the guest.
+
+### _send_message(bytes: *mut u8, length: u32) -> u32
+Tells the host a message has been place in the inbox with a particular length at a particular location.
+The return valie is that message's handle.  Any responses received will have their own handle, 
+but will also specify this message's handle as the request_handle.
+
+### _cast_message(bytes: *const u8, length: u32) -> u32
+Has the same semantics as _send_message; except the runtime will not return any responses.
+
+### _othismo_start() -> ()
+Invoked once at initialization of the instance.
 
 ## Othismo built in messages for HTTP
 
@@ -55,18 +64,6 @@ This message is included alongside other messages for specific routing.
     },
     "acme.custom_message": {
         // this will be sent to /some/thing
-    }
-}
-```
-
-Messages with a single message can elide the `othismo` message; provided the top level
-key takes a special form.  
-
-Assuming you want to send a message `fizz.buzz` to object `/foo/foo.bar`.
-```
-{
-    "/foo/foo.bar/fizz.buzz": {
-        // data
     }
 }
 ```
