@@ -5,24 +5,19 @@ use wasmer::{imports, AsStoreMut, Function, FunctionEnv, Global, Imports, Instan
 use crate::othismo::image::{Image, InstanceAtRest, Object};
 use crate::othismo::{Errors, Result, OthismoError};
 
-struct Session<'s> {
-    image: &'s mut Image,
-    store: Store,
-}
-
 struct Environment {
-    instance: Option<InstanceSession>,
+    instance: Option<ExecutionSession>,
     memory: Option<Memory>
 }
 
 #[derive(Clone)]
-struct InstanceSession {
+struct ExecutionSession {
     instance_at_rest: InstanceAtRest,
     instance: Instance
 }
 
-impl InstanceSession {
-    pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<InstanceSession> {
+impl ExecutionSession {
+    pub fn from_instance_at_rest(store: &mut Store, instance_at_rest: InstanceAtRest) -> Result<ExecutionSession> {
         let buffer = instance_at_rest.to_bytes();
         let wasmer_instance_module = wasmer::Module::new(store, &buffer)?;   
         // todo create a context which stores a reference to the memory 
@@ -37,7 +32,7 @@ impl InstanceSession {
             }
         })?;
 
-        let instance_session = InstanceSession {
+        let instance_session = ExecutionSession {
             instance_at_rest,
             instance: wasmer_instance.clone()
         };
@@ -139,7 +134,7 @@ pub fn send_message(image: &mut Image, instance_name: &str) -> Result<()> {
     };
 
     let mut store = Store::default();
-    let instance_session = InstanceSession::from_instance_at_rest(
+    let instance_session = ExecutionSession::from_instance_at_rest(
         &mut store, 
         instance_at_rest
     )?;
