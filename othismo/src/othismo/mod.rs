@@ -4,6 +4,7 @@ use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, Instantia
 
 pub mod image;
 pub mod namespace;
+pub mod execution;
 
 #[derive(Debug)]
 pub enum OthismoError {

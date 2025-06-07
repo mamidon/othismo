@@ -2,10 +2,9 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand};
-use crate::othismo::image::{Image, Object};
+use crate::othismo::{execution, image::{Image, Object}};
 
 mod othismo;
-mod execution;
 
 #[derive(Parser)]
 struct CliArguments {
