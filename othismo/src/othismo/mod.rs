@@ -1,10 +1,19 @@
+use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
 use std::result;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+use std::sync::{Arc, MutexGuard};
+use std::task::Waker;
+use std::sync::{Mutex, TryLockError};
+use tokio::task::JoinHandle;
 use wasmbin::io::DecodeError;
 use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError, MemoryAccessError, RuntimeError};
 
 pub mod image;
 pub mod namespace;
 pub mod execution;
+pub mod executors;
 
 #[derive(Debug)]
 pub enum OthismoError {
@@ -116,5 +125,56 @@ impl From<bson::ser::Error> for Errors {
 impl From<bson::de::Error> for Errors {
     fn from(value: bson::de::Error) -> Self {
         Errors::BsonDeserialize(value)
+    }
+}
+
+
+pub struct Message {
+    bytes: Vec<u8>,
+}
+
+pub struct Channel<T> {
+    pub tx: UnboundedSender<T>,
+    pub rx: UnboundedReceiver<T>
+}
+
+impl<T> Channel<T> {
+    pub fn new() -> Channel<T> {
+        let (tx, rx) = unbounded_channel();
+
+        Channel { tx, rx }
+    }
+
+    pub fn split(self) -> (UnboundedSender<T>, UnboundedReceiver<T>) {
+        (self.tx, self.rx)
+    }
+}
+
+pub trait ProcessExecutor: Send + 'static {
+    fn start(context: ProcessCtx) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+}
+
+pub struct ProcessCtx {
+    inbox: UnboundedReceiver<Message>,
+    outbox: UnboundedSender<Message>,
+    waker_slot: Arc<Mutex<Option<Waker>>>
+}
+
+pub struct Process {
+    handle: JoinHandle<()>,
+    waker: Option<Waker>,
+    waker_slot: Arc<Mutex<Option<Waker>>>
+}
+
+impl ProcessCtx {
+    pub fn get_waker_slot(&self) -> Arc<Mutex<Option<Waker>>> {
+        self.waker_slot.clone()
+    }
+
+    pub fn fill_waker_slot(&self, waker: Waker) -> () {
+        self.waker_slot
+            .lock()
+            .map(|mut guard| guard.replace(waker))
+            .unwrap();
     }
 }

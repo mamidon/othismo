@@ -2,6 +2,8 @@
 #![allow(unused)]
 
 use clap::{Parser, Subcommand};
+use othismo::executors::EchoExecutor;
+use othismo::namespace::Namespace;
 use crate::othismo::{execution, image::{Image, Object}};
 
 mod othismo;
@@ -85,7 +87,9 @@ fn main() -> othismo::Result<()> {
             Some(SubCommands::SendMessage {
                 instance_name
             }) => {
-                execution::send_message(&mut image, &instance_name)?;
+                let mut namespace = Namespace::new();
+                namespace.create_process::<EchoExecutor>("hello_world");
+                
             },
             Some(SubCommands::NewImage {
                 image_name: _

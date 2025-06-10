@@ -13,3 +13,16 @@ rusqlite = { version = "0.30.0", features = ["bundled"] }
 serde = "1.0.215"
 wasmbin = "0.8.1"
 wasmer = "4.2.5"
+tokio = { version = "1", features = [
+    "rt",               # The runtime
+    "rt-multi-thread",  # Multi-threaded runtime support
+    "macros",          # #[tokio::main] and other macros
+    "sync",            # Synchronization primitives (mutex, rwlock, etc)
+    "time",            # Time utilities and timeouts
+    "io-util",         # IO utilities
+    "net",             # TCP, UDP, and Unix sockets
+    "fs",              # Filesystem operations
+    "signal",          # Unix signal handling
+    "process",         # Process spawning and management
+    "parking_lot",     # Alternative parking_lot based mutex/rwlock implementations
+]}
