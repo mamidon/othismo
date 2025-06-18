@@ -1,8 +1,9 @@
 // super WIP & exploratory.. lots of unused stuff
 #![allow(unused)]
 
+use bson::{doc};
 use clap::{Parser, Subcommand};
-use othismo::executors::EchoExecutor;
+use othismo::executors::{ConsoleExecutor, EchoExecutor};
 use othismo::namespace::Namespace;
 use crate::othismo::{execution, image::{Image, Object}};
 
@@ -47,9 +48,10 @@ enum SubCommands {
     ListObjects {},
 }
 
-fn main() -> othismo::Result<()> {
+#[tokio::main]
+async fn main() -> othismo::Result<()> {
     let command = CliArguments::parse();
-
+    
     if let Some(image_name) = command.image_name {
         let mut image = Image::open(image_name.clone() + ".simg")?;
 
@@ -86,10 +88,12 @@ fn main() -> othismo::Result<()> {
             }
             Some(SubCommands::SendMessage {
                 instance_name
-            }) => {
+            }) => {                
                 let mut namespace = Namespace::new();
-                namespace.create_process::<EchoExecutor>("hello_world");
-                
+                namespace.create_process::<ConsoleExecutor>("/");
+            
+
+                namespace.send_document("/", doc! { "hello": "world" });
             },
             Some(SubCommands::NewImage {
                 image_name: _

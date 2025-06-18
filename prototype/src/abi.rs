@@ -10,8 +10,8 @@ https://github.com/WebAssembly/tool-conventions/blob/main/BasicCABI.md
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "othismo")]
 extern "C" {
-    fn _send_message(bytes: *const u8, length: usize) -> u32;
-    fn _cast_message(bytes: *const u8, length: usize) -> u32;
+    fn _send_message(bytes: *const u8, length: u32) -> u32;
+    fn _cast_message(bytes: *const u8, length: u32) -> u32;
 }
 
 

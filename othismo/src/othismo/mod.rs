@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::result;
+use bson::{de, Document};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
 use std::sync::{Arc, MutexGuard};
 use std::task::Waker;
@@ -133,6 +134,20 @@ pub struct Message {
     bytes: Vec<u8>,
 }
 
+impl Message {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Message { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn to_bson(&self) -> Document {
+        bson::from_slice(&self.bytes).expect("Failed to convert message bytes to BSON")
+    }
+}
+
 pub struct Channel<T> {
     pub tx: UnboundedSender<T>,
     pub rx: UnboundedReceiver<T>
@@ -161,6 +176,7 @@ pub struct ProcessCtx {
 }
 
 pub struct Process {
+    inbox_tx: UnboundedSender<Message>,
     handle: JoinHandle<()>,
     waker: Option<Waker>,
     waker_slot: Arc<Mutex<Option<Waker>>>
@@ -176,5 +192,11 @@ impl ProcessCtx {
             .lock()
             .map(|mut guard| guard.replace(waker))
             .unwrap();
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        println!("Process is DROPPED");
     }
 }

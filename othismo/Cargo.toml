@@ -26,3 +26,4 @@ tokio = { version = "1", features = [
     "process",         # Process spawning and management
     "parking_lot",     # Alternative parking_lot based mutex/rwlock implementations
 ]}
+dashmap = "6.1.0"
