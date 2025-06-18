@@ -22,11 +22,7 @@ use super::{Channel, Message, Process, ProcessCtx, ProcessExecutor};
 impl Process {
     pub fn start<E: ProcessExecutor>(ctx: ProcessCtx, inbox_tx: UnboundedSender<Message>) -> Self {
         let waker_slot = ctx.get_waker_slot();
-        let handle = tokio::spawn(async move {
-            println!("starting process...");
-            E::start(ctx).await;
-            println!("endinmg process...");
-        });
+        let handle = tokio::spawn(E::start(ctx));
         
         Process { inbox_tx, handle, waker: None, waker_slot }
     }
@@ -97,8 +93,9 @@ impl Namespace {
 impl NamespaceRouter {
     async fn message_loop(mut self) -> () {
         loop {
-            println!("Foo");
+            println!("FOo");
             match self.dispatch_rx.recv().await {
+                
                 Some(message) => {
                     let document = message.to_bson();
                     let destination = document.get_document("othismo")
@@ -110,9 +107,9 @@ impl NamespaceRouter {
                         .expect("No top level process exists");
                     
                     if process.handle.is_finished() {
-                        unsafe {
-                            println!("process finished {:?}", process.handle)
-                        }
+                        let (k, v) = self.processes.remove("/").unwrap();
+                        println!("waiting for error...");
+                        v.handle.await.inspect_err(|e| { println!("This killed the process {}", e)});
                     }
 
                     process.inbox_tx.send(message).expect("Failed to send message to process");

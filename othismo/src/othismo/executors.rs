@@ -45,12 +45,6 @@ impl Future for ConsoleExecutor {
     }
 }
 
-impl Drop for ConsoleExecutor {
-    fn drop(&mut self) {
-        println!("ConsoleExecutor DROPPED")
-    }
-}
-
 pub struct EchoExecutor {
     ctx: ProcessCtx
 }

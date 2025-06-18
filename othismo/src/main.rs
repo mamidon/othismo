@@ -1,10 +1,13 @@
 // super WIP & exploratory.. lots of unused stuff
 #![allow(unused)]
 
+use std::time::Duration;
+
 use bson::{doc};
 use clap::{Parser, Subcommand};
 use othismo::executors::{ConsoleExecutor, EchoExecutor};
 use othismo::namespace::Namespace;
+use tokio::time::sleep;
 use crate::othismo::{execution, image::{Image, Object}};
 
 mod othismo;
@@ -91,9 +94,8 @@ async fn main() -> othismo::Result<()> {
             }) => {                
                 let mut namespace = Namespace::new();
                 namespace.create_process::<ConsoleExecutor>("/");
-            
-
                 namespace.send_document("/", doc! { "hello": "world" });
+                sleep(Duration::from_secs(10)).await;
             },
             Some(SubCommands::NewImage {
                 image_name: _

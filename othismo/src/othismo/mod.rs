@@ -194,9 +194,3 @@ impl ProcessCtx {
             .unwrap();
     }
 }
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        println!("Process is DROPPED");
-    }
-}
