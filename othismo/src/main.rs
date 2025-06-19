@@ -91,12 +91,7 @@ async fn main() -> othismo::Result<()> {
                 image.remove_object(&instance_name)?;
             }
             Some(SubCommands::SendMessage { instance_name }) => {
-                let mut namespace = Namespace::new();
-                namespace.create_process::<ConsoleExecutor>("/");
-                namespace.send_document("/", doc! { "hello": "world" });
-                namespace.send_document("/foo", doc! { "test": "zed" });
-
-                sleep(Duration::from_secs(10)).await;
+                let mut namespace: Namespace = image.into();
             }
             Some(SubCommands::NewImage { image_name: _ }) => {
                 eprintln!("Specify the image name _after_ the new-image command");

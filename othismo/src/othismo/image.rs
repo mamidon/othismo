@@ -1,28 +1,29 @@
+use super::OthismoError;
 use crate::othismo::OthismoError::{
     ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree,
 };
 use crate::othismo::{Errors, Result};
 use bson::Document;
-use wasmbin::types::{Limits, MemType};
 use core::panic;
-use std::fmt::format;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use wasmbin::builtins::{Blob, FloatConst, Lazy, UnparsedBytes};
 use wasmbin::indices::{GlobalId, MemId, TypeId};
 use wasmbin::instructions::Instruction;
 use wasmbin::io::Decode;
+use wasmbin::sections::Section::Start;
 use wasmbin::sections::{
-    payload, CustomSection, Data, DataInit, Export, ExportDesc, Global, Import, ImportDesc, Kind, RawCustomSection, Section
+    payload, CustomSection, Data, DataInit, Export, ExportDesc, Global, Import, ImportDesc, Kind,
+    RawCustomSection, Section,
 };
+use wasmbin::types::{Limits, MemType};
 use wasmbin::Module;
 use wasmer::{GlobalType, Store, Type};
-use wasmbin::sections::Section::Start;
-use super::OthismoError;
 
 #[derive(Clone)]
 pub struct InstanceAtRest(wasmbin::Module);
@@ -40,7 +41,7 @@ impl InstanceAtRest {
 
         buffer
     }
-    
+
     pub fn set_exported_global(&mut self, name: &str, value: wasmer::Value) -> Result<()> {
         let global_index = {
             let export = self
@@ -109,7 +110,7 @@ impl InstanceAtRest {
                 *data_count = 0;
             }
         }
-        
+
         if let Some(data_section) = self.0.find_std_section_mut::<payload::Data>() {
             let data_segments = data_section.try_contents_mut()?;
             data_segments.clear();
@@ -124,12 +125,14 @@ impl InstanceAtRest {
                 *data_count += 1;
             }
         }
-        
+
         if let Some(data_section) = self.0.find_std_section_mut::<payload::Data>() {
             let data_segments = data_section.try_contents_mut()?;
             data_segments.push(Data {
-                init: DataInit::Active { offset: vec![Instruction::I32Const(offset)] },
-                blob: bytes.into()
+                init: DataInit::Active {
+                    offset: vec![Instruction::I32Const(offset)],
+                },
+                blob: bytes.into(),
             });
         }
 
@@ -137,10 +140,17 @@ impl InstanceAtRest {
     }
 
     pub fn strip_start_function(&mut self) -> Result<()> {
-        let index_of = self.0.sections.iter().enumerate().find_map(|(index, section)| match section.try_as::<payload::Start>() {
-            Some(_) => Some(index),
-            None => None
-        });
+        let index_of = self
+            .0
+            .sections
+            .iter()
+            .enumerate()
+            .find_map(
+                |(index, section)| match section.try_as::<payload::Start>() {
+                    Some(_) => Some(index),
+                    None => None,
+                },
+            );
 
         if let Some(index) = index_of {
             self.0.sections.remove(index);
@@ -150,7 +160,10 @@ impl InstanceAtRest {
     }
 
     pub fn resize_memory(&mut self, target_bytes: u64) -> Result<()> {
-        let memories = self.0.find_or_insert_std_section(|| payload::Memory::default()).try_contents_mut()?;
+        let memories = self
+            .0
+            .find_or_insert_std_section(|| payload::Memory::default())
+            .try_contents_mut()?;
 
         assert!(memories.len() <= 1);
         for memory in memories {
@@ -198,22 +211,30 @@ impl ModuleAtRest {
         return Ok(limits);
     }
 
-    fn add_memory_segments(module: &mut wasmbin::Module, limits: &Vec<Limits>) -> Result<usize, Errors> {
+    fn add_memory_segments(
+        module: &mut wasmbin::Module,
+        limits: &Vec<Limits>,
+    ) -> Result<usize, Errors> {
         if (limits.len() == 0) {
             return Ok(0);
         }
 
-        let mut memories = module.find_or_insert_std_section(|| payload::Memory::default()).try_contents_mut()?;
+        let mut memories = module
+            .find_or_insert_std_section(|| payload::Memory::default())
+            .try_contents_mut()?;
         for limit in limits {
-            memories.push(MemType { 
-                limits: limit.clone()
+            memories.push(MemType {
+                limits: limit.clone(),
             });
         }
 
         return Ok(limits.len());
     }
 
-    fn add_memory_exports(module: &mut wasmbin::Module, imports_to_replace: usize) -> Result<usize, Errors> {
+    fn add_memory_exports(
+        module: &mut wasmbin::Module,
+        imports_to_replace: usize,
+    ) -> Result<usize, Errors> {
         let memory_count = {
             if let Some(memory_section) = module.find_std_section::<payload::Memory>() {
                 memory_section.contents.try_contents()?.len()
@@ -225,15 +246,20 @@ impl ModuleAtRest {
         let exports = module
             .find_or_insert_std_section(|| payload::Export::default())
             .try_contents_mut()?;
-        let exports_already_existing = exports.iter().map(|e| &e.desc).filter(|e| matches!(e, ExportDesc::Mem(_))).count();
-        
-        assert!(memory_count <= 1, "WASM only supports up to 1 memory, for now");
-        
+        let exports_already_existing = exports
+            .iter()
+            .map(|e| &e.desc)
+            .filter(|e| matches!(e, ExportDesc::Mem(_)))
+            .count();
+
+        assert!(
+            memory_count <= 1,
+            "WASM only supports up to 1 memory, for now"
+        );
+
         if imports_to_replace > 0 || (memory_count - exports_already_existing) > 0 {
             exports.push(Export {
-                desc: ExportDesc::Mem(MemId {
-                    index: 0,
-                }),
+                desc: ExportDesc::Mem(MemId { index: 0 }),
                 name: format!("othismo_memory_{}", 0),
             });
             Ok(1)
@@ -263,25 +289,36 @@ impl ModuleAtRest {
         Ok(())
     }
 
-    fn add_missing_global_exports(
-        module: &mut wasmbin::Module
-    ) -> Result<(), Errors> {
+    fn add_missing_global_exports(module: &mut wasmbin::Module) -> Result<(), Errors> {
         let global_section = module.find_or_insert_std_section(|| payload::Global::default());
-        let existing_global_indices: Vec<u32> = global_section.contents.try_contents()?.iter().enumerate().map(|(index, global)| index as u32).collect();
-        
+        let existing_global_indices: Vec<u32> = global_section
+            .contents
+            .try_contents()?
+            .iter()
+            .enumerate()
+            .map(|(index, global)| index as u32)
+            .collect();
+
         println!("existing global index {:?}", existing_global_indices);
 
         let exports_section = module.find_or_insert_std_section(|| payload::Export::default());
         let mut existing_exports = exports_section.contents.try_contents_mut()?;
 
-        let existing_global_export_indices: Vec<u32> = existing_exports.iter().filter_map(|e| match e.desc {
-            ExportDesc::Global(global_id) => Some(global_id.index),
-            _ => None
-        }).collect();
+        let existing_global_export_indices: Vec<u32> = existing_exports
+            .iter()
+            .filter_map(|e| match e.desc {
+                ExportDesc::Global(global_id) => Some(global_id.index),
+                _ => None,
+            })
+            .collect();
 
-        println!("existing global export index {:?}", existing_global_export_indices);
+        println!(
+            "existing global export index {:?}",
+            existing_global_export_indices
+        );
 
-        let missing: Vec<_> = existing_global_indices.iter()
+        let missing: Vec<_> = existing_global_indices
+            .iter()
             .filter(|&&gi| existing_global_export_indices.iter().find(|&&ei| gi == ei) == None)
             .collect();
         println!("missing global export indices {:?}", missing);
@@ -290,7 +327,9 @@ impl ModuleAtRest {
             let name = format!("othismo_global_{}", missing_global_export_index);
             existing_exports.push(Export {
                 name,
-                desc: wasmbin::sections::ExportDesc::Global(GlobalId { index: *missing_global_export_index })
+                desc: wasmbin::sections::ExportDesc::Global(GlobalId {
+                    index: *missing_global_export_index,
+                }),
             });
         }
 
@@ -309,7 +348,11 @@ impl ModuleAtRest {
             .position(|import| matches!(import.desc, ImportDesc::Global(_)))
         {
             let Import { path, desc } = &imports[index];
-            println!("extracting imported global '{}' at index {}", format!("{}.{}", path.module, path.name), globals.len());
+            println!(
+                "extracting imported global '{}' at index {}",
+                format!("{}.{}", path.module, path.name),
+                globals.len()
+            );
             globals.push(match desc {
                 ImportDesc::Global(ty) => Global {
                     ty: ty.clone(),
@@ -396,7 +439,7 @@ impl Object {
 
     pub fn new_module(bytes: &Vec<u8>) -> Result<Object> {
         let mut module = Module::decode_from(bytes.as_slice())?;
-    
+
         Ok(Object::Module(ModuleAtRest::import(module)?))
     }
 
@@ -472,7 +515,7 @@ impl Image {
 
     pub fn get_object(&self, name: &str) -> Result<Object> {
         self.file.query_row(
-            "select 
+            "select
                 kind, bytes
             from object o
             inner join namespace n on n.object_key = o.object_key
