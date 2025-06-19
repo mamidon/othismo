@@ -1,20 +1,22 @@
+use bson::{de, Document};
 use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::result;
-use bson::{de, Document};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
 use std::sync::{Arc, MutexGuard};
-use std::task::Waker;
 use std::sync::{Mutex, TryLockError};
+use std::task::Waker;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use wasmbin::io::DecodeError;
-use wasmer::{wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError, MemoryAccessError, RuntimeError};
+use wasmer::{
+    wasmparser::BinaryReaderError, CompileError, ExportError, InstantiationError,
+    MemoryAccessError, RuntimeError,
+};
 
+pub mod executors;
 pub mod image;
 pub mod namespace;
-pub mod execution;
-pub mod executors;
 
 #[derive(Debug)]
 pub enum OthismoError {
@@ -22,7 +24,7 @@ pub enum OthismoError {
     ObjectAlreadyExists,
     ObjectDoesNotExist,
     ObjectNotFree,
-    UnsupportedModuleDefinition(String)
+    UnsupportedModuleDefinition(String),
 }
 
 #[derive(Debug)]
@@ -31,20 +33,20 @@ pub enum WasmerError {
     Instantiation(InstantiationError),
     Export(ExportError),
     RuntimeError(RuntimeError),
-    Memory(MemoryAccessError)
+    Memory(MemoryAccessError),
 }
 
 #[derive(Debug)]
 pub enum WasmParserError {
-    BinaryReaderError(BinaryReaderError)
+    BinaryReaderError(BinaryReaderError),
 }
 
 #[derive(Debug)]
 pub enum WasmBinError {
-    DecodeError(DecodeError)
+    DecodeError(DecodeError),
 }
 
-pub type Result<T, E=Errors> = result::Result<T,E>;
+pub type Result<T, E = Errors> = result::Result<T, E>;
 #[derive(Debug)]
 pub enum Errors {
     Othismo(OthismoError),
@@ -54,7 +56,7 @@ pub enum Errors {
     WasmParser(WasmParserError),
     WasmBin(WasmBinError),
     BsonSerialize(bson::ser::Error),
-    BsonDeserialize(bson::de::Error)
+    BsonDeserialize(bson::de::Error),
 }
 
 impl From<rusqlite::Error> for Errors {
@@ -129,7 +131,6 @@ impl From<bson::de::Error> for Errors {
     }
 }
 
-
 pub struct Message {
     bytes: Vec<u8>,
 }
@@ -150,7 +151,7 @@ impl Message {
 
 pub struct Channel<T> {
     pub tx: UnboundedSender<T>,
-    pub rx: UnboundedReceiver<T>
+    pub rx: UnboundedReceiver<T>,
 }
 
 impl<T> Channel<T> {
@@ -166,20 +167,20 @@ impl<T> Channel<T> {
 }
 
 pub trait ProcessExecutor: Send + 'static {
-    fn start(context: ProcessCtx) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    fn start(self, context: ProcessCtx) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
 pub struct ProcessCtx {
     inbox: UnboundedReceiver<Message>,
     outbox: UnboundedSender<Message>,
-    waker_slot: Arc<Mutex<Option<Waker>>>
+    waker_slot: Arc<Mutex<Option<Waker>>>,
 }
 
 pub struct Process {
     inbox_tx: UnboundedSender<Message>,
     handle: JoinHandle<()>,
     waker: Option<Waker>,
-    waker_slot: Arc<Mutex<Option<Waker>>>
+    waker_slot: Arc<Mutex<Option<Waker>>>,
 }
 
 impl ProcessCtx {

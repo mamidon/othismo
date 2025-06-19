@@ -3,10 +3,7 @@
 
 use std::time::Duration;
 
-use crate::othismo::{
-    execution,
-    image::{Image, Object},
-};
+use crate::othismo::image::{Image, Object};
 use bson::doc;
 use clap::{Parser, Subcommand};
 use othismo::executors::{ConsoleExecutor, EchoExecutor};

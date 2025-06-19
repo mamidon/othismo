@@ -22,9 +22,13 @@ use crate::othismo::image::Image;
 use super::{Channel, Message, Process, ProcessCtx, ProcessExecutor};
 
 impl Process {
-    pub fn start<E: ProcessExecutor>(ctx: ProcessCtx, inbox_tx: UnboundedSender<Message>) -> Self {
+    pub fn start<E: ProcessExecutor>(
+        executor: E,
+        ctx: ProcessCtx,
+        inbox_tx: UnboundedSender<Message>,
+    ) -> Self {
         let waker_slot = ctx.get_waker_slot();
-        let handle = tokio::spawn(E::start(ctx));
+        let handle = tokio::spawn(executor.start(ctx));
 
         Process {
             inbox_tx,
@@ -70,7 +74,7 @@ impl Namespace {
         namespace
     }
 
-    pub fn create_process<E: ProcessExecutor>(&mut self, name: &str) -> () {
+    pub fn create_process<E: ProcessExecutor>(&mut self, executor: E, name: &str) -> () {
         let (inbox_tx, mut inbox_rx) = Channel::new().split();
         let outbox_tx = self.dispatch_tx.clone();
 
@@ -84,7 +88,7 @@ impl Namespace {
 
         self.processes.insert(
             name.to_string(),
-            Box::new(Process::start::<E>(ctx, inbox_tx)),
+            Box::new(Process::start(executor, ctx, inbox_tx)),
         );
     }
 
@@ -143,8 +147,7 @@ impl NamespaceRouter {
 impl From<Image> for Namespace {
     fn from(value: Image) -> Self {
         let mut namespace = Namespace::new();
-
-        namespace.create_process::<ConsoleExecutor>("/");
+        namespace.create_process(ConsoleExecutor, "/");
 
         namespace
     }
