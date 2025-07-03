@@ -32,15 +32,13 @@ the host handle that.
 
 This implies the following "syscalls", none of which are blocking:
 
-_send_message(handle_of_source_message, handle_of_sent_message, address_of_bytes, length_of_bytes)
+_send_message(address_of_bytes, length_of_bytes) -> bytes_sent
 Othismo copies the message into it's memory, and creates a Future to process it.
-`handle_of_source_message` indicates what message, if any, this message is a response to.
 
-_allocate_message(message_length)
-Instance allocates a buffer for the message to be copied into.  
-`handle_of_source_message` indicates what message, if any, this message is a response to.
+_allocate_message(message_length) -> address
+Instance allocates a buffer for the message to be received into.
 
-_process_message(handle_of_source_message, handle_of_received_message) -> outcome
+_process_message(address) -> outcome
 Creates an inner Future to process the message.  Executes immediately until the first `_send_message`.
 The return result either indicates that processing is complete, that a response message was generated, or a response is expected at some point later.
 

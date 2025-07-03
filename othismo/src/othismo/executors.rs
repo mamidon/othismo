@@ -181,7 +181,7 @@ impl InstanceTask {
     }
 
     pub fn receive_message(&mut self, message: &[u8]) -> othismo::Result<()> {
-        let allocate_message: TypedFunction<u32, u64> = self
+        let allocate_message: TypedFunction<u32, u32> = self
             .instance
             .exports
             .get_function("allocate_message")?
@@ -193,16 +193,14 @@ impl InstanceTask {
             .get_function("message_received")?
             .typed(&self.store)?;
 
-        let packed_tuple = allocate_message.call(&mut self.store, message.len() as u32)?;
-        let message_handle = (packed_tuple >> 32) as u32;
-        let message_buffer_ptr = (packed_tuple << 32) >> 32;
+        let message_buffer_ptr = allocate_message.call(&mut self.store, message.len() as u32)?;
 
-        println!("handle: {}, ptr: {}", message_handle, message_buffer_ptr);
+        println!("message_buffer_ptr: {}", message_buffer_ptr);
 
         let memory = self.instance.exports.get_memory("memory")?;
         let view = memory.view(&self.store);
 
-        view.write(message_buffer_ptr, message);
+        view.write(message_buffer_ptr as u64, message);
 
         message_received.call(
             &mut self.store,
