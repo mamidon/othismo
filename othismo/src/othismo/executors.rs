@@ -4,7 +4,7 @@ use bson::{doc, to_bson, Document};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{error::TryRecvError, UnboundedSender};
 use wasmer::{
     imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, Store, TypedFunction,
 };
@@ -115,7 +115,7 @@ pub struct InstanceTask {
 }
 pub struct InstanceEnv {
     memory: Option<Memory>,
-    task: Option<InstanceTask>,
+    outbox: UnboundedSender<Message>,
 }
 
 impl ProcessExecutor for InstanceExecutor {
@@ -127,7 +127,7 @@ impl ProcessExecutor for InstanceExecutor {
             &mut store,
             InstanceEnv {
                 memory: None,
-                task: None,
+                outbox: context.outbox.clone(),
             },
         );
 
@@ -184,13 +184,13 @@ impl InstanceTask {
         let allocate_message: TypedFunction<u32, u32> = self
             .instance
             .exports
-            .get_function("allocate_message")?
+            .get_function("_allocate_message")?
             .typed(&self.store)?;
 
-        let message_received: TypedFunction<(u32, u32), ()> = self
+        let message_received: TypedFunction<(u32), ()> = self
             .instance
             .exports
-            .get_function("message_received")?
+            .get_function("_message_received")?
             .typed(&self.store)?;
 
         let message_buffer_ptr = allocate_message.call(&mut self.store, message.len() as u32)?;
@@ -202,11 +202,7 @@ impl InstanceTask {
 
         view.write(message_buffer_ptr as u64, message);
 
-        message_received.call(
-            &mut self.store,
-            message_buffer_ptr as u32,
-            message.len() as u32,
-        )?;
+        message_received.call(&mut self.store, message_buffer_ptr as u32)?;
 
         Ok(())
     }
@@ -248,13 +244,7 @@ mod native_trampolines {
         let mut buffer: Vec<u8> = vec![0; length as usize];
         view.read(head as u64, buffer.as_mut_slice());
 
-        environment
-            .task
-            .as_ref()
-            .unwrap()
-            .ctx
-            .outbox
-            .send(Message::new(buffer));
+        environment.outbox.send(Message::new(buffer)).unwrap();
 
         return 0;
     }
