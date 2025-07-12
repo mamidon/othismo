@@ -159,7 +159,15 @@ impl ProcessExecutor for InstanceExecutor {
             store,
         });
 
+        println!("instance executor running...");
+
         task
+    }
+}
+
+impl From<InstanceAtRest> for InstanceExecutor {
+    fn from(instance_at_rest: InstanceAtRest) -> Self {
+        InstanceExecutor { instance_at_rest }
     }
 }
 
@@ -237,15 +245,15 @@ mod native_trampolines {
     use super::InstanceEnv;
 
     pub fn send_message(mut env: FunctionEnvMut<InstanceEnv>, head: u32, length: u32) -> u32 {
-        println!("native::send_message({}, {})", head, length);
-
         let (environment, mut store) = env.data_and_store_mut();
         let view = environment.memory.as_mut().unwrap().view(&store);
         let mut buffer: Vec<u8> = vec![0; length as usize];
         view.read(head as u64, buffer.as_mut_slice());
-
+        let handle = buffer.as_ptr() as u32;
         environment.outbox.send(Message::new(buffer)).unwrap();
 
-        return 0;
+        println!("native::send_message({}, {}) -> {}", head, length, handle);
+
+        return handle;
     }
 }

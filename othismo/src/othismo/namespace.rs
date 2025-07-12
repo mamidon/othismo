@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -16,7 +17,7 @@ use dashmap::DashMap;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use crate::othismo::executors::ConsoleExecutor;
+use crate::othismo::executors::{ConsoleExecutor, InstanceExecutor};
 use crate::othismo::image::Image;
 
 use super::{Channel, Message, Process, ProcessCtx, ProcessExecutor};
@@ -47,6 +48,8 @@ The Namespace takes care of dispatching messages to the correct recipient.
 pub struct Namespace {
     processes: Arc<DashMap<String, Box<Process>>>,
     dispatch_tx: UnboundedSender<Message>,
+    messages_sent: Arc<AtomicU64>,
+    last_message_sent_at: Arc<AtomicU64>,
 }
 
 struct NamespaceRouter {
@@ -59,14 +62,16 @@ impl Namespace {
         let (tx, rx) = Channel::new().split();
         let processes = Arc::new(DashMap::new());
 
-        let namespace = Namespace {
+        let mut router = NamespaceRouter {
             processes: processes.clone(),
-            dispatch_tx: tx,
+            dispatch_rx: rx,
         };
 
-        let mut router = NamespaceRouter {
-            processes,
-            dispatch_rx: rx,
+        let mut namespace = Namespace {
+            processes: processes,
+            dispatch_tx: tx,
+            messages_sent: Arc::new(AtomicU64::new(0)),
+            last_message_sent_at: Arc::new(AtomicU64::new(0)),
         };
 
         tokio::spawn(router.message_loop());
@@ -85,11 +90,8 @@ impl Namespace {
         };
 
         assert!(!self.processes.contains_key(name));
-
-        self.processes.insert(
-            name.to_string(),
-            Box::new(Process::start(executor, ctx, inbox_tx)),
-        );
+        let process = Box::new(Process::start(executor, ctx, inbox_tx));
+        self.processes.insert(name.to_string(), process);
     }
 
     pub fn send_document(&self, destination: &str, document: Document) {
@@ -99,16 +101,48 @@ impl Namespace {
     }
 
     pub fn send_message(&self, destination: &str, message: Message) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.messages_sent.fetch_add(1, Ordering::SeqCst);
+        self.last_message_sent_at.store(now, Ordering::SeqCst);
+
         self.dispatch_tx.send(message).unwrap()
+    }
+
+    pub async fn wait_for_idleness(&self, duration: Duration) -> () {
+        let idle_timeout = Duration::from_secs(10);
+        let started = SystemTime::now();
+
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let idleness =
+                Duration::from_secs(now - self.last_message_sent_at.load(Ordering::SeqCst));
+
+            if idleness > idle_timeout {
+                return;
+            }
+
+            if started.elapsed().unwrap() > duration {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_secs(2)).await
+        }
     }
 }
 
 impl NamespaceRouter {
     async fn message_loop(mut self) -> () {
         loop {
-            println!("FOo");
+            println!("namespace_router ... loop");
             match self.dispatch_rx.recv().await {
                 Some(message) => {
+                    println!("namespace_router ... message received");
                     let document = message.to_bson();
                     let destination = document
                         .get_document("othismo")
@@ -138,17 +172,34 @@ impl NamespaceRouter {
                         waker.wake_by_ref();
                     }
                 }
-                None => {}
+                None => {
+                    println!("namespace_router ... no message received");
+                }
             }
         }
     }
 }
 
 impl From<Image> for Namespace {
-    fn from(value: Image) -> Self {
+    fn from(image: Image) -> Self {
         let mut namespace = Namespace::new();
+        let names = image.list_objects("").unwrap();
+
         namespace.create_process(ConsoleExecutor, "/");
 
+        for name in image.list_objects("").unwrap() {
+            let object = image.get_object(&name).unwrap();
+
+            match object {
+                super::image::Object::Instance(instance) => {
+                    println!("starting executor for ... {}", &name);
+
+                    let executor: InstanceExecutor = instance.into();
+                    namespace.create_process(executor, &name);
+                }
+                _ => {}
+            }
+        }
         namespace
     }
 }

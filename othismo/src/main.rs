@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use crate::othismo::image::{Image, Object};
+use crate::othismo::Message;
 use bson::doc;
 use clap::{Parser, Subcommand};
 use othismo::executors::{ConsoleExecutor, EchoExecutor};
@@ -89,6 +90,8 @@ async fn main() -> othismo::Result<()> {
             }
             Some(SubCommands::SendMessage { instance_name }) => {
                 let mut namespace: Namespace = image.into();
+                namespace.send_message(&instance_name, Message::new(b"hello".to_vec()));
+                namespace.wait_for_idleness(Duration::from_secs(30)).await;
             }
             Some(SubCommands::NewImage { image_name: _ }) => {
                 eprintln!("Specify the image name _after_ the new-image command");
