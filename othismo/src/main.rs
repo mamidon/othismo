@@ -1,6 +1,7 @@
 // super WIP & exploratory.. lots of unused stuff
 #![allow(unused)]
 
+use bson::bson;
 use std::time::Duration;
 
 use crate::othismo::image::{Image, Object};
@@ -90,7 +91,10 @@ async fn main() -> othismo::Result<()> {
             }
             Some(SubCommands::SendMessage { instance_name }) => {
                 let mut namespace: Namespace = image.into();
-                namespace.send_message(&instance_name, Message::new(b"hello".to_vec()));
+                let document = doc! { "othismo": { "send_to": "foobar" } };
+                let mut bytes: Vec<u8> = Vec::new();
+                document.to_writer(&mut bytes).unwrap();
+                namespace.send_message(&instance_name, Message::new(bytes));
                 namespace.wait_for_idleness(Duration::from_secs(30)).await;
             }
             Some(SubCommands::NewImage { image_name: _ }) => {
