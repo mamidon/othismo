@@ -32,7 +32,7 @@ impl Future for ConsoleTask {
         println!("Polling Console");
         return match this.ctx.inbox.poll_recv(cx) {
             Poll::Ready(Some(message)) => {
-                let document = Document::from_reader(&mut message.bytes.as_slice()).unwrap();
+                let document = Document::from_reader(&mut message.bytes()).unwrap();
                 println!("{}", document);
                 print!("...pending, message");
                 Poll::Pending
@@ -73,7 +73,7 @@ impl Future for EchoTask {
             println!("EchoExecutor polled");
             match this.ctx.inbox.try_recv() {
                 Ok(message) => {
-                    let document = Document::from_reader(&mut message.bytes.as_slice()).unwrap();
+                    let document = Document::from_reader(&mut message.bytes()).unwrap();
                     let othismo = document.get_document("othismo").unwrap();
                     let reply_to = othismo.get_str("reply_to").unwrap();
                     let response_id = othismo.get_i64("request_id").unwrap();
@@ -93,7 +93,7 @@ impl Future for EchoTask {
 
                     response.to_writer(&mut buffer).unwrap();
 
-                    this.ctx.outbox.send(Message { bytes: buffer });
+                    this.ctx.outbox.send(Message::new(buffer));
                 }
                 Err(reason) => match reason {
                     TryRecvError::Empty => return Poll::Pending,
@@ -225,7 +225,7 @@ impl Future for InstanceTask {
         println!("Polling instance");
         match this.ctx.inbox.poll_recv(cx) {
             Poll::Ready(Some(message)) => {
-                this.receive_message(&message.bytes).unwrap();
+                this.receive_message(message.bytes()).unwrap();
                 Poll::Pending
             }
             Poll::Ready(None) => Poll::Ready(()),

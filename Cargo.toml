@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "othismo", 
-    "prototype"
+    "othismo",
+    "prototype",
+    "sdk"
 ]
 resolver = "2"

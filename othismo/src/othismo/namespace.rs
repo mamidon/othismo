@@ -14,13 +14,14 @@ use std::{
 
 use bson::Document;
 use dashmap::DashMap;
+use sdk::Message;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
 use crate::othismo::executors::{ConsoleExecutor, InstanceExecutor};
 use crate::othismo::image::Image;
 
-use super::{Channel, Message, Process, ProcessCtx, ProcessExecutor};
+use super::{Channel, Process, ProcessCtx, ProcessExecutor};
 
 impl Process {
     pub fn start<E: ProcessExecutor>(
@@ -94,13 +95,13 @@ impl Namespace {
         self.processes.insert(name.to_string(), process);
     }
 
-    pub fn send_document(&self, destination: &str, document: Document) {
+    pub fn send_document(&self, document: Document) {
         let mut buffer = Vec::new();
         document.to_writer(&mut buffer);
-        self.send_message(destination, Message::new(buffer));
+        self.send_message(Message::new(buffer));
     }
 
-    pub fn send_message(&self, destination: &str, message: Message) {
+    pub fn send_message(&self, message: Message) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
