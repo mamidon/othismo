@@ -16,3 +16,11 @@
 
  mod abi;
 
+#[cfg(target_arch = "wasm32")]
+getrandom::register_custom_getrandom!(stub_rng);
+
+#[cfg(target_arch = "wasm32")]
+fn stub_rng(_: &mut [u8]) -> Result<(), getrandom::Error> {
+    Err(getrandom::Error::UNSUPPORTED)
+}
+
