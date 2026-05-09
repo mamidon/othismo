@@ -19,7 +19,11 @@ package: build
 dev: package
     # Building dev image 'image'
     ./othismo new-image image
-    ./othismo image import-module ./prototype.wasm 
+    ./othismo image import-module ./prototype.wasm
     ./othismo image instantiate-instance prototype instance
     # test
     ./othismo image list-objects
+
+[working-directory: 'playground']
+hello:
+    ./othismo image send-message /
