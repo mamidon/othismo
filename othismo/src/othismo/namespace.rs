@@ -34,7 +34,6 @@ impl Process {
         Process {
             inbox_tx,
             handle,
-            waker: None,
             waker_slot,
         }
     }
@@ -161,7 +160,8 @@ impl NamespaceRouter {
                         .send(message)
                         .expect("Failed to send message to process");
 
-                    if let Some(waker) = &process.waker {
+                    let waker = process.waker_slot.lock().unwrap().clone();
+                    if let Some(waker) = waker {
                         waker.wake_by_ref();
                     }
                 }

@@ -147,7 +147,6 @@ pub struct ProcessCtx {
 pub struct Process {
     inbox_tx: UnboundedSender<Message>,
     handle: JoinHandle<()>,
-    waker: Option<Waker>,
     waker_slot: Arc<Mutex<Option<Waker>>>,
 }
 
