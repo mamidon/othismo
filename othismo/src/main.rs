@@ -89,7 +89,8 @@ async fn main() -> othismo::Result<()> {
             }
             Some(SubCommands::SendMessage { instance_name }) => {
                 let mut namespace: Namespace = image.into();
-                let message = Message::new().with_othismo(Othismo {
+                let mut message = Message::new();
+                message.with_othismo(Othismo {
                     send_to: instance_name.clone(),
                     reply_to: None,
                     response_id: None,

@@ -12,7 +12,6 @@ use std::{
     },
 };
 
-use bson::Document;
 use dashmap::DashMap;
 use sdk::Message;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -95,12 +94,6 @@ impl Namespace {
         self.processes.insert(name.to_string(), process);
     }
 
-    pub fn send_document(&self, document: Document) {
-        let mut buffer = Vec::new();
-        document.to_writer(&mut buffer);
-        self.send_message(Message::new(buffer));
-    }
-
     pub fn send_message(&self, message: Message) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -144,15 +137,14 @@ impl NamespaceRouter {
             match self.dispatch_rx.recv().await {
                 Some(message) => {
                     println!("namespace_router ... message received");
-                    let document = message.to_bson();
-                    let destination = document
-                        .get_document("othismo")
-                        .and_then(|document| document.get_str("send_to"))
-                        .unwrap_or("unknown");
+                    let destination = message
+                        .othismo()
+                        .map(|o| o.send_to)
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     let process = self
                         .processes
-                        .get(destination)
+                        .get(&destination)
                         .or_else(|| self.processes.get("/"))
                         .expect("No top level process exists");
 

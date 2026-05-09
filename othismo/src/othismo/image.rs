@@ -3,7 +3,6 @@ use crate::othismo::OthismoError::{
     ImageAlreadyExists, ObjectAlreadyExists, ObjectDoesNotExist, ObjectNotFree,
 };
 use crate::othismo::{Errors, Result};
-use bson::Document;
 use core::panic;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

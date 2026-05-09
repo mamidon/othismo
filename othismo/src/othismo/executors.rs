@@ -71,24 +71,16 @@ impl Future for EchoTask {
             println!("EchoExecutor polled");
             match this.ctx.inbox.try_recv() {
                 Ok(message) => {
-                    let othismo = message.select_othismo().unwrap();
+                    let othismo = message.othismo().unwrap();
+                    let mut response = Message::new();
 
                     if let Some(reply_to) = othismo.reply_to {
-                        let response = Message::new();
-
-                        for (k, v) in message.entries().filter(|k| *k != "othismo") {
-                            response.
+                        for (k, v) in message.entries().filter(|(k, b)| *k != "othismo") {
+                            response.insert(k, v);
                         }
                     }
-                    
-
-                    
-
-                    let mut buffer = Vec::new();
-
-                    response.to_writer(&mut buffer).unwrap();
-
-                    this.ctx.outbox.send(Message::new(buffer));
+                
+                    this.ctx.outbox.send(response);
                 }
                 Err(reason) => match reason {
                     TryRecvError::Empty => return Poll::Pending,
@@ -183,7 +175,9 @@ impl InstanceTask {
         return 0;
     }
 
-    pub fn receive_message(&mut self, message: &[u8]) -> othismo::Result<()> {
+    pub fn receive_message(&mut self, message: &Message) -> othismo::Result<()> {
+        let bytes = message.bytes();
+
         let allocate_message: TypedFunction<u32, u32> = self
             .instance
             .exports
@@ -196,14 +190,12 @@ impl InstanceTask {
             .get_function("_message_received")?
             .typed(&self.store)?;
 
-        let message_buffer_ptr = allocate_message.call(&mut self.store, message.len() as u32)?;
-
-        println!("message_buffer_ptr: {}", message_buffer_ptr);
+        let message_buffer_ptr = allocate_message.call(&mut self.store, bytes.len() as u32)?;
 
         let memory = self.instance.exports.get_memory("memory")?;
         let view = memory.view(&self.store);
 
-        view.write(message_buffer_ptr as u64, message);
+        view.write(message_buffer_ptr as u64, &bytes);
 
         message_received.call(&mut self.store, message_buffer_ptr as u32)?;
 
@@ -220,7 +212,7 @@ impl Future for InstanceTask {
         println!("Polling instance");
         match this.ctx.inbox.poll_recv(cx) {
             Poll::Ready(Some(message)) => {
-                this.receive_message(message.bytes()).unwrap();
+                this.receive_message(&message).unwrap();
                 Poll::Pending
             }
             Poll::Ready(None) => Poll::Ready(()),
@@ -245,7 +237,7 @@ mod native_trampolines {
         let mut buffer: Vec<u8> = vec![0; length as usize];
         view.read(head as u64, buffer.as_mut_slice());
         let handle = buffer.as_ptr() as u32;
-        environment.outbox.send(Message::new(buffer)).unwrap();
+        environment.outbox.send(Message::from_bytes(&buffer)).unwrap();
 
         println!("native::send_message({}, {}) -> {}", head, length, handle);
 

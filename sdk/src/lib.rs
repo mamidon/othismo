@@ -35,15 +35,21 @@ impl Message {
         buffer
     }
 
-    pub fn with_othismo(mut self, othismo: Othismo) -> Self {
+    pub fn with_othismo(&mut self, othismo: Othismo) -> &mut Self {
         self.document
             .insert("othismo", bson::to_document(&othismo).unwrap());
 
         self
     }
 
-    pub fn insert<T: Serialize + ?Sized>(mut self, path: &str, item: T) {
-        let mut Some(document) = self.select(path) else { return }
+    pub fn insert<T: Into<Bson>>(&mut self, path: &str, item: T) -> &mut Self {
+        let mut parts: Vec<&str> = path.split(".").collect();
+        let Some(last) = parts.pop() else { return self; };
+        
+        let Some(document) = self.select_mut(parts.join(".").as_str()) else { return self; };
+        document.insert(last, item);
+
+        self
     }
 
     pub fn othismo(&self) -> Option<Othismo> {
@@ -70,6 +76,15 @@ impl Message {
         let mut doc: &Document = &self.document;
         for part in path.split('.') {
             doc = doc.get_document(part).ok()?;
+        }
+
+        Some(doc)
+    }
+
+    fn select_mut(&mut self, path: &str) -> Option<&mut Document> {
+        let mut doc: &mut Document = &mut self.document;
+        for part in path.split('.') {
+            doc = doc.get_document_mut(part).ok()?;
         }
 
         Some(doc)
