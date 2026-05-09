@@ -160,7 +160,9 @@ impl Future for ReceiveResponseTask {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use crate::abi::MailBox;
+    use crate::abi::{
+        MailBox, MessageHandle, _allocate_message, _message_received, _run,
+    };
 
     #[allow(static_mut_refs)] // wasm is single threaded
     pub(crate) fn sent_test_messages() -> &'static mut MailBox {
@@ -175,9 +177,11 @@ mod tests {
         inject_message(message);
         run_until_idle();
 
-        assert!(sent_test_messages().buffers.len() == 2);
-        assert_eq!(sent_test_messages().take(0.into()), Some(b"Hello".into()));
-        assert_eq!(sent_test_messages().take(1.into()), Some(b"Hello".into()));
+        let outbox = sent_test_messages();
+        assert_eq!(outbox.buffers.len(), 2);
+        for sent in outbox.buffers.values() {
+            assert_eq!(sent.as_slice(), b"Hello");
+        }
     }
 
     #[cfg(test)]
@@ -185,7 +189,7 @@ mod tests {
         unsafe {
             let ptr = _allocate_message(message.len() as u32) as *mut u8;
             std::ptr::copy_nonoverlapping(message.as_ptr(), ptr, message.len());
-            _message_received(0);
+            _message_received(ptr as u32);
         };
     }
 
