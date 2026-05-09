@@ -1,9 +1,9 @@
 use crate::othismo;
 use crate::othismo::image::InstanceAtRest;
-use bson::{doc, to_bson, Document};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::Poll;
+use sdk::Othismo;
 use tokio::sync::mpsc::{error::TryRecvError, UnboundedSender};
 use wasmer::{
     imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, Store, TypedFunction,
@@ -32,8 +32,6 @@ impl Future for ConsoleTask {
         println!("Polling Console");
         return match this.ctx.inbox.poll_recv(cx) {
             Poll::Ready(Some(message)) => {
-                let document = Document::from_reader(&mut message.bytes()).unwrap();
-                println!("{}", document);
                 print!("...pending, message");
                 Poll::Pending
             }
@@ -73,21 +71,18 @@ impl Future for EchoTask {
             println!("EchoExecutor polled");
             match this.ctx.inbox.try_recv() {
                 Ok(message) => {
-                    let document = Document::from_reader(&mut message.bytes()).unwrap();
-                    let othismo = document.get_document("othismo").unwrap();
-                    let reply_to = othismo.get_str("reply_to").unwrap();
-                    let response_id = othismo.get_i64("request_id").unwrap();
+                    let othismo = message.select_othismo().unwrap();
 
-                    let mut response = doc! {
-                        "othismo": doc! {
-                            "send_to": reply_to,
-                            "response_id": response_id
+                    if let Some(reply_to) = othismo.reply_to {
+                        let response = Message::new();
+
+                        for (k, v) in message.entries().filter(|k| *k != "othismo") {
+                            response.
                         }
-                    };
-
-                    for (k, v) in document.iter().filter(|(k, v)| *k != "othismo") {
-                        response.insert(k, v);
                     }
+                    
+
+                    
 
                     let mut buffer = Vec::new();
 

@@ -1,4 +1,3 @@
-use bson::{de, Document};
 use sdk::Message;
 use std::cell::RefCell;
 use std::future::Future;
@@ -56,8 +55,6 @@ pub enum Errors {
     Wasmer(WasmerError),
     WasmParser(WasmParserError),
     WasmBin(WasmBinError),
-    BsonSerialize(bson::ser::Error),
-    BsonDeserialize(bson::de::Error),
 }
 
 impl From<rusqlite::Error> for Errors {
@@ -117,18 +114,6 @@ impl From<BinaryReaderError> for Errors {
 impl From<DecodeError> for Errors {
     fn from(value: DecodeError) -> Self {
         Errors::WasmBin(WasmBinError::DecodeError(value))
-    }
-}
-
-impl From<bson::ser::Error> for Errors {
-    fn from(value: bson::ser::Error) -> Self {
-        Errors::BsonSerialize(value)
-    }
-}
-
-impl From<bson::de::Error> for Errors {
-    fn from(value: bson::de::Error) -> Self {
-        Errors::BsonDeserialize(value)
     }
 }
 

@@ -4,10 +4,10 @@
 use std::time::Duration;
 
 use crate::othismo::image::{Image, Object};
-use bson::doc;
 use clap::{Parser, Subcommand};
 use othismo::executors::{ConsoleExecutor, EchoExecutor};
 use othismo::namespace::Namespace;
+use sdk::{Message, Othismo};
 use tokio::time::sleep;
 
 mod othismo;
@@ -89,8 +89,12 @@ async fn main() -> othismo::Result<()> {
             }
             Some(SubCommands::SendMessage { instance_name }) => {
                 let mut namespace: Namespace = image.into();
-                let document = doc! { "othismo": { "send_to": instance_name.clone() } };
-                namespace.send_document(document);
+                let message = Message::new().with_othismo(Othismo {
+                    send_to: instance_name.clone(),
+                    reply_to: None,
+                    response_id: None,
+                });
+                namespace.send_message(message);
                 namespace.wait_for_idleness(Duration::from_secs(30)).await;
             }
             Some(SubCommands::NewImage { image_name: _ }) => {
