@@ -1,3 +1,10 @@
+> Status check (2026-05-09): the checkbox states below still match the code.
+> Persistence machinery for modules and instances (memory + globals) is in
+> `othismo/src/othismo/image.rs`. The "messaging interface" is implemented to
+> the extent of `_send_message` + `_allocate_message` + `_message_received`
+> and a BSON envelope with `othismo.{send_to, reply_to, response_id}` —
+> see `web_server.md` for the per-syscall / per-message status notes.
+
 Table Stakes
 - [x] Persistent images, by way of sqlite files
 - [x] Importing modules
@@ -25,7 +32,9 @@ Table Stakes
     - [ ] Make use of foo.bar notation to craft nested messages via CLI
     - [ ] Make use of templates to allow easy for crafting deeply nested messages via CLI
     - [ ] Allow for templates to be found in local file system, or in the namespace of the image at hand
+    - Note: today `send-message <instance>` only sends an empty BSON document with the `othismo.send_to` envelope set; no payload is configurable from CLI.
 - [ ] Provide ‘native’ modules from Othismo, not .wasm files from filesystem
+    - Note: `native_modules/mod.rs` only declares a single empty trait today; `ConsoleExecutor` and `EchoExecutor` exist in `executors.rs` but aren't wired to namespace-addressable modules.
     - [ ] `othismo.console` module, which echoes messages to console
     - [ ] `othismo.namespace` module, For enumerating the namespace.  Also support delegating parts of the namespace to some instance.
     - [ ] `othismo.http` module, simple HTTP pass thru

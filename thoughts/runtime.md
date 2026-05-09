@@ -1,3 +1,14 @@
+> **Implementation status (2026-05-09):** the architecture sketched below largely
+> landed in code. Host runs on a multi-threaded tokio runtime (`othismo/src/othismo/namespace.rs`);
+> each instance is a tokio task driving a wasmer `Instance`
+> (`othismo/src/othismo/executors.rs`). A `NamespaceRouter` owns the dispatch
+> mpsc channel and routes messages to per-process inboxes. Inside the guest,
+> the prototype SDK uses a single-threaded `async_executor::StaticLocalExecutor`
+> (`prototype/src/tasks.rs`). The host does *not* call `_run` — instead it
+> calls `_message_received` synchronously per message, and the guest spawns a
+> task per message on its own executor. The exact syscall names below differ
+> from what shipped — see the inline notes.
+
 So far, I've been building Othismo & instances as a single threaded system.
 But that's just not going to work once we consider the likelyhood that messages & responses will be
 both re-entrant to the source instance and inter-leaved with other communications.
@@ -32,15 +43,20 @@ the host handle that.
 
 This implies the following "syscalls", none of which are blocking:
 
-_send_message(address_of_bytes, length_of_bytes) -> bytes_sent
-Othismo copies the message into it's memory, and creates a Future to process it.
+_send_message(address_of_bytes, length_of_bytes) -> handle
+Othismo copies the message out of guest memory and forwards it to the NamespaceRouter via the outbox channel.
+(Implemented in `executors.rs` — `native_trampolines::send_message`. The handle is currently the buffer
+pointer cast to u32; correlation IDs for response routing aren't wired up yet.)
 
 _allocate_message(message_length) -> address
-Instance allocates a buffer for the message to be received into.
+Guest export. Host calls it to reserve a buffer in the guest's linear memory, then writes the
+message bytes there. (Implemented as a `_allocate_message` *export* in `prototype/src/abi.rs`,
+called from `InstanceTask::receive_message` on the host.)
 
-_process_message(address) -> outcome
-Creates an inner Future to process the message.  Executes immediately until the first `_send_message`.
-The return result either indicates that processing is complete, that a response message was generated, or a response is expected at some point later.
+_message_received(handle) -> ()
+Guest export. Host calls it after `_allocate_message` + memory write to tell the guest a message
+is in its inbox; the guest's executor spawns a task to process it. (This took the place of
+the `_process_message` name used earlier in this sketch.)
 
 Supposing we had an Othismo environment with instance Router and instance Echo which receives a
 web request.  Router forwards that request to Echo, which simply echos it back.
@@ -51,13 +67,18 @@ External Caller    Othismo            Router             Echo
 |                |                 |                 |
 |---M1---------> |                 |                 |  Web request (M1)
 |                |---M1--------->  |                 |  Othismo forwards M1 to Router
-|                                  | _process_message(M0, M1)          |  Router processes M1
-|                | _allocate_message(len)            |  Router allocates buffer for M2
-|                | _send_message(M1, M2, ...)        |  Router sends M2 to Echo
-|                |                 |----M2------->   |  Othismo delivers M2 to Echo
-|                |                                   | _process_message(M1, M2)       Echo processes M2
-|                |                 | _allocate_message(len)         Echo allocates buffer for M3
-|                |                 | _send_message(M2, M3, ...)     Echo sends response M3
+|                |  _allocate_message(len)            |  Host reserves buffer in Router
+|                |  _message_received(M1_handle)      |  Router processes M1
+|                | <-_send_message(M2_bytes, len)     |  Router sends M2 to Othismo outbox
+|                |                 |----M2------->   |  NamespaceRouter delivers M2 to Echo
+|                |                 | _allocate_message(len)         Host reserves buffer in Echo
+|                |                 | _message_received(M2_handle)   Echo processes M2
+|                |                 | <-_send_message(M3_bytes, len) Echo sends response M3
 |                |<----M3--------|                 |  Othismo receives M3
 |<---M3---------|                 |                 |  Othismo sends M3 to External Caller
 |                |                 |                 |
+
+Note: the design above assumes responses can be correlated back to the request that triggered
+them. The current implementation has a `response_id` field on the `othismo` envelope
+(`sdk/src/lib.rs`) but does not yet populate or route on it — outgoing messages from a guest
+are sent fire-and-forget through the router based on `othismo.send_to`.

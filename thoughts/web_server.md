@@ -1,5 +1,21 @@
 # Messaging Interface & PIDs
 
+> **Implementation status (2026-05-09).** This document is mostly a forward-looking
+> design. Roughly:
+>
+> - **Implemented:** BSON message envelope with optional `othismo.{send_to, reply_to, response_id}`
+>   header (`sdk/src/lib.rs`); routing by `send_to` through `NamespaceRouter`
+>   (`othismo/src/othismo/namespace.rs`); `_send_message` host syscall;
+>   `_allocate_message` and `_message_received` guest exports; CLI commands for
+>   `new-image`, `import-module`, `remove-module`, `instantiate-instance`,
+>   `delete-instance`, `send-message` (empty payload only), `list-objects`.
+> - **Not implemented:** `_cast_message`, `_othismo_start`; any built-in
+>   `othismo.namespace.*` / `othismo.http.*` / `othismo.error` message types;
+>   native modules (`othismo.console`, `othismo.namespace`, `othismo.http`,
+>   `othismo.blobs` — only a stub trait in `native_modules/mod.rs`); symlinks,
+>   mounts; CLI message-content / templating; `reply_to` / `response_id`
+>   correlation through the router. Inline `[STATUS]` tags below mark each item.
+
 When configuring an image; we’re importing modules & instantiating instances.  Somehow we have to wire up these
 Instances such that they can actually interact.
 
@@ -24,37 +40,61 @@ Instead of having multiple parameters, we encode everything inside the message v
 
 ## Syscalls
 
-### _allocate_message(handle: u32, message_length: u32, request_handle: u32) -> *const u8
-Find and possibly allocate a buffer to receive a message with the specified handle.
-The host must call this for every message it wishes to place in the inbox.
+The boundary ended up split between **host imports** (functions Othismo provides
+to the guest under the `othismo` module) and **guest exports** (functions the
+host calls on the instance).
 
-The request handle is optional, specify 0 if not relevant.
-The host MUST place a message in the provided buffer; the guest will assume it's
-available for processing during the next call to _run
+### _send_message(bytes: *mut u8, length: u32) -> u32  *[host import — IMPLEMENTED]*
+Guest tells the host a message has been placed in the guest's memory at the
+given pointer/length. The host copies the bytes out and forwards the message
+to the `NamespaceRouter` outbox. Returns a handle (currently the buffer pointer
+cast to `u32`). The original design said responses would arrive with this handle
+in their `request_handle`; correlation isn't wired up yet.
+Implementation: `othismo/src/othismo/executors.rs` — `native_trampolines::send_message`.
 
-### _run() -> ()
-Processes all messages received since the last call to _run.  Yields control when all tasks 
-are blocked awaiting I/O.
+### _allocate_message(message_length: u32) -> *const u8  *[guest export — IMPLEMENTED]*
+**This is a guest export, not a host syscall.** The host calls it to ask the
+guest for a buffer in linear memory of the requested size; the host then writes
+the message bytes into that buffer and follows with `_message_received`. The
+earlier design had a richer signature `(handle, length, request_handle)` —
+that was simplified down: the buffer pointer itself is the handle.
+Implementation: `prototype/src/abi.rs` (guest), `executors.rs::receive_message` (host caller).
 
-When this function returns, the host should not call this again until at least one message
-has been sent to the guest.
+### _message_received(message_handle: u32) -> ()  *[guest export — IMPLEMENTED]*
+Guest export the host calls after writing into the buffer returned by
+`_allocate_message`. The guest takes the buffer out of its inbox and spawns a
+task on its internal executor to process it. (This replaces the
+`_process_message` name used in the older `runtime.md` sketch.)
+Implementation: `prototype/src/abi.rs`.
 
-### _send_message(bytes: *mut u8, length: u32) -> u32
-Tells the host a message has been place in the inbox with a particular length at a particular location.
-The return valie is that message's handle.  Any responses received will have their own handle, 
-but will also specify this message's handle as the request_handle.
+### _run() -> ()  *[NOT a host call — guest-internal]*
+The original design had this as a host-driven message pump. In practice the
+host doesn't call it; messages are processed synchronously inside
+`_message_received`, and `_run` only exists in the guest as a helper that
+calls `executor().try_tick()` until idle. Used by the prototype's tests and
+not by the host.
+Implementation: `prototype/src/abi.rs`.
 
-### _cast_message(bytes: *const u8, length: u32) -> u32
-Has the same semantics as _send_message; except the runtime will not return any responses.
+### _cast_message(bytes: *const u8, length: u32) -> u32  *[NOT IMPLEMENTED]*
+Designed as a fire-and-forget variant of `_send_message`. Not implemented; in
+the meantime, all `_send_message` calls are effectively fire-and-forget because
+response routing isn't wired up.
 
-### _othismo_start() -> ()
-Invoked once at initialization of the instance.
+### _othismo_start() -> ()  *[NOT IMPLEMENTED]*
+Init hook for instances. Not implemented; instances are loaded from the image
+and start consuming messages immediately when the namespace boots.
 
 ## Othismo built in messages for HTTP
 
-### othismo
+> Status note: only the `othismo` envelope (`send_to`, `reply_to`, `response_id`)
+> is implemented in `sdk/src/lib.rs`, and only `send_to` actually drives routing
+> in `NamespaceRouter`. Everything below is design-only unless tagged otherwise.
+
+### othismo  *[PARTIALLY IMPLEMENTED]*
 This message is included alongside other messages for specific routing.
 
+Currently `send_to` is honored by the router; `reply_to` and `response_id` are
+defined on the struct but not yet used during dispatch.
 
 ```
 {
@@ -68,7 +108,7 @@ This message is included alongside other messages for specific routing.
 }
 ```
 
-### othismo.namespace.instantiate
+### othismo.namespace.instantiate  *[NOT IMPLEMENTED — CLI only via `instantiate-instance`]*
 Instantiates a new instance from a module in the image.
 
 ```
@@ -80,10 +120,13 @@ Instantiates a new instance from a module in the image.
 }
 ```
 
-### othismo.namespace.import
+### othismo.namespace.import  *[CLI only — IMPLEMENTED via `import-module`; no message form]*
 Only available via the CLI.  Imports a webassembly module into the namespace.
 By default, ./foo/fizzbuzz.wasm is imported to /othismo/modules/foo/fizzbuzz.
 Providing `name` changes this destination.
+
+(Current CLI: `othismo <image> import-module <path>` — derives the namespace
+name from the file stem; no `name` override yet, no `/othismo/modules/` prefix.)
 
 ```
 {
@@ -94,9 +137,11 @@ Providing `name` changes this destination.
 }
 ```
 
-### othismo.namespace.list
+### othismo.namespace.list  *[NOT IMPLEMENTED — CLI only via `list-objects`]*
 Lists out all items in the namespace.  If `prefix` is provided,
 the output is filtered by that prefix.
+
+(Current CLI `list-objects` lists all objects with no prefix filter.)
 
 ```
 {
@@ -115,7 +160,7 @@ The response is:
 }
 ```
 
-### othismo.namespace.make_path
+### othismo.namespace.make_path  *[NOT IMPLEMENTED]*
 Create directories required for a path.
 Directory names cannot conflict with existing objects.
 ```
@@ -126,13 +171,13 @@ Directory names cannot conflict with existing objects.
 }
 ```
 
-### othismo.namespace.sym_link
+### othismo.namespace.sym_link  *[NOT IMPLEMENTED]*
 TODO -- redirects all messages at a particular path to another path
-### othismo.namespace.mount
+### othismo.namespace.mount  *[NOT IMPLEMENTED]*
 TODO -- redirects all namespace operations at or below /some/path to a particular instance
 TODO -- how are mount & sym links different.. are they?
 
-### othismo.http.request
+### othismo.http.request  *[NOT IMPLEMENTED]*
 Represents a received HTTP request.
 ```
 {
@@ -152,7 +197,7 @@ Represents a received HTTP request.
 ```
 
 
-### othismo.http.request.response
+### othismo.http.request.response  *[NOT IMPLEMENTED]*
 Represents a response to a previous HTTP request.
 
 ```
@@ -167,7 +212,7 @@ Represents a response to a previous HTTP request.
 }
 ```
 
-### othismo.error
+### othismo.error  *[NOT IMPLEMENTED]*
 Anything can respond with an error
 ```
 {
@@ -180,6 +225,16 @@ Anything can respond with an error
 
 
 ## Configuring the server, with files
+
+> **Aspirational.** None of this works end-to-end yet. Specifically: native
+> modules (`othismo.http`, `othismo.blobs`) don't exist beyond a stub trait;
+> `import-module` only loads `.wasm` files from the filesystem; `send-message`
+> currently sends an empty BSON document and accepts no payload args; `mount`
+> and `sym-link` are not CLI commands.
+>
+> Working CLI today: `new-image`, `import-module <wasm-path>`, `remove-module`,
+> `instantiate-instance <module> <name>`, `delete-instance`,
+> `send-message <name>` (empty payload), `list-objects`.
 
 ```
 othismo new-image image
