@@ -120,6 +120,7 @@ impl MailBox {
         (handle, ptr)
     }
 
+    #[allow(dead_code)]
     pub fn as_slice(&self, handle: MessageHandle) -> Option<&[u8]> {
         self.buffers.get(&handle).map(|v| v.as_slice())
     }
@@ -139,6 +140,7 @@ impl Default for MailBox {
 
 struct ReceiveResponseTask {
     request: MessageHandle,
+    #[allow(dead_code)]
     response: Option<MessageHandle>,
 }
 
@@ -160,6 +162,7 @@ impl Future for ReceiveResponseTask {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    #[allow(unused_imports)]
     use crate::abi::{
         MailBox, MessageHandle, _allocate_message, _message_received, _run,
     };
@@ -194,6 +197,7 @@ mod tests {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     fn inject_response(message: &[u8], request: MessageHandle) {
         unsafe {
             let ptr = _allocate_message(message.len() as u32) as *mut u8;
