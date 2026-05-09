@@ -32,7 +32,7 @@ impl Future for ConsoleTask {
         println!("Polling Console");
         return match this.ctx.inbox.poll_recv(cx) {
             Poll::Ready(Some(message)) => {
-                print!("...pending, message");
+                println!("...pending, message: {}", message);
                 Poll::Pending
             }
             Poll::Ready(None) => {
@@ -176,6 +176,8 @@ impl InstanceTask {
     }
 
     pub fn receive_message(&mut self, message: &Message) -> othismo::Result<()> {
+        println!("received: {}", message);
+
         let bytes = message.bytes();
 
         let allocate_message: TypedFunction<u32, u32> = self

@@ -1,9 +1,16 @@
 use bson::{Bson, Document};
 use bson::document::Keys;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::fmt;
 
 pub struct Message {
     document: Document,
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.document, f)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
