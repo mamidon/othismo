@@ -16,6 +16,7 @@ them so there's one place to look.
 | [Pipeline operator](#pipeline-operator) | §2 | §2 | nothing; waits on §11 |
 | [String interpolation](#string-interpolation) | §1 | §1 | nothing; wants §11 |
 | [Multi-line indentation stripping](#multi-line-indentation-stripping) | §1 | §1 | nothing |
+| [Labelled break and continue](#labelled-break-and-continue) | §4 | §4 | nothing |
 
 ---
 
@@ -90,6 +91,20 @@ obligation during design, changing the rule later is allowed — but it *is* a c
 meaning for existing strings, which is the one reason to prefer getting it right over
 getting it early.
 
+## Labelled break and continue
+
+**Deferred 2026-08-02.** Raised in §4.
+
+`break` and `continue` currently apply to the innermost loop only. Escaping a nested loop
+therefore needs a flag variable or extraction into a function that returns early — the
+former is the classic bug source, the latter is usually the better design anyway.
+
+Deferred rather than declined because labels are cheap and additive, and because the
+"extract a function" answer stops being free once closures capture (§5). What's missing is
+a spelling: §1 admits no sigils in identifiers, so Rust's `'outer` is unavailable and a
+label form (`outer: while …`) would need to not collide with map literals (§1) or with
+whatever §7 does with `:` in patterns.
+
 ---
 
 ## Open questions still owned by their sections
@@ -105,7 +120,6 @@ designed. Listed here only so there's a single place to look.
 | Whether instance references compare by identity (provisional) | §2 | §7, §11 |
 | Whether a trap is recoverable | §2 | §9, §15 |
 | Whether `obj.method` without parens is a bound value | §2 | §11 |
-| How far constness propagates through immutable bindings | §1 | §10 |
 | Whether inference needs expression-level type ascription | §2 | §10 |
 | Whether sorting APIs justify a three-way comparison | §2 | §6 |
 | Whether a `mut` alias can mutate what a non-`mut` binding observes | §3 | §6 |

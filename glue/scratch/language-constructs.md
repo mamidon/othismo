@@ -29,7 +29,7 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 | 1 | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
 | 2 | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ |
 | 3 | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | ◑ | ◑ |
-| 4 | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | — | — |
+| 4 | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | ◑ | ◑ |
 | 5 | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | — | — |
 | 6 | [Data and types](constructs/06-data-and-types.md) | Primitives, aggregates, memory, representation | — | — |
 | 7 | [Unions and pattern matching](constructs/07-unions-and-pattern-matching.md) | Sum types, patterns, exhaustiveness | — | — |
