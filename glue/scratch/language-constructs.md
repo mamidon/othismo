@@ -26,7 +26,7 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 
 | § | Section | Covers | Syntax | Semantics |
 | --- | --- | --- | --- | --- |
-| 1 | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | — | — |
+| 1 | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
 | 2 | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | — | — |
 | 3 | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | — | — |
 | 4 | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | — | — |
