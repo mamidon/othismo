@@ -108,3 +108,7 @@ designed. Listed here only so there's a single place to look.
 | How far constness propagates through immutable bindings | §1 | §10 |
 | Whether inference needs expression-level type ascription | §2 | §10 |
 | Whether sorting APIs justify a three-way comparison | §2 | §6 |
+| Whether a `mut` alias can mutate what a non-`mut` binding observes | §3 | §6 |
+| Where `mut` attaches in a destructuring pattern | §3 | §7 |
+| Whether a construct needs *required* compile-time evaluation (`const`) | §3 | §6 |
+| How top-level declarations can be mutually recursive while statements run in order | §3 | §12, §13 |

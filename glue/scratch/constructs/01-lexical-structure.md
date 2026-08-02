@@ -78,7 +78,7 @@ DIGIT → "0" … "9"
   Glue doesn't need yet (goal §3: no stability obligations) and cost parser complexity
   against goal §2.2.
 - Provisional reserved set, to be settled section by section as each is designed:
-  `let var fn return if else while for in break continue match import export true false`
+  `let mut fn return if else while for in break continue match import export true false`
 
 ### Comments
 
@@ -163,8 +163,8 @@ positional. The resolution:
 - **Everywhere else**, one expression of lookahead decides:
   - `{}` is the empty map. An empty block would yield unit and is pointless as an
     expression, so the map wins.
-  - `{` followed by a statement keyword (`let`, `var`, `if`, `while`, `for`, `return`, …)
-    is a block.
+  - `{` followed by a statement keyword (`let`, `if`, `while`, `for`, `return`, …) is a
+    block.
   - Otherwise, parse one expression and peek: `:` means map, `;` or `}` means block.
 
 No backtracking is required — the expression parsed during lookahead is reused either
@@ -219,14 +219,23 @@ pinned.
 Unary `-` is therefore an ordinary operation on constants rather than a special case in
 the lexer, and `-1` needs no rule of its own.
 
-**Immutable bindings stay unpinned.** A `let` whose initializer is a constant expression
-remains an unpinned constant, so `let n = 3; n - 5` is `-2`, not an underflow. A `var`
-pins immediately at its initializer, because its value can change at runtime and a type
-must exist to hold it. *This is the one part of the rule I inferred rather than took from
-you* — it follows from treating a `let` as a name for a constant, and it's what keeps the
-`§2.1` one-liner case honest, but it is also the part with a conformance cost: the
-interpreter and the compiler must agree on exactly how far constness propagates, across
-REPL lines included.
+**Never-assigned bindings stay unpinned.** A binding remains an unpinned constant when
+both of these hold, and pins at its declaration otherwise:
+
+1. its initializer is a constant expression, and
+2. it is never the target of an assignment anywhere in its scope.
+
+So `let n = 3; n - 5` is `-2`, not an underflow — while `let n = 3; n = read(); n - 5`
+pins `n` at `u64` and underflows. Both conditions are syntactic, which matters: goal §2.2
+requires the interpreter and the compiler to agree on exactly how far constness
+propagates, and a rule needing type inference or dataflow to answer is a rule the two
+back ends will eventually disagree about. Scanning a scope for assignments to a name is
+not.
+
+Every binding is rebindable (§3), so the keyword cannot carry this the way `let`-versus-
+`var` would in another language — condition 2 does the work instead. Across REPL lines,
+a scope is the session, so restating `n` later pins it retroactively for subsequent lines
+only; each line is compiled against the bindings that existed when it was entered.
 
 **No implicit conversion between pinned types.** `u64 + s64` is a type error; so is
 `u32 + u64`. Conversions are explicit, and §2 owns their spelling. This is the decision
