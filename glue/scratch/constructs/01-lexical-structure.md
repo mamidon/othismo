@@ -113,8 +113,9 @@ SUFFIX  → "u8" | "u16" | "u32" | "u64"
 ```
 
 - **A `.` is what makes it a float.** `1` is an integer literal, `1.0` is a float literal.
-- A **trailing** `.` is not part of a literal: `1.` is not a float. This is what keeps
-  `1..2` (range, §2) and `1.method()` unambiguous with no lookahead.
+- A **trailing** `.` is not part of a literal: `1.` is not a float. This keeps
+  `1.method()` unambiguous with no lookahead, and keeps `..` available as an operator for
+  whatever §2 eventually decides about ranges.
 - A **leading** `.` is: `.5` is a valid float literal, equivalent to `0.5`. It needs one
   token of left context to lex — see *Lexing and left context* below — and it forecloses
   numeric field access (`pair.0`) unless that rule is applied. §6 inherits that
@@ -137,9 +138,9 @@ r"…"       raw string; no escapes
 - Escapes: `\n` `\r` `\t` `\0` `\\` `\"` `\'` `\u{1F600}`.
 - A `"""` string's content is taken literally, including every leading space on every
   line. No indentation is stripped.
-- **Deferred, not decided:** string interpolation, and whether `"""` should strip
-  indentation to match its closing delimiter. Both are additive — nothing in the lexer
-  above forecloses either — and both are worth designing properly rather than in passing.
+- **Deferred:** string interpolation, and whether `"""` strips indentation to match its
+  closing delimiter. Both are additive; nothing above forecloses either. See
+  [Deferred decisions](deferred.md).
 
 ### Collection literals
 
@@ -150,25 +151,28 @@ r"…"       raw string; no escapes
 { "k": v, "j": w }  map
 ```
 
-Maps use the conventional `{key: value}`, which collides with blocks (§3). The collision
-is resolved positionally:
+Maps use the conventional `{key: value}`, which collides with blocks (§3) — and §2's
+decision that **blocks are expressions** makes that collision real rather than merely
+positional. The resolution:
 
-- In **expression** position, `{` starts a map literal. `{}` there is an empty map.
-- At the **start of a statement**, `{` starts a block. A map-literal expression statement
-  must be parenthesized — `({"a": 1});` — which is a thing nobody writes on purpose.
-- In the **header** of `if` / `while` / `for`, between the keyword and the body, a bare
-  `{` is the body. A map literal there must be parenthesized. This is Go's rule for
-  composite literals in control-flow headers, and it's the one users actually trip over.
+- At the **start of a statement**, `{` is a block. A map-literal expression statement must
+  be parenthesized — `({"a": 1});` — which nobody writes on purpose.
+- In the **header** of `if` / `while` / `for`, a bare `{` is the body; a map literal there
+  must be parenthesized. Go's rule for composite literals in control-flow headers, and the
+  one users actually trip over.
+- **Everywhere else**, one expression of lookahead decides:
+  - `{}` is the empty map. An empty block would yield unit and is pointless as an
+    expression, so the map wins.
+  - `{` followed by a statement keyword (`let`, `var`, `if`, `while`, `for`, `return`, …)
+    is a block.
+  - Otherwise, parse one expression and peek: `:` means map, `;` or `}` means block.
 
-Trailing commas are permitted. No set literal yet — sets wait for §6 to decide whether
-they're a distinct type, and `{1, 2}` is available for them if so.
+No backtracking is required — the expression parsed during lookahead is reused either
+way. The cost is paid in diagnostics: a typo'd map reports whatever the block parser
+expected, which is worse than a dedicated message.
 
-**Open — the thing that would make this hurt.** If §2 adopts block expressions (a block
-whose value is its last expression), then `{` in expression position is ambiguous between
-a block and a map, and the positional rule above no longer settles it. The fix is bounded
-lookahead — `{` followed by `}`, or by an expression then `:`, is a map; otherwise a
-block — which is implementable but is the second rule users trip over. §2 should decide
-block expressions knowing it inherits this.
+Trailing commas are permitted. No set literal yet — sets wait for §6, and `{1, 2}` stays
+available for them, extending the rule above by one case (`,` means set).
 
 ### Boolean and absence
 
@@ -242,10 +246,10 @@ unambiguously against `i32` meaning "32 bits, sign unspecified" in the wasm spec
 for runtime values: `items.len() - 1` on an empty collection is still an underflow,
 because `len()` is not a constant. Trapping makes that loud instead of silent, which is
 the right trade, but the idiom still has to be exclusive ranges (`0..len`) and checked or
-saturating operations rather than `len - 1`. **Open for §2:** what integer type the
-standard library's lengths and indices return. If it isn't the same as the default, every
-array boundary reintroduces mixed-sign arithmetic — the friction Swift's API guidelines
-warn about.
+saturating operations rather than `len - 1`. **Open for §6**, where collections are
+designed: what integer type lengths and indices return. If it isn't `u64`, every array
+boundary reintroduces mixed-sign arithmetic — the friction Swift's API guidelines warn
+about — and §2 forbids the implicit conversion that would paper over it.
 
 **Constant division follows the operand kind.** Two integer constants divide as integers:
 `7 / 2` is `3`. Unbounded precision makes an exact rational representable, and it is

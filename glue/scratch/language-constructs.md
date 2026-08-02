@@ -27,7 +27,7 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 | § | Section | Covers | Syntax | Semantics |
 | --- | --- | --- | --- | --- |
 | 1 | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
-| 2 | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | — | — |
+| 2 | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ |
 | 3 | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | — | — |
 | 4 | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | — | — |
 | 5 | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | — | — |
@@ -42,6 +42,12 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 | 14 | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | — | — |
 | 15 | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | — | — |
 | 16 | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | — | — |
+
+Alongside the numbered sections, [**Deferred decisions**](constructs/deferred.md) is a
+companion register of things consciously postponed — what was deferred, why, and what it
+blocks. Sections link to it rather than carrying the argument themselves. It also indexes
+the **Open** questions that remain owned by their own sections, so there's one place to
+look for everything unresolved.
 
 §15 is expected to stay empty under *Syntax* by construction — if something lands there,
 it probably belongs in another section. §16 is a constraint set rather than a feature
