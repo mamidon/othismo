@@ -27,3 +27,20 @@ dev: package
 [working-directory: 'playground']
 hello:
     ./othismo image send-message /
+
+
+# --- glue ---
+
+# Build the glue language server
+lsp:
+    cargo build --package lsp
+
+# Build the VS Code extension (run once after checkout, then on TS changes)
+[working-directory: 'glue/vscode']
+extension:
+    npm install
+    npm run compile
+
+# Everything the editor integration needs
+editor: lsp extension
+    @echo "Open glue/vscode in VS Code and press F5 to launch the extension host."

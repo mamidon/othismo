@@ -140,7 +140,7 @@ An expression statement evaluates its expression and discards the value.
 
 ```
 log("hello");
-map.insert(k, v);      // whatever it returns is discarded
+counter.next();        // whatever it returns is discarded
 ```
 
 No rule requires the value to be unit, and nothing marks a discard as deliberate.

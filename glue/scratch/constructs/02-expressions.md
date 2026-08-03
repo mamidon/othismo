@@ -243,7 +243,7 @@ each of these has a reason rather than an absence of one.
 - **Optional chaining `?.` and null-coalescing `??`** — there is no `nil` (§1). Their
   Option-shaped equivalents are §7's and §9's.
 - **Expression-level type ascription (`x : T`)** — annotations live on bindings and
-  parameters (§3, §6). If inference turns out to need an expression-level form, §10 says so.
+  parameters (§3, §5). If inference turns out to need an expression-level form, §10 says so.
 
 ### Owned elsewhere
 
@@ -251,11 +251,10 @@ Expression forms that will exist, but are another section's to design:
 
 | Form | Section |
 | --- | --- |
-| Lambda literals; named, default, and spread arguments | §6 |
+| Lambda literals; named, default, and spread arguments | §5 |
 | Record and struct literals | §6 |
 | `match` arms and patterns | §7 |
 | `?` error propagation | §9 |
-| `await` | §4 |
 | Constructor calls — `Foo()` versus a `new` keyword | §11 |
 | `sizeof` / `alignof` — only meaningful if layout is user-visible | §6 |
 | Compound assignment `+=`, destructuring, parallel assignment | §3 (assignment is a statement) |

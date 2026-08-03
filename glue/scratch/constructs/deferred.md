@@ -39,6 +39,11 @@ forms; a trailing comma marks a list). The third needs an arbitrary one, and sli
 where ranges get used most. Separately, mismatched pairs like `[0..2)` are unbalanced to
 every tool that counts brackets — editors, formatters, bracket matching, `%` in vim.
 
+**Re-examine this when collections arrive.** §6 has no lists and no indexing beyond `Str`,
+so two of those three collisions are currently hypothetical. They return with §8's generic
+collections — which is also when ranges become urgent, so the analysis and the need arrive
+together rather than one ahead of the other.
+
 The collision-free alternative puts the markers on the operator, at a real cost in
 readability:
 
@@ -101,9 +106,9 @@ former is the classic bug source, the latter is usually the better design anyway
 
 Deferred rather than declined because labels are cheap and additive, and because the
 "extract a function" answer stops being free once closures capture (§5). What's missing is
-a spelling: §1 admits no sigils in identifiers, so Rust's `'outer` is unavailable and a
-label form (`outer: while …`) would need to not collide with map literals (§1) or with
-whatever §7 does with `:` in patterns.
+a spelling: §1 admits no sigils in identifiers, so Rust's `'outer` is unavailable, and a
+label form (`outer: while …`) would need to not collide with whatever §7 does with `:` in
+patterns — or with map literals, if collections bring them back.
 
 ---
 
@@ -114,15 +119,16 @@ designed. Listed here only so there's a single place to look.
 
 | Question | Raised in | Owned by |
 | --- | --- | --- |
-| What integer type lengths and indices return | §1 | §6 |
-| Whether `+` and `==` are user-implementable | §2 | §6 |
 | A total-order / bitwise-equality companion to IEEE `==` | §2 | §15 |
 | Whether instance references compare by identity (provisional) | §2 | §7, §11 |
+| An operator for reference identity, distinct from `==` | §6 | §11 |
+| Opt-in value semantics for small structs (Rust's `Copy`) | §6 | §11 |
+| What a length returns, and iteration during mutation | §6 | §8, with collections |
+| Whether sorting APIs justify a three-way comparison | §2 | §8, with collections |
+| Whether array sizes need *required* compile-time evaluation (`const`) | §3 | §8 |
+| Whether `+` and `==` are user-implementable | §2 | §11, with traits |
 | Whether a trap is recoverable | §2 | §9, §15 |
 | Whether `obj.method` without parens is a bound value | §2 | §11 |
 | Whether inference needs expression-level type ascription | §2 | §10 |
-| Whether sorting APIs justify a three-way comparison | §2 | §6 |
-| Whether a `mut` alias can mutate what a non-`mut` binding observes | §3 | §6 |
 | Where `mut` attaches in a destructuring pattern | §3 | §7 |
-| Whether a construct needs *required* compile-time evaluation (`const`) | §3 | §6 |
 | How top-level declarations can be mutually recursive while statements run in order | §3 | §12, §13 |

@@ -78,7 +78,8 @@ DIGIT → "0" … "9"
   Glue doesn't need yet (goal §3: no stability obligations) and cost parser complexity
   against goal §2.2.
 - Provisional reserved set, to be settled section by section as each is designed:
-  `let mut fn return if else while for in break continue match import export true false`
+  `let mut fn struct type return if else while for in break continue match import export
+  true false`
 
 ### Comments
 
@@ -144,35 +145,14 @@ r"…"       raw string; no escapes
 
 ### Collection literals
 
-```
-[ ]                 empty list
-[ 1, 2, 3 ]         list
-{ }                 empty map
-{ "k": v, "j": w }  map
-```
+§6 has no collection types yet — a `List` or `Map` would be generic, and generics are §8.
+So there are no collection literals, and `[` and `{` are free.
 
-Maps use the conventional `{key: value}`, which collides with blocks (§3) — and §2's
-decision that **blocks are expressions** makes that collision real rather than merely
-positional. The resolution:
-
-- At the **start of a statement**, `{` is a block. A map-literal expression statement must
-  be parenthesized — `({"a": 1});` — which nobody writes on purpose.
-- In the **header** of `if` / `while` / `for`, a bare `{` is the body; a map literal there
-  must be parenthesized. Go's rule for composite literals in control-flow headers, and the
-  one users actually trip over.
-- **Everywhere else**, one expression of lookahead decides:
-  - `{}` is the empty map. An empty block would yield unit and is pointless as an
-    expression, so the map wins.
-  - `{` followed by a statement keyword (`let`, `if`, `while`, `for`, `return`, …) is a
-    block.
-  - Otherwise, parse one expression and peek: `:` means map, `;` or `}` means block.
-
-No backtracking is required — the expression parsed during lookahead is reused either
-way. The cost is paid in diagnostics: a typo'd map reports whatever the block parser
-expected, which is worse than a dedicated message.
-
-Trailing commas are permitted. No set literal yet — sets wait for §6, and `{1, 2}` stays
-available for them, extending the rule above by one case (`,` means set).
+This is worth stating rather than merely omitting, because of what it buys. With no map
+literal, **`{` in expression position is unconditionally a block** (§2), and the
+lookahead rule that would otherwise be needed — parse an expression, peek for `:` —
+does not exist. When collections arrive, that rule arrives with them, and the choice of
+delimiter can be revisited then knowing what it costs.
 
 ### Boolean and absence
 
@@ -341,9 +321,10 @@ before, so it gets its own conformance tests (goal §2.2).
 Whitespace does not rescue an ambiguity: `pair. 0` and `pair .0` both follow the rule
 above, by the preceding *token*, not by adjacency.
 
-**The cost.** Numeric field access (`pair.0` for tuples) survives only because of this
-rule. If §6 would rather spell tuple access some other way, the rule becomes unnecessary
-and can be deleted — but if §6 wants `.0`, it is required.
+**The cost — currently zero.** The rule exists so numeric field access (`pair.0`) can
+coexist with `.5`. §6 has no tuples, so nothing uses `.0` today and the rule costs
+nothing; it stays to keep the option open. If tuples never arrive, `.` followed by a digit
+could simply always be a float and the left-context check could be deleted.
 
 Otherwise the lexer is a plain scanner: no mode stack, no nesting, no shared mutable
 state. Both front ends goal §2.2 requires — interpreter and compiler — run the same one.

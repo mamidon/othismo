@@ -54,4 +54,137 @@ representation all leak into the host ABI whether or not you intend them to.
 
 ## Glue Syntax
 
+> Decided 2026-08-02. Items marked **Open** are known gaps, not oversights.
+
+### Not decided here
+
+- **Enums / tagged unions** — §7. They are structs with a tag, and they share this
+  section's semantics, but their declaration and matching are §7's.
+- **Generics** — §8. This is why there are no collections yet: `List[T]` and `Map[K, V]`
+  are generic types, so they can't precede §8. §1's collection literals came out with them.
+- **Traits, interfaces, and operator overloading** — §11. Until then `+` and `==` are
+  built-in and closed (§2).
+- **Tuples** — not now. §1's `.5` lexing rule keeps `pair.0` available should they arrive.
+
+### Primitive types
+
+| Type | Notes |
+| --- | --- |
+| `bool` | `true` / `false`. The only thing a condition may be (§2, §4) |
+| `u8 u16 u32 u64` | unsigned integers |
+| `s8 s16 s32 s64` | signed integers |
+| `f32 f64` | IEEE-754 binary floating point |
+| `char` | one Unicode scalar value, 32 bits (§1) |
+| `Str` | UTF-8 bytes, byte-indexed (§1) |
+| `()` | unit — one value, one inhabitant |
+
+Primitives have **value semantics**: assignment copies, and there is no way to observe
+sharing. Their widths, literals, conversions, and trapping behavior are §1's and §2's.
+
+### Structs
+
+```
+struct Point {
+  x: s64,
+  y: s64,
+}
+
+let p = Point { x: 1, y: 2 };
+p.x                                  // 1
+
+let mut q = Point { x: 0, y: 0 };
+q.x = 5;                             // permitted — q is mut
+```
+
+- **Nominal, not structural.** Two structs with identical fields are different types. A
+  name is a decision, and structural typing makes every field name load-bearing forever.
+- Field types are required; there is no inference across a declaration boundary (§5, §10).
+- **Field mutability follows the binding**, not the field. There is no per-field `mut`:
+  a `mut` binding permits assigning any field, a non-`mut` binding permits none. Per-field
+  mutability is additive later and buys little before there's a reason for it.
+- Field visibility is §13's, with modules.
+
+### Type aliases
+
+```
+type InstanceId = u64;
+```
+
+An alias is a second name for one type, not a new one — `InstanceId` and `u64` are
+interchangeable everywhere. A *distinct* type sharing a representation (a newtype) is a
+different feature and isn't here yet; when §13 has visibility, it's worth revisiting
+together.
+
+---
+
 ## Glue Semantics
+
+> Decided 2026-08-02. Items marked **Open** are known gaps, not oversights.
+
+### Reference semantics
+
+**A struct is a reference.** Assigning one, passing it, or returning it copies a
+reference, not the fields.
+
+```
+let a = Point { x: 1, y: 2 };
+let mut b = a;
+b.x = 99;
+a.x                  // 99 — a and b are the same object
+```
+
+This settles three questions left open by earlier sections, and it settles them the
+permissive way:
+
+- **§3's question — can a `mut` alias mutate what a non-`mut` binding observes?** Yes. So
+  `let` means "you cannot mutate through *this name*", not "this value will not change".
+  That's the weaker of the two readings, and the documentation must say the weaker one.
+- **§5's question — is a `mut` parameter by reference or copy-in/copy-out?** By reference.
+  There is no copy to write back.
+- **What `let` protects** is the binding and the fields reachable through it *by name*.
+  Nothing more.
+
+Aliasing bugs are therefore ordinary rather than exotic, which is the price of not
+adopting either ownership (goal §3 rules it out) or copy-on-write value semantics (real
+machinery in both back ends). It is the same bargain Java, Python, and JavaScript make.
+
+**Opt-in value semantics — deliberately later.** Marking certain structs as copied on
+assignment, the way Rust's `Copy` works, is the intended escape hatch for small
+value-like types. It's additive: every program written under reference semantics keeps
+working when a *new* marker appears. Doing it now would mean designing the marker, the
+rules for which types may carry it, and its interaction with §11's traits, all before
+there's a program complaining.
+
+### Equality
+
+Structural, per §2: two structs are `==` when their fields are. Reference identity — "the
+same object" — is a distinct question with no operator yet; §11 needs one for instance
+references and can introduce it for both at once.
+
+This is worth noticing as a genuine wart: under reference semantics, `==` compares
+contents while assignment shares identity, so `a == b` does not imply `a` and `b` are
+interchangeable, and mutating one changes the other. Every language in this family has it.
+
+### Memory
+
+- **Garbage collected.** No manual allocation, no `free`, no destructors, no ownership.
+  Goal §3 rules out being a systems language, and reference semantics plus manual freeing
+  is the combination that produces use-after-free.
+- **No finalizers and no weak references.** Both are hard to specify (order, timing,
+  resurrection) and neither has a caller yet.
+- **Cycles are collected**, which rules out naive reference counting as the *only*
+  strategy. Whether the implementation is a tracing collector in linear memory or the wasm
+  GC proposal is §16's, and the language deliberately exposes nothing that would let a
+  program tell the difference.
+- **No pointers, and no `sizeof` / `alignof`.** Layout is not user-visible. It still exists
+  and still matters at the host boundary — §13 and §16 own the ABI — but it isn't
+  something a Glue program can ask about.
+
+### What isn't here yet
+
+Collections are the conspicuous absence: no lists, no maps, no arrays, no sets, and so no
+`len()`, no indexing beyond `Str`, and no iteration (§4). All of it waits on §8, because
+all of it is generic. **Two questions come back with them:** what integer type a length
+returns — `u64` is the presumptive answer since §1 defaults there, and anything else
+reintroduces mixed-sign arithmetic §2 forbids — and what happens when a collection is
+mutated while being iterated.
