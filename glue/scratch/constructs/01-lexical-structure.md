@@ -58,8 +58,16 @@ spellings for everything, since the novelty budget is committed elsewhere.
 ### Source text
 
 - Source files are UTF-8. A leading BOM is skipped, not required.
-- `LF` and `CRLF` are both accepted; `CRLF` is normalized to `LF` before lexing.
+- `LF` and `CRLF` are both accepted, and are equivalent everywhere they can appear.
 - Case-sensitive. Identifiers are ASCII, so no normalization form is needed.
+
+**The source buffer is never rewritten.** An earlier draft said `CRLF` is normalized to
+`LF` *before* lexing, and that turns out to be the wrong place for it: every token's span
+is a byte offset into the source, and normalizing first would leave those offsets pointing
+into a string the editor doesn't have. Normalization happens instead when a `"""` literal's
+*value* is decoded — the only place a line ending can survive into a value at all. The
+observable semantics are the same, a decoded string always holds `LF`, and spans stay
+pointed at bytes that exist on disk.
 
 ### Identifiers and keywords
 
@@ -78,8 +86,15 @@ DIGIT → "0" … "9"
   Glue doesn't need yet (goal §3: no stability obligations) and cost parser complexity
   against goal §2.2.
 - Provisional reserved set, to be settled section by section as each is designed:
-  `let mut fn struct type return if else while for in break continue match import export
-  true false`
+  `as let mut fn struct type return if else while for in break continue match import
+  export true false`
+
+  `as` joins the list because §2 made it the conversion operator. `for` and `in` are
+  reserved despite §4 declining every loop but `while`, since a reserved word costs
+  nothing to hold and an unreserved one is expensive to take back.
+- **Type names are not keywords.** `u64`, `f32`, `bool`, `Str`, and `char` are ordinary
+  identifiers that §6 happens to have bound. Reserving them would foreclose shadowing and
+  buy nothing the name resolver doesn't already do.
 
 ### Comments
 
@@ -87,7 +102,12 @@ DIGIT → "0" … "9"
 // line comment
 /* block comment, /* which nests */ to here */
 /// doc comment — a distinct token, attaches to the following declaration (§14)
+//// four or more slashes — an ordinary line comment again
 ```
+
+**Exactly three slashes make a doc comment.** A fourth takes it back to an ordinary
+comment, so a row of slashes used as a section divider isn't a doc comment attached to
+nothing. There is no block form of a doc comment; `/** … */` is a block comment.
 
 ### Terminators and blocks
 
@@ -97,6 +117,23 @@ DIGIT → "0" … "9"
 - The interactive front end may supply a missing trailing `;` on a complete line; this is
   an input convenience in the REPL, not a second grammar. A file and a prompt accept the
   same token stream.
+
+### Punctuation with no construct yet
+
+Three sequences are tokens even though nothing in the language uses them: `::`, `..`, and
+`...`.
+
+This is a deliberate exception to implementing only what's decided, and it's worth
+justifying rather than letting it pass as an oversight. `::` appears in §3's and §5's own
+examples (`Counter::create()`) and belongs to §13, which doesn't exist. `..` is the one
+this section already promised to keep available, for the ranges §2 deferred. `...` follows
+from `..` by maximal munch and is free. Lexing them costs one line each
+and buys a large improvement in what a user sees: without a `..` token, `0..5` lexes as
+`INT DOT FLOAT(0.5)` by the rule below, and the resulting message is about a number rather
+than about a range. With one, the parser can say ranges aren't implemented.
+
+The lexer is silent about all three — reporting them is the parser's job, since only the
+parser knows whether one appeared somewhere a construct was expected.
 
 ### Number literals
 
@@ -121,11 +158,29 @@ SUFFIX  → "u8" | "u16" | "u32" | "u64"
   token of left context to lex — see *Lexing and left context* below — and it forecloses
   numeric field access (`pair.0`) unless that rule is applied. §6 inherits that
   constraint when it designs tuples.
-- `_` may separate digits; it may not lead or trail a digit run.
-- Hex, octal, and binary forms are integer-only.
+- `_` may separate digits; it may not lead or trail a digit run. The rule is about the
+  boundaries only, so `1__0` is legal — banning repeats would be a second rule for no gain.
+- Hex, octal, and binary forms are integer-only. The radix prefix is lowercase; `0X1F` is
+  an error naming that, rather than an integer followed by something unpronounceable.
 - An exponent makes a literal a float even with no `.`: `1e10` is `f64`.
 - A suffix names the type exactly: `255u8`, `1s32`, `1.0f32`. An unsuffixed literal gets
   its type from context — see **Glue Semantics** below.
+- **A float suffix on an integer literal is legal**: `1f32` is `1.0f32`. The suffix names
+  the type exactly, and `1` names a value that type can hold, so there is nothing to
+  object to. The reverse is not: `1.0u8` is an error, because the literal's *form* already
+  says float and the suffix contradicts it.
+- A suffix is only a suffix when it's glued to the literal, so `255 u8` is two tokens. An
+  unrecognized one — `1blah` — is still taken as part of the literal rather than split off
+  as an identifier, since a number immediately followed by a name is never anything else.
+- A literal too wide to represent — beyond 128 bits — is a lexical error. The unbounded
+  precision below is a property of constant *arithmetic*; a literal still has to be
+  written down before it can participate.
+
+Note that the suffix rule and the radix rule interact, in a way that is not obvious and
+so is worth stating: **`0x1f32` has no suffix.** `f`, `3`, and `2` are hex digits, so the
+digit run swallows them. `0x1u8` does have one, because `u` isn't. This is consistent, but
+it means the `f32` and `f64` suffixes are unavailable on hex literals — which costs
+nothing, since those forms are integer-only anyway.
 
 ### String and character literals
 
@@ -139,6 +194,13 @@ r"…"       raw string; no escapes
 - Escapes: `\n` `\r` `\t` `\0` `\\` `\"` `\'` `\u{1F600}`.
 - A `"""` string's content is taken literally, including every leading space on every
   line. No indentation is stripped.
+- **Only `"""` spans lines.** A `"`, `r"`, or `'` literal ends at the newline whether or
+  not its closing delimiter arrived. This is a recovery decision rather than a semantic
+  one — the alternative is that a single missing quote reinterprets the rest of the file
+  as a string, which is the worst thing an editor can do to someone mid-edit.
+- A raw string has no escape for its own delimiter and no `r#"…"#` form, so **it cannot
+  contain a `"` at all.** That's a real limitation, and the answer for now is to use an
+  ordinary string. A hashed form is additive whenever something needs it.
 - **Deferred:** string interpolation, and whether `"""` strips indentation to match its
   closing delimiter. Both are additive; nothing above forecloses either. See
   [Deferred decisions](deferred.md).
@@ -292,9 +354,16 @@ has an exception for constants. There is likewise no implicit widening between `
 
 ### Comments and doc comments
 
-- Line and block comments produce no tokens and are not preserved.
-- A `///` run is a token. It attaches to the declaration that follows it; a doc comment
-  attached to nothing is a warning, since it almost always means a stray edit (§14).
+- **Line and block comments are tokens the grammar never sees.** An earlier draft said
+  they produce no tokens at all, and that contradicts what the parser needs: a lossless
+  tree, in which every byte of the source is reachable so the same tree can serve a
+  formatter later. Both hold if comments and whitespace are lexed as *trivia* — real
+  tokens, filtered out before the grammar looks. The invariant that buys is worth having:
+  concatenating every token's text reproduces the file byte for byte, which is a property
+  a test can check rather than a promise a reviewer has to keep.
+- A `///` run is a token, and is **not** trivia — the parser must see it. It attaches to
+  the declaration that follows it; a doc comment attached to nothing is a warning, since
+  it almost always means a stray edit (§14).
 
 ### Lexing and left context
 
@@ -319,7 +388,16 @@ the parser expects. It is still the only place two token streams differ by what 
 before, so it gets its own conformance tests (goal §2.2).
 
 Whitespace does not rescue an ambiguity: `pair. 0` and `pair .0` both follow the rule
-above, by the preceding *token*, not by adjacency.
+above, by the preceding *token*, not by adjacency. Nor do comments — `pair /* c */ .0` is
+field access too, since a comment is trivia and the rule looks past it to the last token
+the grammar would see.
+
+That is a stronger rule than the table suggests, and it has one consequence worth writing
+down: **a literal to the left turns a following `.5` into field access however far away it
+is.** `1.5 .5` lexes as `FLOAT(1.5) DOT INT(5)`, not as two floats. Nothing is lost today,
+because two juxtaposed literals aren't valid syntax under any reading — but it is why the
+rule is phrased in terms of "could end an expression" rather than "is an expression". The
+lexer cannot know which, and the two answers must not differ.
 
 **The cost — currently zero.** The rule exists so numeric field access (`pair.0`) can
 coexist with `.5`. §6 has no tuples, so nothing uses `.0` today and the rule costs
@@ -328,3 +406,31 @@ could simply always be a float and the left-context check could be deleted.
 
 Otherwise the lexer is a plain scanner: no mode stack, no nesting, no shared mutable
 state. Both front ends goal §2.2 requires — interpreter and compiler — run the same one.
+
+---
+
+## Implementation
+
+`glue/tokenizer` implements everything above. Three properties it holds to, none of which
+are visible in the syntax but all of which constrain it:
+
+- **Total.** Lexing never fails. Malformed input produces error tokens and diagnostics,
+  because the editor spends most of its time looking at half-typed programs.
+- **Lossless.** Trivia are tokens and spans tile the source, so the stream reproduces the
+  file exactly. Asserted over every prefix of a deliberately nasty source, since a
+  truncation is how you find the scanner arm that forgot to advance.
+- **Single-implementation.** Numeric literals and escape sequences each need to be
+  understood twice — once to size a token, once to produce a value — and both readings go
+  through one function. Two implementations would drift, and the drift would appear as the
+  interpreter and the compiler disagreeing about what a literal says, which is exactly the
+  risk goal §2.2 names.
+
+Two things above are *lexical* errors rather than type errors, which is worth noting since
+the boundary isn't obvious: a literal wider than 128 bits, and a float literal whose value
+is infinite. Both are cases where there is no value to hand to the type checker at all.
+Whether `200 + 100` fits a `u8` is not lexical, and is decided by the pinning rules above.
+
+**Still open, and owned here:** string interpolation and `"""` indentation stripping remain
+deferred (see [Deferred decisions](deferred.md)). Neither is foreclosed — interpolation is
+the only one that would change the shape of the tokenizer, since a string literal is
+currently a complete token with nothing nested inside it.
