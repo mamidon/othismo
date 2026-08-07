@@ -17,6 +17,11 @@
 //! tree — scans on every field access, and the passes downstream of here walk
 //! these trees far more often than the editor does.
 
+pub mod builder;
 pub mod syntax;
 
+#[cfg(test)]
+mod tests;
+
+pub use crate::builder::{Mark, TreeBuilder};
 pub use crate::syntax::{Child, Event, NodeId, NodeKind, Tree};

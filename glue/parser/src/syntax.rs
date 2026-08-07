@@ -192,6 +192,12 @@ pub enum Child {
 }
 
 impl Tree {
+    /// Built only by [`crate::builder::TreeBuilder`], which is what guarantees
+    /// the brackets balance and every `close` is patched.
+    pub(crate) fn from_events(events: Vec<Event>) -> Tree {
+        Tree { events }
+    }
+
     /// The outermost node. Always a [`NodeKind::SourceFile`], and always at
     /// index 0, because the parser opens it before reading anything.
     pub fn root(&self) -> NodeId {
@@ -221,7 +227,7 @@ impl Tree {
         match tokens.next() {
             Some(first) => Span::new(
                 first.start as usize,
-                tokens.last().unwrap_or(first).end as usize,
+                tokens.next_back().unwrap_or(first).end as usize,
             ),
             None => Span::empty_at(0),
         }
