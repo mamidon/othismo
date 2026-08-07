@@ -1,0 +1,77 @@
+// §1 — every literal the lexer produces, and every form of comment.
+//
+// The files in this directory are a regression suite: the parser's
+// `the_examples_parse_cleanly` test asserts that each one lexes and parses
+// without a single diagnostic and comes back out of the tree byte for byte.
+
+// ---- Integers -------------------------------------------------------------
+
+let decimal = 42;
+let separated = 1_000_000;
+let hex = 0xff;
+let octal = 0o17;
+let binary = 0b1010;
+
+// A radix literal's digits and its suffix are told apart by the digit set, so
+// `0x1f32` is one number where `0x1u8` is a number with a suffix.
+let hex_run = 0x1f32;
+let hex_suffixed = 0x1u8;
+
+let unsigned = 1_000u32;
+let signed = 7s16;
+// An integer may carry a float suffix.
+let widened = 1f64;
+
+// ---- Floats ---------------------------------------------------------------
+
+let simple = 1.5;
+// §1: a leading `.` begins a float when the preceding significant token could
+// not end an expression. Here that token is `=`.
+let leading_dot = .5;
+let exponent = 1e10;
+let float_suffix = 1.0f32;
+
+// ---- Text -----------------------------------------------------------------
+
+let string = "hello";
+let escapes = "newline \n tab \t null \0 quote \" backslash \\ apostrophe \'";
+let unicode = "grinning face: \u{1F600}";
+
+// A raw string takes no escapes.
+let raw = r"C:\not\an\escape";
+
+let multiline = """
+  Spans lines, and holds "quotes" without escaping them.
+""";
+
+let character = 'x';
+let char_escape = '\n';
+let char_unicode = '\u{263A}';
+
+// ---- Booleans -------------------------------------------------------------
+// §1 has no `nil`, so these are the only two, and §2 has no truthiness — a
+// condition may be nothing else.
+
+let yes = true;
+let no = false;
+
+// ---- Unit -----------------------------------------------------------------
+// One value, one inhabitant. A real value, not an absence (§5).
+
+let nothing = ();
+
+// ---- Comments -------------------------------------------------------------
+
+// A line comment.
+
+/* A block comment. /* They nest. */ Still inside the outer one. */
+
+/// A doc comment attaches to the declaration that follows it (§1, §14).
+/// Exactly three slashes make one — a fourth takes it back to an ordinary
+/// comment, so a row of slashes used as a divider is not a doc comment
+/// attached to nothing:
+//// -------------------------------------------------------------------------
+type Marker = u64;
+
+// A file may end in an expression with no `;`, which is the file's value (§3).
+decimal

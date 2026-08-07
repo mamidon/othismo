@@ -1,0 +1,124 @@
+// §3 and §4 — every statement, and all the control flow.
+
+// ---- Bindings -------------------------------------------------------------
+// One keyword: there is no `var` and no `const`. `mut` gates mutation, not
+// rebinding — every binding is rebindable regardless (§3).
+
+let plain = 42;
+let annotated: u32 = 42;
+let mut counter = 0;
+let mut tally: s64 = 0;
+
+// An initializer is always required. There is no declare-then-assign, and so
+// no definite-assignment analysis to specify or implement (§3).
+let from_block = {
+  let t = read();
+  t * 2
+};
+let from_if = if verbose { 1 } else { 0 };
+
+// A new `let` may shadow an existing binding, including in the same scope.
+// It's the natural way to write a narrowing pipeline without inventing
+// `input2`, and it is what makes restating a binding at a prompt work (§3).
+let input = read();
+let input = parse(input);
+
+// ---- Assignment -----------------------------------------------------------
+// A statement, not an expression, so `if x = 1 { … }` does not compile — the
+// typo class is gone by construction rather than by lint (§3).
+
+counter = counter + 1;
+
+// Each compound form is exactly `a = a op b` with the place evaluated once,
+// and each traps on overflow like the operator it wraps (§2).
+counter += 1;
+counter -= 1;
+counter *= 2;
+counter /= 2;
+counter %= 3;
+counter &= 0xff;
+counter |= 0x0f;
+counter ^= 0xf0;
+counter <<= 1;
+counter >>= 1;
+
+// The left side is a place — a name, a field, or an index — not a pattern.
+point.x = 5;
+items[0] = 1;
+grid[row][column] = 0;
+outer.inner.value = 2;
+
+// ---- Expression statements ------------------------------------------------
+// Evaluates its expression and discards the value. No rule requires the value
+// to be unit, and nothing marks a discard as deliberate (§3).
+
+log("hello");
+counter.next();
+
+// A block-shaped expression is already delimited, so it needs no `;`.
+if ready { log("go"); }
+{ log("in a nested block"); }
+
+// ---- Loops ----------------------------------------------------------------
+// `while` is the only loop, and a statement, so its value is unit. There is no
+// `loop` keyword and no `break` with a value: those exist to make an infinite
+// loop produce something, and `while true { … }` covers the control flow (§4).
+
+while counter < 10 {
+  counter += 1;
+}
+
+// `break` and `continue` apply to the innermost enclosing loop. Unlabelled
+// only, for now (§4).
+while true {
+  if done { break; }
+  if skip { continue; }
+  step();
+}
+
+// The condition is unparenthesized and the braces are mandatory, which is why
+// a struct literal is banned in a condition — a `{` after a name opens the
+// body, not a literal.
+while ready {
+  work();
+}
+
+// Inside brackets the ban lifts, because a brace is unambiguous again.
+while accepts(Point { x: 0, y: 0 }) {
+  advance();
+}
+while (Point { x: 0, y: 0 }) == target {
+  advance();
+}
+
+// The body introduces a scope, so a binding made here is fresh each iteration
+// — which is why the classic loop-variable capture trap is absent (§5).
+while counter > 0 {
+  let step = counter * 2;
+  observe(step);
+  counter -= 1;
+}
+
+// ---- Early exit -----------------------------------------------------------
+// `return` exits the enclosing function, not the block. It is for *early*
+// exit: a body is a block, so its ordinary result is the trailing expression,
+// and a well-shaped function often has no `return` at all (§4).
+
+fn clamp(n: u64, limit: u64) -> u64 {
+  if n > limit {
+    return limit;
+  }
+  n
+}
+
+fn nothing_to_say() {
+  return;
+}
+
+// ---- The top level --------------------------------------------------------
+// A file is a block: statements, then an optional trailing expression with no
+// `;`, which is the file's value. That is the whole of goal §2.1's "a bare
+// expression is a valid program" — not a REPL special case, just the block
+// rule applied to the outermost block (§3).
+
+counter

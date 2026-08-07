@@ -1,0 +1,144 @@
+// §5 and §6 — functions, data, and types.
+//
+// §3 collapses Lox's declaration/statement split, so every declaration here is
+// a statement and may appear anywhere one may.
+
+// ---- Functions ------------------------------------------------------------
+
+/// Adds two numbers.
+///
+/// Parameter types are required, and the return type is required when it isn't
+/// unit. That is §10's local-inference boundary: signatures are annotated,
+/// bodies are inferred — which keeps a function's meaning readable without
+/// reading its body.
+fn add(a: u64, b: u64) -> u64 {
+  a + b
+}
+
+// The return type is omitted when it is unit (§5).
+fn log(message: Str) {
+  emit(message);
+}
+
+fn nothing() { }
+
+// `mut` on a parameter means the function may mutate the caller's value, and
+// the caller must pass a `mut` binding. It belongs to the parameter, not to
+// the type, even though it is written where a type modifier would be (§5).
+fn advance(c: mut Counter, by: u64) {
+  c.step(by);
+}
+
+// There is no overloading, by arity or by type: one name, one function. The
+// cost of `add_u64` versus `add_f64` is smaller than the cost of resolution
+// rules nobody can predict (§5).
+fn add_f64(a: f64, b: f64) -> f64 {
+  a + b
+}
+
+// A `fn` may be declared inside a block. It is scoped to that block and
+// captures nothing — it is an ordinary function that happens to be private.
+// To capture, use a lambda (§5).
+fn outer(n: u64) -> u64 {
+  fn double(x: u64) -> u64 {
+    x * 2
+  }
+  double(n)
+}
+
+// Recursion is permitted (§5).
+fn countdown(n: u64) -> u64 {
+  if n == 0 {
+    return 0;
+  }
+  countdown(n - 1)
+}
+
+// ---- Functions as values --------------------------------------------------
+// The type of a function is `fn(T, …) -> R`, with `-> R` omitted for unit.
+
+let f = add;
+let g: fn(u64, u64) -> u64 = add;
+let h: fn() = nothing;
+let logger: fn(Str) = log;
+
+fn apply(callback: fn(u64) -> u64, x: u64) -> u64 {
+  callback(x)
+}
+
+fn compose(callback: fn(u64) -> u64) -> fn(u64) -> u64 {
+  callback
+}
+
+// ---- Lambdas --------------------------------------------------------------
+// Lambdas capture by reference, implicitly — there is no capture list (§5).
+
+let inc = |x: u64| x + 1;
+let inferred = |x| x + 1;
+let several = |x: u64, y: u64| x + y;
+let nullary = || work();
+let with_block = |x| {
+  let y = x * 2;
+  y + 1
+};
+
+let mapped = apply(|x| x * 3, 4);
+
+// ---- Structs --------------------------------------------------------------
+// Nominal, not structural: two structs with identical fields are different
+// types. A name is a decision, and structural typing makes every field name
+// load-bearing forever (§6).
+
+/// A point in two dimensions.
+struct Point {
+  /// The horizontal coordinate.
+  x: s64,
+  /// The vertical coordinate.
+  y: s64,
+}
+
+struct Empty { }
+
+struct Line {
+  from: Point,
+  to: Point,
+  label: Str,
+}
+
+// Field mutability follows the binding, not the field: a `mut` binding permits
+// assigning any field, a non-`mut` binding permits none. There is no per-field
+// `mut` (§6).
+let origin = Point { x: 0, y: 0 };
+let mut moving = Point { x: 1, y: 2 };
+moving.x = 5;
+moving.y = 6;
+
+let diagonal = Line {
+  from: Point { x: 0, y: 0 },
+  to: Point { x: 1, y: 1 },
+  label: "diagonal",
+};
+
+// ---- Type aliases ---------------------------------------------------------
+// An alias is a second name for one type, not a new one — `InstanceId` and
+// `u64` are interchangeable everywhere. A distinct type sharing a
+// representation is a different feature, and isn't here yet (§6).
+
+/// Identifies a live instance in the Othismo namespace.
+type InstanceId = u64;
+type Handler = fn(Str);
+type Transform = fn(u64) -> u64;
+type Nothing = ();
+
+// ---- Unit -----------------------------------------------------------------
+// A function with no `-> T` returns unit. Unit is a real value with one
+// inhabitant, not an absence: it can be bound, returned, and stored, which
+// keeps `fn` types uniform (§5).
+
+let nil: () = ();
+
+fn returns_unit() -> () {
+  ()
+}
+
+add(1, 2)

@@ -175,6 +175,58 @@ pub enum NodeKind {
     Error,
 }
 
+impl NodeKind {
+    /// Every variant. Rust has no reflection, so this is written out — and
+    /// kept honest by `every_kind_has_an_example`, which fails if a kind here
+    /// never appears in `examples/`, and won't compile if one is missing.
+    pub const ALL: [NodeKind; 41] = {
+        use NodeKind::*;
+        [
+            SourceFile,
+            LetStmt,
+            AssignStmt,
+            ExprStmt,
+            WhileStmt,
+            BreakStmt,
+            ContinueStmt,
+            ReturnStmt,
+            FnDecl,
+            ParamList,
+            Param,
+            RetType,
+            StructDecl,
+            FieldDeclList,
+            FieldDecl,
+            TypeAliasDecl,
+            LiteralExpr,
+            NameExpr,
+            BlockExpr,
+            IfExpr,
+            ParenExpr,
+            UnitExpr,
+            UnaryExpr,
+            BinaryExpr,
+            CastExpr,
+            CallExpr,
+            ArgList,
+            IndexExpr,
+            FieldExpr,
+            MethodCallExpr,
+            StructLitExpr,
+            FieldInitList,
+            FieldInit,
+            LambdaExpr,
+            LambdaParamList,
+            LambdaParam,
+            NamePat,
+            NameType,
+            FnType,
+            UnitType,
+            Error,
+        ]
+    };
+}
+
 /// A parsed file: the flat event vector, and nothing else.
 pub struct Tree {
     events: Vec<Event>,

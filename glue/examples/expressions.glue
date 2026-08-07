@@ -1,10 +1,149 @@
-// A file is a block (§3): statements, then an optional trailing expression
-// with no `;`, which is the file's value. This one is just the expression.
+// §2 — every expression form, and the whole precedence ladder.
 //
 // Background tint runs by nesting depth — deeper is darker, so the shape on
 // screen is the shape of the tree. Text colour cycles per token, so you can
 // see where one token ends and the next begins. The Glue Syntax Tree panel in
 // the Explorer follows the cursor.
-//
-// Change a `*` to a `+` and watch the grouping move.
-f(a + b * c, d.e[0] as u64, (g || h) && !i)
+
+// ---- Primary --------------------------------------------------------------
+
+let literal = 42;
+let name = origin;
+// `( … )` groups and nothing else — it does not change a value's type,
+// meaning, or evaluation (§2).
+let grouped = (1 + 2) * 3;
+// `()` is the unit value, not an empty grouping.
+let unit = ();
+
+// ---- Prefix ---------------------------------------------------------------
+// Unary `-` is defined on signed and float types only; negating an unsigned
+// value is a type error, not a runtime trap (§2).
+
+let negated = -1;
+let complemented = ~0xff;
+let inverted = !true;
+let stacked = -~1;
+
+// ---- Arithmetic -----------------------------------------------------------
+
+let sum = 1 + 2;
+let difference = 3 - 4;
+let product = 5 * 6;
+let quotient = 7 / 8;
+let remainder = 9 % 10;
+
+// ---- Bitwise and shifts ---------------------------------------------------
+// Integer types only, never `bool` — that's `&& || !`. `>>` is arithmetic on
+// signed types and logical on unsigned, so there is no third `>>>` (§2).
+
+let and_bits = 0xf0 & 0x0f;
+let or_bits = 0xf0 | 0x0f;
+let xor_bits = 0xf0 ^ 0x0f;
+let shifted_left = 1 << 4;
+let shifted_right = 256 >> 4;
+
+// ---- Comparison -----------------------------------------------------------
+// Non-associative (§2): `a < b < c` is a parse error rather than a type error,
+// because a parse error names the actual mistake. So each of these holds
+// exactly one comparison.
+
+let equal = 1 == 2;
+let unequal = 1 != 2;
+let less = 1 < 2;
+let at_most = 1 <= 2;
+let greater = 1 > 2;
+let at_least = 1 >= 2;
+// The rewrite the diagnostic suggests for a chain.
+let between = 0 < n && n < 10;
+
+// ---- Logical --------------------------------------------------------------
+// `bool` only, short-circuiting — which makes them control flow wearing an
+// operator's clothes (§2).
+
+let both = true && false;
+let either = true || false;
+
+// ---- Conversion -----------------------------------------------------------
+// `as` is explicit and trapping, deliberately unlike Rust's, which truncates
+// silently. Lossy conversions exist but have names (§2).
+
+let narrowed = 300 as u32;
+let to_float = 300 as f64;
+let to_int = 1.5 as s64;
+
+// ---- Postfix --------------------------------------------------------------
+
+let called = f();
+let with_args = f(1, 2);
+let trailing_comma = f(1, 2,);
+let indexed = items[0];
+let field = point.x;
+// A method call is `.name(…)`, with the parens (§2).
+let method = counter.next();
+let chained = f(1).result[0].value;
+
+// ---- Struct literals ------------------------------------------------------
+
+let origin = Point { x: 0, y: 0 };
+let nested = Line { from: Point { x: 0, y: 0 }, to: Point { x: 1, y: 1 } };
+let no_fields = Empty { };
+
+// ---- Block expressions ----------------------------------------------------
+// A block's value is its trailing expression, written without a `;`. A `;`
+// discards (§2).
+
+let from_block = {
+  let t = f();
+  t * 2
+};
+// Yields unit: the `;` discarded the 42.
+let discarded = { f(); 42; };
+
+// ---- Conditionals ---------------------------------------------------------
+// `if` is an expression (§2). Braces are mandatory and the condition is
+// unparenthesized (§4), which together delete the dangling-else problem.
+
+let branch = if ok { 42 } else { 0 };
+// `else if` is `else` followed by another `if`, not a keyword of its own.
+let chain = if a { 1 } else if b { 2 } else { 3 };
+
+// ---- Lambdas --------------------------------------------------------------
+// Parameter and return types come from context, unlike a `fn`: a declaration
+// is read by others, a lambda is read in place (§5).
+
+let typed = |x: u64| x + 1;
+let inferred = |x| x + 1;
+let several = |x: u64, y: u64| x + y;
+// `||` in operand position opens a lambda with no parameters; between two
+// operands it is the logical-or operator, above.
+let nullary = || work();
+let with_block = |x| {
+  let y = x * 2;
+  y + 1
+};
+
+// ---- Precedence -----------------------------------------------------------
+// Tightest to loosest, each line pinned against the one below it. The comment
+// beside each is the grouping §2's table gives it.
+
+let l01 = -a.b;             // (-(a.b))          postfix over unary
+let l02 = -a as u8;         // ((-a) as u8)      unary over `as`
+let l03 = a as u8 * b;      // ((a as u8) * b)   `as` over `*`
+let l04 = a + b * c;        // (a + (b * c))     `*` over `+`
+let l05 = a << b + c;       // (a << (b + c))    `+` over shifts
+let l06 = a & b << c;       // (a & (b << c))    shifts over `&`
+let l07 = a ^ b & c;        // (a ^ (b & c))     `&` over `^`
+let l08 = a | b ^ c;        // (a | (b ^ c))     `^` over `|`
+let l09 = a | b == c;       // ((a | b) == c)    `|` over comparison
+let l10 = a && b == c;      // (a && (b == c))   comparison over `&&`
+let l11 = a || b && c;      // (a || (b && c))   `&&` over `||`
+
+// Bitwise binds tighter than comparison. C's ordering here is a historical
+// accident that every C linter warns about; Rust corrected it and so do we.
+let corrected = a & b == c; // ((a & b) == c)
+
+// Every binary operator is left-associative.
+let leans_left = a - b - c; // ((a - b) - c)
+
+// A file may end in an expression with no `;` (§3).
+sum + difference

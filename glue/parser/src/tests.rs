@@ -539,20 +539,84 @@ fn doc_comments_attach_forward() {
     );
 }
 
-/// The example that could not parse until now.
+/// Every file in `examples/`, so they can serve as a regression suite rather
+/// than as documentation nobody runs.
+const EXAMPLES: [(&str, &str); 5] = [
+    ("hello.glue", include_str!("../../examples/hello.glue")),
+    (
+        "literals.glue",
+        include_str!("../../examples/literals.glue"),
+    ),
+    (
+        "expressions.glue",
+        include_str!("../../examples/expressions.glue"),
+    ),
+    (
+        "statements.glue",
+        include_str!("../../examples/statements.glue"),
+    ),
+    (
+        "declarations.glue",
+        include_str!("../../examples/declarations.glue"),
+    ),
+];
+
+/// Every example lexes clean, parses clean, and comes back out byte for byte.
 #[test]
-fn the_example_program_parses() {
-    let source = include_str!("../../examples/hello.glue");
-    let parsed = parse(source);
+fn the_examples_parse_cleanly() {
+    for (name, source) in EXAMPLES {
+        let lexed = tokenizer::tokenize(source);
+        assert!(
+            lexed.diagnostics.is_empty(),
+            "{name} did not lex cleanly: {:?}",
+            lexed.diagnostics
+        );
+
+        let parsed = parse(source);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "{name} did not parse cleanly: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(
+            text_of(&parsed, source),
+            source,
+            "{name} did not round-trip through the tree"
+        );
+    }
+}
+
+/// The examples cover the whole grammar.
+///
+/// This is what makes "every expression form and every statement" a fact
+/// rather than a claim: adding a `NodeKind` without an example that produces
+/// it fails here, and the examples stay honest as the language grows.
+#[test]
+fn every_kind_has_an_example() {
+    let mut seen = std::collections::HashSet::new();
+    for (_, source) in EXAMPLES {
+        let parsed = parse(source);
+        let tree = &parsed.tree;
+        let mut stack = vec![tree.root()];
+        while let Some(node) = stack.pop() {
+            seen.insert(tree.kind(node));
+            stack.extend(tree.children(node).filter_map(|child| match child {
+                Child::Node(child) => Some(child),
+                Child::Token(_) => None,
+            }));
+        }
+    }
+
+    let missing: Vec<_> = NodeKind::ALL
+        .iter()
+        // The examples all parse cleanly, so an error node is exactly what
+        // should never turn up in one.
+        .filter(|kind| **kind != NodeKind::Error && !seen.contains(kind))
+        .collect();
+    assert!(missing.is_empty(), "no example produces {missing:?}");
     assert!(
-        parsed.diagnostics.is_empty(),
-        "hello.glue did not parse cleanly: {:?}",
-        parsed.diagnostics
-    );
-    assert_eq!(
-        text_of(&parsed, source),
-        source,
-        "hello.glue did not round-trip through the tree"
+        !seen.contains(&NodeKind::Error),
+        "an example produced an error node"
     );
 }
 
