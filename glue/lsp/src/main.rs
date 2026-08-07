@@ -14,8 +14,10 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 mod line_index;
 mod semantic;
+mod syntax_tree;
 
 use line_index::LineIndex;
+use syntax_tree::{SyntaxNodeInfo, SyntaxTreeParams};
 
 struct Backend {
     client: Client,
@@ -88,6 +90,23 @@ impl Backend {
                 ..Diagnostic::default()
             })
             .collect()
+    }
+}
+
+impl Backend {
+    /// `glue/syntaxTree`. Not an LSP method — see [`syntax_tree`] for why it
+    /// exists and what the extension does with it.
+    async fn syntax_tree(&self, params: SyntaxTreeParams) -> Result<Option<SyntaxNodeInfo>> {
+        let Some(text) = self.text_of(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&text);
+        let parsed = parser::parse_expression(&text);
+        Ok(Some(syntax_tree::describe(&parsed.tree, &text, &index)))
+    }
+
+    fn text_of(&self, uri: &Url) -> Option<String> {
+        self.documents.lock().unwrap().get(uri).cloned()
     }
 }
 
@@ -181,13 +200,7 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let Some(text) = self
-            .documents
-            .lock()
-            .unwrap()
-            .get(&params.text_document.uri)
-            .cloned()
-        else {
+        let Some(text) = self.text_of(&params.text_document.uri) else {
             return Ok(None);
         };
 
@@ -208,6 +221,8 @@ impl LanguageServer for Backend {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(Backend::new);
+    let (service, socket) = LspService::build(Backend::new)
+        .custom_method("glue/syntaxTree", Backend::syntax_tree)
+        .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }

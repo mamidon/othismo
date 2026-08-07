@@ -1,17 +1,16 @@
-//! Semantic tokens: the syntax tree, made visible.
+//! Semantic tokens: where one token ends and the next begins.
 //!
-//! Not syntax highlighting. Highlighting colors a token by what it *is* — a
-//! keyword, a string — and none of that would tell you whether the parser
-//! agreed with you. This colors a token by **how deeply nested it is**, the way
-//! bracket-pair colorization does, so the shape on screen is the shape of the
-//! tree and a precedence mistake is something you can see rather than something
-//! you have to dump the tree to find.
+//! Not syntax highlighting, and no longer depth either. Colour is a *nominal*
+//! channel — six hues say "different", never "deeper", so reading nesting off
+//! them meant decoding a legend in your head. Depth moved to the background
+//! tint the extension paints, where brightness is ordinal and reads as depth
+//! without being explained.
 //!
-//! Depth alone leaves runs of same-colored tokens — the `,` and `)` of an
-//! argument list sit at one depth and blur together. So the one remaining
-//! channel, a modifier the theme underlines, alternates token by token. Colour
-//! says where you are in the tree; the underline says where one token ends and
-//! the next begins.
+//! That leaves the text colour free for what it is actually good at:
+//! distinguishing one token from its neighbour. The palette cycles per token,
+//! so adjacent tokens never share a colour and lexing mistakes — a `>>` that
+//! should have been two `>`, a suffix swallowed into a literal — are visible
+//! rather than inferred.
 
 use parser::{Child, NodeId, Tree};
 use tokenizer::{Token, TokenKind};
@@ -21,23 +20,16 @@ use crate::line_index::LineIndex;
 
 /// The palette, by name. Each of these is styled in the extension's
 /// `package.json`; adding one here means adding a colour there.
-const DEPTH_TYPES: [&str; 6] = [
-    "glueDepth0",
-    "glueDepth1",
-    "glueDepth2",
-    "glueDepth3",
-    "glueDepth4",
-    "glueDepth5",
+const TOKEN_TYPES: [&str; 8] = [
+    "glueTok0", "glueTok1", "glueTok2", "glueTok3", "glueTok4", "glueTok5", "glueTok6", "glueTok7",
 ];
 
-/// How many depths get their own colour before the palette repeats.
-pub const DEPTHS: u32 = DEPTH_TYPES.len() as u32;
-
-/// Bit 0 of the modifier set: on for every other token, off for the rest.
-const ALTERNATE: u32 = 1;
+/// How many tokens go by before the palette repeats. Eight is enough that a
+/// repeat is never adjacent, and few enough that every colour stays legible.
+pub const COLOURS: u32 = TOKEN_TYPES.len() as u32;
 
 pub fn token_types() -> Vec<SemanticTokenType> {
-    DEPTH_TYPES
+    TOKEN_TYPES
         .iter()
         .copied()
         .map(SemanticTokenType::new)
@@ -45,20 +37,19 @@ pub fn token_types() -> Vec<SemanticTokenType> {
 }
 
 pub fn token_modifiers() -> Vec<SemanticTokenModifier> {
-    vec![SemanticTokenModifier::new("glueBoundary")]
+    Vec::new()
 }
 
 /// Every token in `tree`, encoded for `textDocument/semanticTokens/full`.
 pub fn tokens(tree: &Tree, index: &LineIndex) -> Vec<SemanticToken> {
     let mut flat = Vec::new();
-    walk(tree, tree.root(), 0, &mut flat);
+    walk(tree, tree.root(), &mut flat);
 
     let mut encoded = Vec::new();
     let (mut previous_line, mut previous_start) = (0, 0);
 
-    for (order, (token, depth)) in flat.iter().enumerate() {
-        let modifiers = if order % 2 == 0 { 0 } else { ALTERNATE };
-        let token_type = depth % DEPTHS;
+    for (order, token) in flat.iter().enumerate() {
+        let token_type = order as u32 % COLOURS;
 
         // A semantic token may not span lines, so a multiline string or block
         // comment becomes one token per line it covers.
@@ -74,7 +65,7 @@ pub fn tokens(tree: &Tree, index: &LineIndex) -> Vec<SemanticToken> {
                 delta_start,
                 length,
                 token_type,
-                token_modifiers_bitset: modifiers,
+                token_modifiers_bitset: 0,
             });
             (previous_line, previous_start) = (line, start);
         }
@@ -83,16 +74,15 @@ pub fn tokens(tree: &Tree, index: &LineIndex) -> Vec<SemanticToken> {
     encoded
 }
 
-/// Tokens in source order, each with the number of nodes enclosing it.
+/// Tokens in source order.
 ///
-/// Whitespace is left out — it has no depth worth seeing and would only cost
-/// the client work. Comments stay in, since where a comment attached is exactly
-/// the sort of thing this view is for.
-fn walk(tree: &Tree, node: NodeId, depth: u32, out: &mut Vec<(Token, u32)>) {
+/// Whitespace is left out — colouring it says nothing, since there is no glyph
+/// to colour. Comments stay in, and get a colour like anything else.
+fn walk(tree: &Tree, node: NodeId, out: &mut Vec<Token>) {
     for child in tree.children(node) {
         match child {
-            Child::Node(child) => walk(tree, child, depth + 1, out),
-            Child::Token(token) if token.kind != TokenKind::Whitespace => out.push((token, depth)),
+            Child::Node(child) => walk(tree, child, out),
+            Child::Token(token) if token.kind != TokenKind::Whitespace => out.push(token),
             Child::Token(_) => {}
         }
     }
@@ -136,27 +126,32 @@ mod tests {
         )
     }
 
-    /// `a+b*c` nests `b*c` one level deeper than `a`, and the colours say so.
+    /// The palette cycles per token, so no two neighbours share a colour.
     #[test]
-    fn depth_is_the_colour() {
-        let types: Vec<_> = of("a+b*c").iter().map(|t| t.token_type).collect();
-        //                     a  +  b  *  c
-        assert_eq!(types, [2, 1, 3, 2, 3]);
-    }
-
-    /// Adjacent tokens always differ in colour, underline, or both.
-    #[test]
-    fn adjacent_tokens_are_distinguishable() {
-        for source in ["a+b*c", "f(a,b)", "a.b.c", "(a)"] {
+    fn adjacent_tokens_never_share_a_colour() {
+        for source in [
+            "a+b*c",
+            "f(a,b)",
+            "a.b.c",
+            "(a)",
+            "a as u64 + b as u64 * c as u64 - d",
+        ] {
             let encoded = of(source);
             for pair in encoded.windows(2) {
-                assert!(
-                    pair[0].token_type != pair[1].token_type
-                        || pair[0].token_modifiers_bitset != pair[1].token_modifiers_bitset,
-                    "{source:?} has two indistinguishable tokens in a row"
+                assert_ne!(
+                    pair[0].token_type, pair[1].token_type,
+                    "{source:?} has two same-coloured tokens in a row"
                 );
             }
         }
+    }
+
+    /// And it is the token's position in the stream that picks the colour,
+    /// not anything about the token itself — two `+`s in a row look different.
+    #[test]
+    fn colour_comes_from_order() {
+        let types: Vec<_> = of("a+b+c").iter().map(|t| t.token_type).collect();
+        assert_eq!(types, [0, 1, 2, 3, 4]);
     }
 
     /// Positions are deltas from the previous token, per the protocol.

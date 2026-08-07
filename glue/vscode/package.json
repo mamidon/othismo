@@ -28,37 +28,58 @@
       }
     ],
     "semanticTokenTypes": [
-      { "id": "glueDepth0", "description": "Syntax tree depth 0 (mod 6)" },
-      { "id": "glueDepth1", "description": "Syntax tree depth 1 (mod 6)" },
-      { "id": "glueDepth2", "description": "Syntax tree depth 2 (mod 6)" },
-      { "id": "glueDepth3", "description": "Syntax tree depth 3 (mod 6)" },
-      { "id": "glueDepth4", "description": "Syntax tree depth 4 (mod 6)" },
-      { "id": "glueDepth5", "description": "Syntax tree depth 5 (mod 6)" }
-    ],
-    "semanticTokenModifiers": [
-      {
-        "id": "glueBoundary",
-        "description": "Alternates token by token, so adjacent tokens at the same depth stay distinguishable"
-      }
+      { "id": "glueTok0", "description": "Token colour 0 of 8; the palette cycles per token" },
+      { "id": "glueTok1", "description": "Token colour 1 of 8; the palette cycles per token" },
+      { "id": "glueTok2", "description": "Token colour 2 of 8; the palette cycles per token" },
+      { "id": "glueTok3", "description": "Token colour 3 of 8; the palette cycles per token" },
+      { "id": "glueTok4", "description": "Token colour 4 of 8; the palette cycles per token" },
+      { "id": "glueTok5", "description": "Token colour 5 of 8; the palette cycles per token" },
+      { "id": "glueTok6", "description": "Token colour 6 of 8; the palette cycles per token" },
+      { "id": "glueTok7", "description": "Token colour 7 of 8; the palette cycles per token" }
     ],
     "configurationDefaults": {
       "editor.semanticTokenColorCustomizations": {
         "enabled": true,
         "rules": {
-          "glueDepth0": "#d13b6e",
-          "glueDepth1": "#cc6a00",
-          "glueDepth2": "#4f9a2f",
-          "glueDepth3": "#1f8fa3",
-          "glueDepth4": "#4a6fd4",
-          "glueDepth5": "#9b59d0",
-          "glueDepth0.glueBoundary": { "foreground": "#d13b6e", "fontStyle": "underline" },
-          "glueDepth1.glueBoundary": { "foreground": "#cc6a00", "fontStyle": "underline" },
-          "glueDepth2.glueBoundary": { "foreground": "#4f9a2f", "fontStyle": "underline" },
-          "glueDepth3.glueBoundary": { "foreground": "#1f8fa3", "fontStyle": "underline" },
-          "glueDepth4.glueBoundary": { "foreground": "#4a6fd4", "fontStyle": "underline" },
-          "glueDepth5.glueBoundary": { "foreground": "#9b59d0", "fontStyle": "underline" }
+          "glueTok0": "#d13b6e",
+          "glueTok1": "#cc6a00",
+          "glueTok2": "#7a8c1a",
+          "glueTok3": "#2f9a5c",
+          "glueTok4": "#1f8fa3",
+          "glueTok5": "#4a6fd4",
+          "glueTok6": "#8a5cd6",
+          "glueTok7": "#b8479b"
         }
       }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "glueSyntaxTree",
+          "name": "Glue Syntax Tree",
+          "when": "resourceLangId == glue"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "glue.toggleDepthTint",
+        "title": "Toggle Depth Tint",
+        "category": "Glue"
+      },
+      {
+        "command": "glue.revealNode",
+        "title": "Reveal Node in Editor",
+        "category": "Glue"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "glue.revealNode",
+          "when": "false"
+        }
+      ]
     },
     "configuration": {
       "title": "Glue",
