@@ -58,7 +58,7 @@ impl Backend {
     fn diagnose(&self, text: &str) -> Vec<Diagnostic> {
         let index = LineIndex::new(text);
         let lexed = tokenizer::tokenize(text);
-        let parsed = parser::parse_expression(text);
+        let parsed = parser::parse(text);
 
         let lexical = lexed.diagnostics.iter().map(|diagnostic| {
             (
@@ -101,7 +101,7 @@ impl Backend {
             return Ok(None);
         };
         let index = LineIndex::new(&text);
-        let parsed = parser::parse_expression(&text);
+        let parsed = parser::parse(&text);
         Ok(Some(syntax_tree::describe(&parsed.tree, &text, &index)))
     }
 
@@ -205,7 +205,7 @@ impl LanguageServer for Backend {
         };
 
         let index = LineIndex::new(&text);
-        let parsed = parser::parse_expression(&text);
+        let parsed = parser::parse(&text);
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: semantic::tokens(&parsed.tree, &index),

@@ -5,7 +5,7 @@ use tokenizer::{Span, Token, TokenKind};
 use crate::builder::TreeBuilder;
 use crate::diagnostic::DiagnosticKind;
 use crate::syntax::{Child, NodeKind, Tree};
-use crate::{Parse, parse_expression};
+use crate::{Parse, parse};
 
 fn tok(kind: TokenKind, start: u32, end: u32) -> Token {
     Token::new(kind, Span::new(start as usize, end as usize))
@@ -109,13 +109,13 @@ fn an_empty_node_is_still_a_node() {
 /// how §2's table groups the operands, and the operators themselves are the
 /// readable way to say so.
 fn shape(source: &str) -> String {
-    let parse = parse_expression(source);
+    let parsed = parse(source);
     assert!(
-        parse.diagnostics.is_empty(),
+        parsed.diagnostics.is_empty(),
         "{source:?} did not parse cleanly: {:?}",
-        parse.diagnostics
+        parsed.diagnostics
     );
-    grouped(&parse, source)
+    grouped(&parsed, source)
 }
 
 /// The tree written back out with each *grouping* node's extent
@@ -125,7 +125,7 @@ fn shape(source: &str) -> String {
 /// Nodes that already carry their own delimiters, and leaves, are transparent
 /// — bracketing `f()`'s argument list would say nothing about precedence.
 /// Trivia is left in place, since these are the tokens the tree really holds.
-fn grouped(parse: &Parse, source: &str) -> String {
+fn grouped(parsed: &Parse, source: &str) -> String {
     fn node(tree: &Tree, id: crate::NodeId, source: &str, out: &mut String) {
         let parens = !matches!(
             tree.kind(id),
@@ -155,7 +155,7 @@ fn grouped(parse: &Parse, source: &str) -> String {
     }
 
     let mut out = String::new();
-    node(&parse.tree, parse.tree.root(), source, &mut out);
+    node(&parsed.tree, parsed.tree.root(), source, &mut out);
     out
 }
 
@@ -216,16 +216,16 @@ fn postfix_chains_left() {
 /// tree must not answer that question early.
 #[test]
 fn a_method_call_is_not_a_call_of_a_field() {
-    let parse = parse_expression("a.b(c)");
-    assert!(parse.diagnostics.is_empty());
+    let parsed = parse("a.b(c)");
+    assert!(parsed.diagnostics.is_empty());
     assert_eq!(
-        parse.tree.dump(),
+        parsed.tree.dump(),
         "(SourceFile (MethodCallExpr (NameExpr Ident) Dot Ident (ArgList LParen (NameExpr Ident) RParen)))"
     );
 
-    let parse = parse_expression("a.b");
+    let parsed = parse("a.b");
     assert_eq!(
-        parse.tree.dump(),
+        parsed.tree.dump(),
         "(SourceFile (FieldExpr (NameExpr Ident) Dot Ident))"
     );
 }
@@ -236,9 +236,9 @@ fn parens_group_and_unit_is_its_own_thing() {
     // the node. A `ParenExpr` adds none of its own.
     assert_eq!(shape("(a+b)*c"), "(((a+b))*c)");
 
-    let parse = parse_expression("()");
-    assert!(parse.diagnostics.is_empty());
-    assert_eq!(parse.tree.dump(), "(SourceFile (UnitExpr LParen RParen))");
+    let parsed = parse("()");
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.tree.dump(), "(SourceFile (UnitExpr LParen RParen))");
 }
 
 #[test]
@@ -258,10 +258,308 @@ fn casts_take_types() {
     );
 }
 
+// ---- Statements -----------------------------------------------------------
+
+/// Parses, asserts it was clean, and renders node kinds only — statements are
+/// about structure, not grouping, so `dump` says more than `grouped` here.
+fn tree(source: &str) -> String {
+    let parsed = parse(source);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{source:?} did not parse cleanly: {:?}",
+        parsed.diagnostics
+    );
+    parsed.tree.dump()
+}
+
+/// Nodes only, with tokens and trivia dropped, so a statement's shape is
+/// readable without every `;` and space in the way.
+fn skeleton(source: &str) -> String {
+    let parsed = parse(source);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{source:?} did not parse cleanly: {:?}",
+        parsed.diagnostics
+    );
+    fn node(t: &Tree, id: crate::NodeId, out: &mut String) {
+        out.push('(');
+        out.push_str(&format!("{:?}", t.kind(id)));
+        for child in t.children(id) {
+            if let Child::Node(child) = child {
+                out.push(' ');
+                node(t, child, out);
+            }
+        }
+        out.push(')');
+    }
+    let mut out = String::new();
+    node(&parsed.tree, parsed.tree.root(), &mut out);
+    out
+}
+
+#[test]
+fn bindings() {
+    assert_eq!(
+        skeleton("let n = 42;"),
+        "(SourceFile (LetStmt (NamePat) (LiteralExpr)))"
+    );
+    assert_eq!(
+        skeleton("let n: u32 = 42;"),
+        "(SourceFile (LetStmt (NamePat) (NameType) (LiteralExpr)))"
+    );
+    // `mut` gates mutation, not rebinding (§3) — but it is still just a token.
+    assert_eq!(
+        skeleton("let mut count = 0;"),
+        "(SourceFile (LetStmt (NamePat) (LiteralExpr)))"
+    );
+}
+
+/// §3 makes assignment a statement, so `if x = 1 { … }` cannot compile — the
+/// typo class is gone by construction rather than by lint.
+#[test]
+fn assignment_is_a_statement() {
+    assert_eq!(
+        skeleton("count = count + 1;"),
+        "(SourceFile (AssignStmt (NameExpr) (BinaryExpr (NameExpr) (LiteralExpr))))"
+    );
+    assert_eq!(
+        skeleton("count += 1;"),
+        "(SourceFile (AssignStmt (NameExpr) (LiteralExpr)))"
+    );
+    // The left side is a place: a name, a field, or an index (§3).
+    assert_eq!(
+        skeleton("p.x = 5;"),
+        "(SourceFile (AssignStmt (FieldExpr (NameExpr)) (LiteralExpr)))"
+    );
+    assert_eq!(
+        skeleton("a[i] <<= 2;"),
+        "(SourceFile (AssignStmt (IndexExpr (NameExpr) (NameExpr)) (LiteralExpr)))"
+    );
+}
+
+/// A file is a block (§3): statements, then an optional trailing expression
+/// with no `;` that is the file's value. That is all of goal §2.1.
+#[test]
+fn a_file_is_a_block() {
+    assert_eq!(
+        skeleton("let x = 2;\nx * 21"),
+        "(SourceFile (LetStmt (NamePat) (LiteralExpr)) (BinaryExpr (NameExpr) (LiteralExpr)))"
+    );
+    // A bare expression is a whole program.
+    assert_eq!(skeleton("42"), "(SourceFile (LiteralExpr))");
+    // And so is nothing at all.
+    assert_eq!(skeleton(""), "(SourceFile)");
+}
+
+#[test]
+fn blocks_are_expressions() {
+    assert_eq!(
+        skeleton("let y = { let t = f(); t * 2 };"),
+        "(SourceFile (LetStmt (NamePat) (BlockExpr \
+         (LetStmt (NamePat) (CallExpr (NameExpr) (ArgList))) \
+         (BinaryExpr (NameExpr) (LiteralExpr)))))"
+    );
+    // The trailing `;` discards, so the block's value is unit — same tree
+    // shape, one more ExprStmt.
+    assert_eq!(
+        skeleton("{ f(); }"),
+        "(SourceFile (BlockExpr (ExprStmt (CallExpr (NameExpr) (ArgList)))))"
+    );
+}
+
+/// §4: braces mandatory, condition unparenthesized, and `else if` is `else`
+/// followed by another `if` rather than a keyword of its own.
+#[test]
+fn conditionals() {
+    assert_eq!(
+        skeleton("let x = if ok { 42 } else { 0 };"),
+        "(SourceFile (LetStmt (NamePat) (IfExpr (NameExpr) (BlockExpr (LiteralExpr)) \
+         (BlockExpr (LiteralExpr)))))"
+    );
+    assert_eq!(
+        skeleton("if a { 1 } else if b { 2 } else { 3 }"),
+        "(SourceFile (IfExpr (NameExpr) (BlockExpr (LiteralExpr)) \
+         (IfExpr (NameExpr) (BlockExpr (LiteralExpr)) (BlockExpr (LiteralExpr)))))"
+    );
+}
+
+/// A block-shaped expression standing as a statement needs no `;`.
+#[test]
+fn block_like_statements_need_no_semicolon() {
+    assert_eq!(
+        skeleton("if a { 1 } else { 2 }\nlet x = 1;"),
+        "(SourceFile (ExprStmt (IfExpr (NameExpr) (BlockExpr (LiteralExpr)) \
+         (BlockExpr (LiteralExpr)))) (LetStmt (NamePat) (LiteralExpr)))"
+    );
+    // A plain expression in the same position does need one.
+    assert_eq!(
+        diagnostics("f() let x = 1;"),
+        [DiagnosticKind::ExpectedSemicolon]
+    );
+}
+
+#[test]
+fn loops_and_jumps() {
+    assert_eq!(
+        skeleton("while total < 10 { total = add(total, 1); }"),
+        "(SourceFile (WhileStmt (BinaryExpr (NameExpr) (LiteralExpr)) \
+         (BlockExpr (AssignStmt (NameExpr) (CallExpr (NameExpr) \
+         (ArgList (NameExpr) (LiteralExpr)))))))"
+    );
+    assert_eq!(
+        skeleton("while c { break; continue; }"),
+        "(SourceFile (WhileStmt (NameExpr) (BlockExpr (BreakStmt) (ContinueStmt))))"
+    );
+    assert_eq!(skeleton("return;"), "(SourceFile (ReturnStmt))");
+    assert_eq!(
+        skeleton("return value;"),
+        "(SourceFile (ReturnStmt (NameExpr)))"
+    );
+}
+
+#[test]
+fn declarations() {
+    assert_eq!(
+        skeleton("fn add(a: u64, b: u64) -> u64 { a + b }"),
+        "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) \
+         (RetType (NameType)) (BlockExpr (BinaryExpr (NameExpr) (NameExpr)))))"
+    );
+    // §5: the return type is omitted when it is unit.
+    assert_eq!(
+        skeleton("fn log(message: Str) { }"),
+        "(SourceFile (FnDecl (ParamList (Param (NameType))) (BlockExpr)))"
+    );
+    // §5: `mut` on a parameter is the parameter's, not the type's.
+    assert_eq!(
+        skeleton("fn advance(c: mut Counter, by: u64) { }"),
+        "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) (BlockExpr)))"
+    );
+    assert_eq!(
+        skeleton("struct Point {\n  x: s64,\n  y: s64,\n}"),
+        "(SourceFile (StructDecl (FieldDeclList (FieldDecl (NameType)) (FieldDecl (NameType)))))"
+    );
+    assert_eq!(
+        skeleton("type InstanceId = u64;"),
+        "(SourceFile (TypeAliasDecl (NameType)))"
+    );
+}
+
+/// §5: a `fn` may be declared inside a block, and captures nothing.
+#[test]
+fn declarations_nest() {
+    assert_eq!(
+        skeleton("fn outer() { fn inner() { } inner() }"),
+        "(SourceFile (FnDecl (ParamList) (BlockExpr (FnDecl (ParamList) (BlockExpr)) \
+         (CallExpr (NameExpr) (ArgList)))))"
+    );
+}
+
+#[test]
+fn struct_literals() {
+    assert_eq!(
+        skeleton("let origin = Point { x: 0, y: 0 };"),
+        "(SourceFile (LetStmt (NamePat) (StructLitExpr (NameExpr) \
+         (FieldInitList (FieldInit (LiteralExpr)) (FieldInit (LiteralExpr))))))"
+    );
+}
+
+/// A struct literal is banned in a condition, so the brace there is the body.
+/// Without the ban `if flag { … }` would read `flag { … }` as a literal and
+/// then find no body at all.
+#[test]
+fn a_condition_takes_its_brace_as_the_body() {
+    assert_eq!(
+        skeleton("if flag { 1 } else { 2 }"),
+        "(SourceFile (IfExpr (NameExpr) (BlockExpr (LiteralExpr)) (BlockExpr (LiteralExpr))))"
+    );
+    assert_eq!(
+        skeleton("while ready { step(); }"),
+        "(SourceFile (WhileStmt (NameExpr) (BlockExpr (ExprStmt (CallExpr (NameExpr) (ArgList))))))"
+    );
+    // The ban does not reach inside brackets, where a brace is unambiguous.
+    assert_eq!(
+        skeleton("if f(Point { x: 0 }) { 1 }"),
+        "(SourceFile (IfExpr (CallExpr (NameExpr) (ArgList (StructLitExpr (NameExpr) \
+         (FieldInitList (FieldInit (LiteralExpr)))))) (BlockExpr (LiteralExpr))))"
+    );
+    assert_eq!(
+        skeleton("if (Point { x: 0 }) == p { 1 }"),
+        "(SourceFile (IfExpr (BinaryExpr (ParenExpr (StructLitExpr (NameExpr) \
+         (FieldInitList (FieldInit (LiteralExpr))))) (NameExpr)) (BlockExpr (LiteralExpr))))"
+    );
+}
+
+#[test]
+fn lambdas() {
+    assert_eq!(
+        skeleton("let inc = |x: u64| x + 1;"),
+        "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam (NameType))) \
+         (BinaryExpr (NameExpr) (LiteralExpr)))))"
+    );
+    // §5: parameter types come from context, unlike a `fn`.
+    assert_eq!(
+        skeleton("let inc = |x| x + 1;"),
+        "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam)) \
+         (BinaryExpr (NameExpr) (LiteralExpr)))))"
+    );
+    // §5: `||` in operand position opens a lambda with no parameters; between
+    // operands it is still the operator.
+    assert_eq!(
+        skeleton("let go = || work();"),
+        "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList) \
+         (CallExpr (NameExpr) (ArgList)))))"
+    );
+    assert_eq!(
+        skeleton("a || b"),
+        "(SourceFile (BinaryExpr (NameExpr) (NameExpr)))"
+    );
+}
+
+/// §1: a doc comment attaches to the declaration that follows it, and one
+/// attached to nothing is a warning rather than an error.
+#[test]
+fn doc_comments_attach_forward() {
+    assert_eq!(
+        tree("/// Adds.\nfn add() { }"),
+        "(SourceFile (FnDecl DocComment Whitespace Fn Whitespace Ident \
+         (ParamList LParen RParen) (BlockExpr Whitespace LBrace Whitespace RBrace)))"
+    );
+
+    let parsed = parse("fn f() { }\n/// Attached to nothing.\n");
+    assert_eq!(
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| (d.kind, d.severity()))
+            .collect::<Vec<_>>(),
+        [(
+            DiagnosticKind::DanglingDocComment,
+            tokenizer::Severity::Warning
+        )]
+    );
+}
+
+/// The example that could not parse until now.
+#[test]
+fn the_example_program_parses() {
+    let source = include_str!("../../examples/hello.glue");
+    let parsed = parse(source);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "hello.glue did not parse cleanly: {:?}",
+        parsed.diagnostics
+    );
+    assert_eq!(
+        text_of(&parsed, source),
+        source,
+        "hello.glue did not round-trip through the tree"
+    );
+}
+
 // ---- Recovery -------------------------------------------------------------
 
 fn diagnostics(source: &str) -> Vec<DiagnosticKind> {
-    parse_expression(source)
+    parse(source)
         .diagnostics
         .into_iter()
         .map(|diagnostic| diagnostic.kind)
@@ -288,13 +586,17 @@ fn comparison_does_not_chain() {
 
 #[test]
 fn a_missing_operand_still_parses() {
-    let parse = parse_expression("1 +");
+    let parsed = parse("1 +");
     assert_eq!(
-        parse.diagnostics.iter().map(|d| d.kind).collect::<Vec<_>>(),
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| d.kind)
+            .collect::<Vec<_>>(),
         [DiagnosticKind::ExpectedExpression]
     );
     assert_eq!(
-        parse.tree.dump(),
+        parsed.tree.dump(),
         "(SourceFile (BinaryExpr (LiteralExpr Int) Whitespace Plus (Error)))"
     );
 }
@@ -313,6 +615,7 @@ fn an_unclosed_paren_is_reported_once() {
 #[test]
 fn every_byte_survives_a_bad_parse() {
     for source in [
+        // Expressions.
         "1 + ",
         "( a + ",
         "a b c",
@@ -324,18 +627,75 @@ fn every_byte_survives_a_bad_parse() {
         "]]]",
         "a[",
         "1 +++ 2",
+        // Statements.
+        "let",
+        "let x",
+        "let x =",
+        "let x = ;",
+        "let = 1;",
+        "fn",
+        "fn f",
+        "fn f(",
+        "fn f() {",
+        "fn f(a) { }",
+        "fn f(a:) { }",
+        "struct",
+        "struct S {",
+        "struct S { x }",
+        "type",
+        "type T =",
+        "while",
+        "while c",
+        "while { }",
+        "if",
+        "if c",
+        "if c { } else",
+        "return",
+        "break",
+        "{",
+        "}",
+        ";;;",
+        "let x = 1 let y = 2;",
+        "|x",
+        "|x|",
+        "P { x: }",
+        "P { : 1 }",
+        "/// dangling\n",
     ] {
-        let parse = parse_expression(source);
+        let parsed = parse(source);
         assert_eq!(
-            text_of(&parse, source),
+            text_of(&parsed, source),
             source,
             "{source:?} did not round-trip through the tree"
         );
     }
 }
 
+/// Every prefix of a real program parses.
+///
+/// Half-typed input is the *normal* case for an editor, not the exceptional
+/// one, and a prefix is exactly what half-typed looks like. Each one must
+/// terminate, produce a tree, and give the source back — the three things
+/// totality and losslessness actually promise.
+#[test]
+fn every_truncation_of_the_example_parses() {
+    let source = include_str!("../../examples/hello.glue");
+    for end in 0..=source.len() {
+        if !source.is_char_boundary(end) {
+            continue;
+        }
+        let prefix = &source[..end];
+        let parsed = parse(prefix);
+        assert_eq!(
+            text_of(&parsed, prefix),
+            prefix,
+            "the first {end} bytes did not round-trip"
+        );
+    }
+}
+
 /// Every token in the tree, in order — which must be the source back.
-fn text_of(parse: &Parse, source: &str) -> String {
+fn text_of(parsed: &Parse, source: &str) -> String {
     fn node(tree: &Tree, id: crate::NodeId, source: &str, out: &mut String) {
         for child in tree.children(id) {
             match child {
@@ -346,6 +706,6 @@ fn text_of(parse: &Parse, source: &str) -> String {
     }
 
     let mut out = String::new();
-    node(&parse.tree, parse.tree.root(), source, &mut out);
+    node(&parsed.tree, parsed.tree.root(), source, &mut out);
     out
 }

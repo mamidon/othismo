@@ -32,6 +32,16 @@ pub struct Cursor {
     pos: usize,
     builder: TreeBuilder,
     diagnostics: Vec<Diagnostic>,
+    /// Set while parsing a condition. A struct literal is banned there because
+    /// `if p == Point { … }` would otherwise take the brace as the start of the
+    /// literal rather than of the body, and no lookahead distinguishes the two.
+    ///
+    /// A field on the cursor rather than a parameter threaded through every
+    /// expression rule: it is inherited by nested rules, which is exactly the
+    /// behaviour wanted, and cleared by any construct that reintroduces a
+    /// bracket — inside `(…)` or an argument list, a brace is unambiguous
+    /// again.
+    no_struct_literal: bool,
 }
 
 impl Cursor {
@@ -48,7 +58,28 @@ impl Cursor {
             pos: 0,
             builder: TreeBuilder::new(),
             diagnostics: Vec::new(),
+            no_struct_literal: false,
         }
+    }
+
+    /// Whether a `{` after a name opens a struct literal here.
+    pub fn struct_literals_allowed(&self) -> bool {
+        !self.no_struct_literal
+    }
+
+    /// Sets the restriction and hands back what it was, for the caller to put
+    /// back. Save-and-restore rather than a stack, because the nesting is the
+    /// call stack's already.
+    pub fn set_struct_literals_allowed(&mut self, allowed: bool) -> bool {
+        let previous = !self.no_struct_literal;
+        self.no_struct_literal = !allowed;
+        previous
+    }
+
+    /// How far the cursor has got, for a caller that needs to know whether a
+    /// rule made progress. Only meaningful compared against itself.
+    pub fn position(&self) -> usize {
+        self.pos
     }
 
     // ---- Looking ----------------------------------------------------------

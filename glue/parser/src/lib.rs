@@ -21,6 +21,7 @@ pub mod builder;
 pub mod cursor;
 pub mod diagnostic;
 pub mod expr;
+pub mod stmt;
 pub mod syntax;
 
 #[cfg(test)]
@@ -31,15 +32,17 @@ pub use crate::cursor::{Cursor, Parse};
 pub use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
 pub use crate::syntax::{Child, Event, NodeId, NodeKind, Tree};
 
-/// Parses `source` as a single expression.
+/// Parses `source` as a file.
 ///
-/// The entry point the grammar can currently justify: §3's top level is a
-/// block of statements, and statements aren't parsed yet. This becomes
-/// `parse`, over a [`NodeKind::SourceFile`] of statements, when they are.
-pub fn parse_expression(source: &str) -> Parse {
+/// A file is a block (§3): statements, optionally ending in an expression with
+/// no `;` that is the file's value. So `let x = 2; x * 21` and `42` are both
+/// whole programs, which is the entirety of goal §2.1's "a bare expression is
+/// a valid program" — the block rule applied to the outermost block, rather
+/// than a special case anywhere.
+pub fn parse(source: &str) -> Parse {
     let mut cursor = Cursor::new(tokenizer::tokenize(source));
     let file = cursor.open(NodeKind::SourceFile);
-    expr::expr(&mut cursor);
+    stmt::statements(&mut cursor, tokenizer::TokenKind::Eof);
     cursor.sweep_leftovers();
     cursor.close(file);
     cursor.finish()

@@ -38,16 +38,35 @@ pub enum DiagnosticKind {
     ExpectedType,
     /// `.` with nothing usable after it.
     ExpectedFieldName,
+    /// The name a `let`, `fn`, `struct`, `type`, or parameter binds.
+    ExpectedName,
+    ExpectedSemicolon,
+    ExpectedColon,
+    /// `let x;` — §3 requires an initializer, so there is no declare-then-assign
+    /// and no definite-assignment analysis to specify.
+    ExpectedInitializer,
+    /// §5 requires parameter types: signatures are annotated, bodies inferred.
+    ExpectedParameterType,
 
     // ---- Unclosed things --------------------------------------------------
+    ExpectedOpeningParen,
     ExpectedClosingParen,
     ExpectedClosingBracket,
+    ExpectedOpeningBrace,
+    ExpectedClosingBrace,
+    /// The `|` closing a lambda's parameters.
+    ExpectedClosingPipe,
 
     // ---- Misuse -----------------------------------------------------------
     /// `a < b < c`. §2 makes comparison non-associative so that the error
     /// names the actual mistake, rather than letting it fail later as a
     /// `bool` compared against a number.
     ChainedComparison,
+    /// A `;` where no statement preceded it. §3 has no empty statement.
+    StraySemicolon,
+    /// §1 promises this one: a doc comment attached to nothing is a warning,
+    /// and the parser is what notices.
+    DanglingDocComment,
 
     // ---- Leftovers --------------------------------------------------------
     /// Input the parser could not attach to anything. The tokens are kept in
@@ -63,16 +82,32 @@ impl DiagnosticKind {
             ExpectedExpression => "expected an expression",
             ExpectedType => "expected a type",
             ExpectedFieldName => "expected a field or method name after `.`",
+            ExpectedName => "expected a name",
+            ExpectedSemicolon => "expected a `;`",
+            ExpectedColon => "expected a `:`",
+            ExpectedInitializer => "a binding must have an initializer — write `let x = …`",
+            ExpectedParameterType => "expected `:` and a type — every parameter is annotated",
+            ExpectedOpeningParen => "expected a `(`",
             ExpectedClosingParen => "expected a closing `)`",
             ExpectedClosingBracket => "expected a closing `]`",
+            ExpectedOpeningBrace => "expected a `{`",
+            ExpectedClosingBrace => "expected a closing `}`",
+            ExpectedClosingPipe => "expected a closing `|`",
             ChainedComparison => {
                 "comparison operators cannot be chained — parenthesize, or use `&&`"
             }
+            StraySemicolon => "unnecessary `;` — there is no empty statement",
+            DanglingDocComment => "this doc comment is attached to nothing",
             UnexpectedInput => "unexpected input",
         }
     }
 
     pub fn severity(&self) -> Severity {
-        Severity::Error
+        match self {
+            // §1 says a doc comment attached to nothing is a warning, not an
+            // error — the program is still perfectly well-formed.
+            DiagnosticKind::DanglingDocComment => Severity::Warning,
+            _ => Severity::Error,
+        }
     }
 }

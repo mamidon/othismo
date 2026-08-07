@@ -1,5 +1,5 @@
-// The parser handles §2's expressions and nothing else yet, so a file is one
-// expression. `hello.glue` is statements and will not parse until §3 lands.
+// A file is a block (§3): statements, then an optional trailing expression
+// with no `;`, which is the file's value. This one is just the expression.
 //
 // Background tint runs by nesting depth — deeper is darker, so the shape on
 // screen is the shape of the tree. Text colour cycles per token, so you can

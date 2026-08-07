@@ -36,7 +36,19 @@ pub struct Mark(u32);
 ///
 /// Dropping one is ordinary — most nodes are never wrapped.
 #[derive(Debug)]
-pub struct Closed(u32);
+pub struct Closed {
+    at: u32,
+    kind: NodeKind,
+}
+
+impl Closed {
+    /// What was just built. The grammar asks in two places: whether a
+    /// statement's expression was block-shaped, and so needs no `;` (§3), and
+    /// whether a `{` follows a name and so opens a struct literal (§6).
+    pub fn kind(&self) -> NodeKind {
+        self.kind
+    }
+}
 
 #[derive(Default)]
 pub struct TreeBuilder {
@@ -77,18 +89,18 @@ impl TreeBuilder {
     /// because that is the case a nested parse could get wrong silently.
     pub fn open_before(&mut self, closed: Closed, kind: NodeKind) -> Mark {
         debug_assert!(
-            self.open.last().is_none_or(|&open| open < closed.0),
+            self.open.last().is_none_or(|&open| open < closed.at),
             "open_before would move a node that is still open"
         );
         self.events.insert(
-            closed.0 as usize,
+            closed.at as usize,
             Event::Open {
                 kind,
                 close: Event::UNSET,
             },
         );
-        self.open.push(closed.0);
-        Mark(closed.0)
+        self.open.push(closed.at);
+        Mark(closed.at)
     }
 
     /// Adds a leaf. Every token the lexer produced goes through here, trivia
@@ -101,7 +113,11 @@ impl TreeBuilder {
         let opened = self.open.pop();
         debug_assert_eq!(opened, Some(mark.0), "closed a node that wasn't innermost");
         self.events.push(Event::Close);
-        Closed(mark.0)
+        let kind = match self.events[mark.0 as usize] {
+            Event::Open { kind, .. } => kind,
+            _ => unreachable!("a Mark always points at an Open"),
+        };
+        Closed { at: mark.0, kind }
     }
 
     /// Patches every `close` and hands back the finished tree.

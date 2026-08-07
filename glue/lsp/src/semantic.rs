@@ -120,10 +120,7 @@ mod tests {
     use super::*;
 
     fn of(source: &str) -> Vec<SemanticToken> {
-        tokens(
-            &parser::parse_expression(source).tree,
-            &LineIndex::new(source),
-        )
+        tokens(&parser::parse(source).tree, &LineIndex::new(source))
     }
 
     /// The palette cycles per token, so no two neighbours share a colour.

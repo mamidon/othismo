@@ -40,6 +40,15 @@ const fn left_assoc(level: u8) -> (u8, u8) {
     (level * 2, level * 2 + 1)
 }
 
+/// Whether an expression carries its own braces.
+///
+/// §3's `exprStmt → expression ";"` read literally would require
+/// `if c { … };`. These forms are already delimited, so the `;` is optional
+/// after them and their appearance mid-block is unambiguous.
+pub fn is_block_like(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::BlockExpr | NodeKind::IfExpr)
+}
+
 /// Parses one expression, and everything binding tighter than `min_bp`.
 ///
 /// Always produces a node — [`NodeKind::Error`] when there is no expression to
@@ -73,6 +82,18 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
             let mark = cursor.open_before(lhs, NodeKind::CastExpr);
             cursor.bump();
             ty(cursor);
+            lhs = cursor.close(mark);
+            continue;
+        }
+
+        // `Point { x: 1 }` (§6). Only after a bare name, and only where a
+        // brace can't be a block instead — see `Cursor::no_struct_literal`.
+        if operator == TokenKind::LBrace
+            && lhs.kind() == NodeKind::NameExpr
+            && cursor.struct_literals_allowed()
+        {
+            let mark = cursor.open_before(lhs, NodeKind::StructLitExpr);
+            field_init_list(cursor);
             lhs = cursor.close(mark);
             continue;
         }
@@ -152,7 +173,9 @@ fn postfix(cursor: &mut Cursor, lhs: Closed, kind: NodeKind) -> Closed {
         NodeKind::CallExpr => arg_list(cursor),
         NodeKind::IndexExpr => {
             cursor.bump(); // `[`
+            let allowed = cursor.set_struct_literals_allowed(true);
             expr(cursor);
+            cursor.set_struct_literals_allowed(allowed);
             cursor.expect(TokenKind::RBracket, DiagnosticKind::ExpectedClosingBracket);
         }
         NodeKind::FieldExpr => {
@@ -172,6 +195,9 @@ fn postfix(cursor: &mut Cursor, lhs: Closed, kind: NodeKind) -> Closed {
 fn arg_list(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::ArgList);
     cursor.bump(); // `(`
+    // Inside brackets a `{` can only be a struct literal, so whatever
+    // restriction a surrounding condition imposed does not reach here.
+    let allowed = cursor.set_struct_literals_allowed(true);
     while !cursor.at(TokenKind::RParen) && !cursor.at_eof() {
         expr(cursor);
         // Progress is the comma's job: an argument that parsed nothing leaves
@@ -181,8 +207,102 @@ fn arg_list(cursor: &mut Cursor) {
             break;
         }
     }
+    cursor.set_struct_literals_allowed(allowed);
     cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
     cursor.close(mark);
+}
+
+/// `{ x: 1, y: 2 }` — the body of a struct literal (§6).
+fn field_init_list(cursor: &mut Cursor) {
+    let mark = cursor.open(NodeKind::FieldInitList);
+    cursor.bump(); // `{`
+    let allowed = cursor.set_struct_literals_allowed(true);
+    while !cursor.at(TokenKind::RBrace) && !cursor.at_eof() {
+        let field = cursor.open(NodeKind::FieldInit);
+        cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedFieldName);
+        cursor.expect(TokenKind::Colon, DiagnosticKind::ExpectedColon);
+        expr(cursor);
+        cursor.close(field);
+        if !cursor.eat(TokenKind::Comma) {
+            break;
+        }
+    }
+    cursor.set_struct_literals_allowed(allowed);
+    cursor.expect(TokenKind::RBrace, DiagnosticKind::ExpectedClosingBrace);
+    cursor.close(mark);
+}
+
+/// `{ … }` — an expression (§2), so a function body, an `if` arm, and a `let`
+/// initializer are all the same node.
+pub fn block(cursor: &mut Cursor) -> Closed {
+    let mark = cursor.open(NodeKind::BlockExpr);
+    cursor.expect(TokenKind::LBrace, DiagnosticKind::ExpectedOpeningBrace);
+    // A brace is unambiguous once we're inside one.
+    let allowed = cursor.set_struct_literals_allowed(true);
+    crate::stmt::statements(cursor, TokenKind::RBrace);
+    cursor.set_struct_literals_allowed(allowed);
+    cursor.expect(TokenKind::RBrace, DiagnosticKind::ExpectedClosingBrace);
+    cursor.close(mark)
+}
+
+/// The condition of an `if` or `while`. Braces are mandatory and the condition
+/// is unparenthesized (§4), which is what makes the struct-literal ban
+/// necessary.
+pub fn condition(cursor: &mut Cursor) {
+    let allowed = cursor.set_struct_literals_allowed(false);
+    expr(cursor);
+    cursor.set_struct_literals_allowed(allowed);
+}
+
+/// `if c { … } else if d { … } else { … }` — an expression (§2).
+///
+/// `else if` is `else` followed by another `if` rather than a keyword of its
+/// own (§4), so the chain nests instead of flattening.
+fn if_expr(cursor: &mut Cursor) -> Closed {
+    let mark = cursor.open(NodeKind::IfExpr);
+    cursor.bump(); // `if`
+    condition(cursor);
+    block(cursor);
+    if cursor.eat(TokenKind::Else) {
+        if cursor.at(TokenKind::If) {
+            if_expr(cursor);
+        } else {
+            block(cursor);
+        }
+    }
+    cursor.close(mark)
+}
+
+/// `|x| x + 1`, or `|| work()` (§5).
+///
+/// Parameter types are optional here, unlike a `fn`: a declaration is read by
+/// others, a lambda is read in place.
+fn lambda(cursor: &mut Cursor) -> Closed {
+    let mark = cursor.open(NodeKind::LambdaExpr);
+    let params = cursor.open(NodeKind::LambdaParamList);
+    if cursor.at(TokenKind::PipePipe) {
+        // §5: in operand position `||` opens a lambda with no parameters. It
+        // is the same token as the operator, and only the position tells them
+        // apart — the wart Rust has, which has not proved to be a problem.
+        cursor.bump();
+    } else {
+        cursor.bump(); // `|`
+        while !cursor.at(TokenKind::Pipe) && !cursor.at_eof() {
+            let param = cursor.open(NodeKind::LambdaParam);
+            cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
+            if cursor.eat(TokenKind::Colon) {
+                ty(cursor);
+            }
+            cursor.close(param);
+            if !cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        cursor.expect(TokenKind::Pipe, DiagnosticKind::ExpectedClosingPipe);
+    }
+    cursor.close(params);
+    expr(cursor);
+    cursor.close(mark)
 }
 
 /// The operand at the bottom of the ladder.
@@ -211,11 +331,16 @@ fn primary(cursor: &mut Cursor) -> Closed {
             });
             cursor.bump(); // `(`
             if !unit {
+                let allowed = cursor.set_struct_literals_allowed(true);
                 expr(cursor);
+                cursor.set_struct_literals_allowed(allowed);
             }
             cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
             cursor.close(mark)
         }
+        TokenKind::LBrace => block(cursor),
+        TokenKind::If => if_expr(cursor),
+        TokenKind::Pipe | TokenKind::PipePipe => lambda(cursor),
         // Nothing is consumed. The caller's loop then finds no operator and
         // stops, or finds one and consumes it — either way the parse advances,
         // and whatever is really here is swept up by the enclosing construct.
