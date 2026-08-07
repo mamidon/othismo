@@ -26,6 +26,15 @@ impl LineIndex {
         }
     }
 
+    /// Where `line` starts, in bytes. Past the last line this is the end of the
+    /// text, so a caller walking lines never has to bound-check.
+    pub fn line_start(&self, line: u32) -> usize {
+        self.line_starts
+            .get(line as usize)
+            .copied()
+            .unwrap_or(self.len)
+    }
+
     /// Line and byte-column for a byte offset. Offsets past the end clamp to the
     /// end, because a diagnostic pointing just past the last character is
     /// ordinary — "expected `}`" at EOF, for instance.

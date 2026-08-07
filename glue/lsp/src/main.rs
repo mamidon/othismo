@@ -13,6 +13,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 mod line_index;
+mod semantic;
 
 use line_index::LineIndex;
 
@@ -41,14 +42,61 @@ impl Backend {
     async fn refresh(&self, uri: Url, text: String) {
         let diagnostics = self.diagnose(&text);
         self.documents.lock().unwrap().insert(uri.clone(), text);
-        self.client.publish_diagnostics(uri, diagnostics, None).await;
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
     }
 
-    /// Where the front end plugs in. Today it reports nothing, which is the
-    /// correct answer for a language with no parser yet.
+    /// Everything wrong with `text`, lexical and grammatical.
+    ///
+    /// Both lists, always: the tokenizer and the parser are each total, so a
+    /// file that lexes badly still parses and a file that parses badly still
+    /// produces a tree. Reporting only the first failure would hide the rest
+    /// for no gain.
     fn diagnose(&self, text: &str) -> Vec<Diagnostic> {
-        let _index = LineIndex::new(text);
-        Vec::new()
+        let index = LineIndex::new(text);
+        let lexed = tokenizer::tokenize(text);
+        let parsed = parser::parse_expression(text);
+
+        let lexical = lexed.diagnostics.iter().map(|diagnostic| {
+            (
+                diagnostic.span,
+                diagnostic.message(),
+                diagnostic.severity(),
+                "glue (lex)",
+            )
+        });
+        let grammatical = parsed.diagnostics.iter().map(|diagnostic| {
+            (
+                diagnostic.span,
+                diagnostic.message(),
+                diagnostic.severity(),
+                "glue",
+            )
+        });
+
+        lexical
+            .chain(grammatical)
+            .map(|(span, message, severity, source)| Diagnostic {
+                range: range_of(span, &index),
+                severity: Some(match severity {
+                    tokenizer::Severity::Error => DiagnosticSeverity::ERROR,
+                    tokenizer::Severity::Warning => DiagnosticSeverity::WARNING,
+                }),
+                source: Some(source.to_string()),
+                message: message.to_string(),
+                ..Diagnostic::default()
+            })
+            .collect()
+    }
+}
+
+fn range_of(span: tokenizer::Span, index: &LineIndex) -> Range {
+    let (start_line, start_column) = index.line_col(span.start as usize);
+    let (end_line, end_column) = index.line_col(span.end as usize);
+    Range {
+        start: Position::new(start_line, start_column),
+        end: Position::new(end_line, end_column),
     }
 }
 
@@ -82,6 +130,19 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: semantic::token_types(),
+                                token_modifiers: semantic::token_modifiers(),
+                            },
+                            // Whole document every time, to match FULL sync.
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            ..SemanticTokensOptions::default()
+                        },
+                    ),
+                ),
                 ..ServerCapabilities::default()
             },
         })
@@ -114,6 +175,28 @@ impl LanguageServer for Backend {
         self.documents.lock().unwrap().remove(&uri);
         // Clear anything we published for a file nobody is looking at.
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let Some(text) = self
+            .documents
+            .lock()
+            .unwrap()
+            .get(&params.text_document.uri)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        let index = LineIndex::new(&text);
+        let parsed = parser::parse_expression(&text);
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic::tokens(&parsed.tree, &index),
+        })))
     }
 
     async fn shutdown(&self) -> Result<()> {

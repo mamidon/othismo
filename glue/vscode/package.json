@@ -27,6 +27,39 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "semanticTokenTypes": [
+      { "id": "glueDepth0", "description": "Syntax tree depth 0 (mod 6)" },
+      { "id": "glueDepth1", "description": "Syntax tree depth 1 (mod 6)" },
+      { "id": "glueDepth2", "description": "Syntax tree depth 2 (mod 6)" },
+      { "id": "glueDepth3", "description": "Syntax tree depth 3 (mod 6)" },
+      { "id": "glueDepth4", "description": "Syntax tree depth 4 (mod 6)" },
+      { "id": "glueDepth5", "description": "Syntax tree depth 5 (mod 6)" }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "glueBoundary",
+        "description": "Alternates token by token, so adjacent tokens at the same depth stay distinguishable"
+      }
+    ],
+    "configurationDefaults": {
+      "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+          "glueDepth0": "#d13b6e",
+          "glueDepth1": "#cc6a00",
+          "glueDepth2": "#4f9a2f",
+          "glueDepth3": "#1f8fa3",
+          "glueDepth4": "#4a6fd4",
+          "glueDepth5": "#9b59d0",
+          "glueDepth0.glueBoundary": { "foreground": "#d13b6e", "fontStyle": "underline" },
+          "glueDepth1.glueBoundary": { "foreground": "#cc6a00", "fontStyle": "underline" },
+          "glueDepth2.glueBoundary": { "foreground": "#4f9a2f", "fontStyle": "underline" },
+          "glueDepth3.glueBoundary": { "foreground": "#1f8fa3", "fontStyle": "underline" },
+          "glueDepth4.glueBoundary": { "foreground": "#4a6fd4", "fontStyle": "underline" },
+          "glueDepth5.glueBoundary": { "foreground": "#9b59d0", "fontStyle": "underline" }
+        }
+      }
+    },
     "configuration": {
       "title": "Glue",
       "properties": {
