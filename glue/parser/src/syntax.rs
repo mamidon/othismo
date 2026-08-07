@@ -257,6 +257,28 @@ impl Tree {
         })
     }
 
+    /// An s-expression rendering of the whole tree, for tests and for looking
+    /// at a parse that went wrong. Kinds only — spans and token text are the
+    /// caller's to add if it wants them.
+    pub fn dump(&self) -> String {
+        fn node(tree: &Tree, id: NodeId, out: &mut String) {
+            out.push('(');
+            out.push_str(&format!("{:?}", tree.kind(id)));
+            for child in tree.children(id) {
+                out.push(' ');
+                match child {
+                    Child::Node(child) => node(tree, child, out),
+                    Child::Token(token) => out.push_str(&format!("{:?}", token.kind)),
+                }
+            }
+            out.push(')');
+        }
+
+        let mut out = String::new();
+        node(self, self.root(), &mut out);
+        out
+    }
+
     fn close(&self, node: NodeId) -> usize {
         match self.events[node.0 as usize] {
             Event::Open { close, .. } => {

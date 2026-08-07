@@ -18,10 +18,29 @@
 //! these trees far more often than the editor does.
 
 pub mod builder;
+pub mod cursor;
+pub mod diagnostic;
+pub mod expr;
 pub mod syntax;
 
 #[cfg(test)]
 mod tests;
 
-pub use crate::builder::{Mark, TreeBuilder};
+pub use crate::builder::{Closed, Mark, TreeBuilder};
+pub use crate::cursor::{Cursor, Parse};
+pub use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
 pub use crate::syntax::{Child, Event, NodeId, NodeKind, Tree};
+
+/// Parses `source` as a single expression.
+///
+/// The entry point the grammar can currently justify: §3's top level is a
+/// block of statements, and statements aren't parsed yet. This becomes
+/// `parse`, over a [`NodeKind::SourceFile`] of statements, when they are.
+pub fn parse_expression(source: &str) -> Parse {
+    let mut cursor = Cursor::new(tokenizer::tokenize(source));
+    let file = cursor.open(NodeKind::SourceFile);
+    expr::expr(&mut cursor);
+    cursor.sweep_leftovers();
+    cursor.close(file);
+    cursor.finish()
+}
