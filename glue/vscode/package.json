@@ -11,7 +11,8 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:glue"
+    "onLanguage:glue",
+    "onView:glueSyntaxTree"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -56,11 +57,16 @@
       "explorer": [
         {
           "id": "glueSyntaxTree",
-          "name": "Glue Syntax Tree",
-          "when": "editorLangId == glue"
+          "name": "Glue Syntax Tree"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "glueSyntaxTree",
+        "contents": "Open a .glue file to see its syntax tree.\n\nThe tree follows the active editor: click a node to select its source range, or move the cursor to reveal the innermost node containing it."
+      }
+    ],
     "commands": [
       {
         "command": "glue.toggleDepthTint",
