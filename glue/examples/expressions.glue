@@ -1,0 +1,8 @@
+// The parser handles §2's expressions and nothing else yet, so a file is one
+// expression. `hello.glue` is statements and will not parse until §3 lands.
+//
+// Colour runs by nesting depth, cycling every six levels; the underline
+// alternates token by token so neighbours at one depth stay apart. The shape
+// on screen is the shape of the tree — change a `*` to a `+` and watch the
+// grouping move.
+f(a + b * c, d.e[0] as u64, (g || h) && !i)
