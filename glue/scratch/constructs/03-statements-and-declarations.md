@@ -129,6 +129,12 @@ count += 1;
 Compound forms: `+= -= *= /= %= &= |= ^= <<= >>=`. Each is exactly `a = a op b` with the
 place evaluated once, and each traps on overflow like the operator it wraps (§2).
 
+> **Cut from the core.** `=` is the only assignment operator implemented. Ten tokens for a
+> rewrite the reader can do, and half of them are spelled from operators that are
+> themselves cut. "The place is evaluated once" has no observable consequence until a place
+> can have side effects, which needs §11. See
+> [Deferred decisions](deferred.md#compound-assignment).
+
 The left side is a **place**: a name, a field, or an index — not a pattern. Parallel
 assignment (`a, b = b, a`) is declined; `let` destructuring covers the real need, and a
 statement that assigns to several places at once interacts badly with evaluation order

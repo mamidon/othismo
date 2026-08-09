@@ -109,6 +109,10 @@ DIGIT → "0" … "9"
 comment, so a row of slashes used as a section divider isn't a doc comment attached to
 nothing. There is no block form of a doc comment; `/** … */` is a block comment.
 
+> **Cut from the core.** Doc comments are not implemented: `///` is an ordinary line
+> comment, and nothing reads documentation until §14 exists. See
+> [Deferred decisions](deferred.md#doc-comments).
+
 ### Terminators and blocks
 
 - Statements are terminated by `;`. Blocks are delimited by `{` `}`.
@@ -120,20 +124,16 @@ nothing. There is no block form of a doc comment; `/** … */` is a block commen
 
 ### Punctuation with no construct yet
 
-Three sequences are tokens even though nothing in the language uses them: `::`, `..`, and
-`...`.
+Three sequences were tokens even though nothing in the language used them: `::`, `..`, and
+`...`. The argument was that lexing them costs one line each and buys a better message —
+without a `..` token, `0..5` lexes as `INT DOT FLOAT(0.5)` by the rule below, and the
+resulting error is about a number rather than about a range.
 
-This is a deliberate exception to implementing only what's decided, and it's worth
-justifying rather than letting it pass as an oversight. `::` appears in §3's and §5's own
-examples (`Counter::create()`) and belongs to §13, which doesn't exist. `..` is the one
-this section already promised to keep available, for the ranges §2 deferred. `...` follows
-from `..` by maximal munch and is free. Lexing them costs one line each
-and buys a large improvement in what a user sees: without a `..` token, `0..5` lexes as
-`INT DOT FLOAT(0.5)` by the rule below, and the resulting message is about a number rather
-than about a range. With one, the parser can say ranges aren't implemented.
-
-The lexer is silent about all three — reporting them is the parser's job, since only the
-parser knows whether one appeared somewhere a construct was expected.
+> **Cut from the core.** The exception was worth stating and isn't worth keeping: it
+> optimizes an error message for a construct nobody can write. `0..5` now lexes exactly as
+> predicted above, and reaches a parse error by the ordinary left-context rule with no
+> special case. Each returns with the construct that needs it. See
+> [Deferred decisions](deferred.md#placeholder-punctuation).
 
 ### Number literals
 
@@ -190,6 +190,12 @@ r"…"       raw string; no escapes
 """…"""    multi-line string; escapes processed, newlines kept
 '…'        character literal — one Unicode scalar value
 ```
+
+> **Cut from the core.** Only `"…"` and `'…'` are implemented. One string form writes every
+> program the core can express, and the other two carried a scanner arm, a diagnostic, and
+> a decode path each. A consequence: with nothing able to span lines, CRLF normalization
+> has nowhere to happen and is gone too. See
+> [Deferred decisions](deferred.md#raw-and-multi-line-strings).
 
 - Escapes: `\n` `\r` `\t` `\0` `\\` `\"` `\'` `\u{1F600}`.
 - A `"""` string's content is taken literally, including every leading space on every
@@ -363,7 +369,9 @@ has an exception for constants. There is likewise no implicit widening between `
   a test can check rather than a promise a reviewer has to keep.
 - A `///` run is a token, and is **not** trivia — the parser must see it. It attaches to
   the declaration that follows it; a doc comment attached to nothing is a warning, since
-  it almost always means a stray edit (§14).
+  it almost always means a stray edit (§14). **Cut from the core** — see
+  [Deferred decisions](deferred.md#doc-comments). It is the only construct that would use
+  `Severity::Warning`, which is why the parser has no warnings at all today.
 
 ### Lexing and left context
 
@@ -433,4 +441,10 @@ Whether `200 + 100` fits a `u8` is not lexical, and is decided by the pinning ru
 **Still open, and owned here:** string interpolation and `"""` indentation stripping remain
 deferred (see [Deferred decisions](deferred.md)). Neither is foreclosed — interpolation is
 the only one that would change the shape of the tokenizer, since a string literal is
-currently a complete token with nothing nested inside it.
+currently a complete token with nothing nested inside it. Indentation stripping now waits
+on `"""` itself, which is cut from the core.
+
+**Implemented is narrower than decided.** Doc comments, `r"…"`, `"""…"""`, and the
+placeholder punctuation above are all specified here and deliberately absent from
+`glue/tokenizer`. Every one is additive; the register says what each costs and what comes
+back with it.

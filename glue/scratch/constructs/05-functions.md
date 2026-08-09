@@ -130,24 +130,32 @@ The type of a function is `fn(T, …) -> R`, with `-> R` omitted for unit. On wa
 ### Lambdas
 
 ```
-let inc = |x: u64| x + 1;
-let inc = |x| x + 1;               // types from context
-let go  = || work();               // no parameters
+let inc = (x: u64) -> x + 1;
+let inc = (x) -> x + 1;            // types from context
+let go  = () -> work();            // no parameters
 
-items.map(|x| {
+items.map((x) -> {
   let y = x * 2;
   y + 1
 })
 ```
 
-- Parameters are `|…|`; the body is an expression, which may be a block.
+- Parameters are `(…)` and `->` introduces the **body**, not a return type — a lambda's
+  types come from context, so there is nowhere for one to go.
 - **Lambda parameter and return types are inferred from context**, unlike a named `fn`.
   This is deliberate: a `fn` is a declaration that others read, a lambda is an argument
   read in place.
-- `||` with no parameters is lexically identical to the logical-or operator. In expression
-  position where an operand is expected, `||` opens a zero-parameter lambda; between two
-  operands it is the operator. Rust has exactly this wart and it has not proved to be a
-  problem in practice.
+- **The parameter list is spelled exactly like a parenthesized expression.** `(a)`, `()`,
+  and `(a, b)` are all valid either way, and only the `->` after the `)` decides. This is
+  the one place the grammar looks past a closing bracket to tell two constructs apart —
+  the cost of the spelling, and the reason it is written down here rather than left for
+  the parser to discover.
+
+**Revised 2026-08-09**, from `|x| x + 1`. The earlier form made `|` a token for lambdas
+alone once the bitwise operators were cut, and it carried a wart this one doesn't: `||`
+with no parameters was lexically identical to logical-or, distinguished only by whether an
+operand was expected. Rust has that wart and lives with it; `(x) -> …` doesn't have it,
+and trades it for a lookahead the parser can do in one pass.
 
 ### Nested functions
 

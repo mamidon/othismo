@@ -154,20 +154,25 @@ condition needs parens — see §1.
 Tightest to loosest. Assignment is a statement (§3), so it does not appear here; neither
 does a ternary, since `if` is an expression.
 
-| Level | Operators | Associativity |
-| --- | --- | --- |
-| 1 | `f(…)` call, `a[…]` index, `.field`, `.method(…)` | left |
-| 2 | `-` negate, `!` logical not, `~` bitwise complement | right (prefix) |
-| 3 | `as` | left |
-| 4 | `*` `/` `%` | left |
-| 5 | `+` `-` | left |
-| 6 | `<<` `>>` | left |
-| 7 | `&` | left |
-| 8 | `^` | left |
-| 9 | `\|` | left |
-| 10 | `==` `!=` `<` `<=` `>` `>=` | **non-associative** |
-| 11 | `&&` | left |
-| 12 | `\|\|` | left |
+| Level | Operators | Associativity | |
+| --- | --- | --- | --- |
+| 1 | `f(…)` call, `a[…]` index, `.field`, `.method(…)` | left | |
+| 2 | `-` negate, `!` logical not, `~` bitwise complement | right (prefix) | `~` cut |
+| 3 | `as` | left | |
+| 4 | `*` `/` `%` | left | |
+| 5 | `+` `-` | left | |
+| 6 | `<<` `>>` | left | **cut** |
+| 7 | `&` | left | **cut** |
+| 8 | `^` | left | **cut** |
+| 9 | `\|` | left | **cut** |
+| 10 | `==` `!=` `<` `<=` `>` `>=` | **non-associative** | |
+| 11 | `&&` | left | |
+| 12 | `\|\|` | left | |
+
+> **Cut from the core.** Levels 6–9 and unary `~` are not implemented, so the ladder is
+> eight rungs and `+` sits directly below comparison. That takes the first note below with
+> it — there is no bitwise operator left to bind tighter than anything. See
+> [Deferred decisions](deferred.md#bitwise-and-shift-operators).
 
 Three notes on the table, since it differs from C where C is wrong:
 
@@ -186,9 +191,13 @@ Three notes on the table, since it differs from C where C is wrong:
   - Unary `-` is defined on **signed and float types only**. Negating an unsigned value
     is a type error, not a runtime trap — there's no representable result but zero, and a
     compile error says so earlier and better.
+  - The prefix operators in the core are therefore `-` and `!`. `~` is cut with the
+    bitwise operators it complements.
 - **Bitwise** — `& | ^ ~` on integer types only, never on `bool` (that's `&& || !`).
+  **Cut from the core.**
 - **Shifts** — `<<` `>>`. `>>` is arithmetic on signed types and logical on unsigned, so
   there is no third `>>>` operator; the `s`/`u` split from §1 pays for itself here.
+  **Cut from the core.**
 - **Comparison** — `== != < <= > >=`, both operands the same type, result `bool`.
 - **Logical** — `&& || !` on `bool` only, short-circuiting.
 - **Strings** — `+` concatenates. `==` and ordering compare bytes (§1: strings are UTF-8).
@@ -251,13 +260,13 @@ Expression forms that will exist, but are another section's to design:
 
 | Form | Section |
 | --- | --- |
-| Lambda literals; named, default, and spread arguments | §5 |
+| Lambda literals — `(x) -> …`; named, default, and spread arguments | §5 |
 | Record and struct literals | §6 |
 | `match` arms and patterns | §7 |
 | `?` error propagation | §9 |
 | Constructor calls — `Foo()` versus a `new` keyword | §11 |
 | `sizeof` / `alignof` — only meaningful if layout is user-visible | §6 |
-| Compound assignment `+=`, destructuring, parallel assignment | §3 (assignment is a statement) |
+| Compound assignment `+=` (cut from the core), destructuring, parallel assignment | §3 (assignment is a statement) |
 | Slicing `a[i..j]` | §6, once ranges exist |
 | Bitwise intrinsics: rotates, `popcount`, `clz`, `ctz` | §6 — library functions, not operators |
 
@@ -296,6 +305,7 @@ remembering when §6 considers operator overloading — these two cannot partici
 - **Shift amounts** must be non-negative and less than the width of the left operand;
   otherwise it traps. wasm masks the shift amount instead (`i32.shl` uses it mod 32),
   which silently produces a wrong-looking answer, so this is another explicit check.
+  Moot while shifts are cut from the core.
 - **Constant expressions are checked at compile time** rather than trapping (§1). Anything
   that would trap at runtime — overflow, division by zero, a lossy `as`, an oversized
   shift — is a compile error when all operands are constants.

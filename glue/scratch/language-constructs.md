@@ -18,6 +18,13 @@ Legend used throughout the section files:
 - **[Lox-omits]** — Bob Nystrom explicitly leaves this out
 - **[wasm]** — the wasm target forces a decision here that a tree-walking interpreter could defer
 
+**Decided is not the same as implemented.** The status columns below track what has been
+*decided*. Several decided constructs are deliberately absent from `glue/`, so that the
+implemented language stays small enough to think about while the parts that make Glue
+*Glue* are still being found. Their spec text stays where it is, marked **Cut from the
+core**, and [Deferred decisions](constructs/deferred.md#cut-from-the-core) lists them with
+what each costs and what comes back with it.
+
 ---
 
 ## Sections
@@ -45,9 +52,11 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 
 Alongside the numbered sections, [**Deferred decisions**](constructs/deferred.md) is a
 companion register of things consciously postponed — what was deferred, why, and what it
-blocks. Sections link to it rather than carrying the argument themselves. It also indexes
-the **Open** questions that remain owned by their own sections, so there's one place to
-look for everything unresolved.
+blocks. Sections link to it rather than carrying the argument themselves. It holds two
+kinds: **undecided**, where the answer isn't written anywhere, and **cut from the core**,
+where the answer is written in its section and the implementation deliberately lacks it.
+It also indexes the **Open** questions that remain owned by their own sections, so there's
+one place to look for everything unresolved.
 
 §15 is expected to stay empty under *Syntax* by construction — if something lands there,
 it probably belongs in another section. §16 is a constraint set rather than a feature
