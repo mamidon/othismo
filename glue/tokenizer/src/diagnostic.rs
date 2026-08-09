@@ -38,8 +38,6 @@ pub enum Severity {
 pub enum DiagnosticKind {
     // ---- Unterminated things ----------------------------------------------
     UnterminatedString,
-    UnterminatedRawString,
-    UnterminatedMultilineString,
     UnterminatedChar,
     UnterminatedBlockComment,
 
@@ -76,8 +74,6 @@ impl DiagnosticKind {
         use DiagnosticKind::*;
         match self {
             UnterminatedString => "unterminated string literal — expected a closing `\"`",
-            UnterminatedRawString => "unterminated raw string literal — expected a closing `\"`",
-            UnterminatedMultilineString => "unterminated string literal — expected a closing `\"\"\"`",
             UnterminatedChar => "unterminated character literal — expected a closing `'`",
             UnterminatedBlockComment => "unterminated block comment — expected a closing `*/`",
 
@@ -114,9 +110,8 @@ impl DiagnosticKind {
 
     pub fn severity(&self) -> Severity {
         // Everything lexical is an error today. `Severity` exists because the
-        // language server wants one uniform path, and because §1 already
-        // promises a warning for a doc comment attached to nothing — which the
-        // parser, not the tokenizer, is the one to report.
+        // language server wants one uniform path, and because the parser has
+        // warnings of its own to report through it.
         Severity::Error
     }
 }

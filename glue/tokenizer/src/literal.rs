@@ -122,11 +122,6 @@ pub fn literal_value<'src>(token: Token, source: &'src str) -> Option<Literal<'s
         }
 
         TokenKind::Str => Some(Literal::Str(decode(body(text, 1, "\"")))),
-        TokenKind::MultilineStr => Some(Literal::Str(decode(body(text, 3, "\"\"\"")))),
-        // Raw strings process no escapes, and can't span a line, so there is
-        // nothing to decode and nothing to normalize.
-        TokenKind::RawStr => Some(Literal::Str(Cow::Borrowed(body(text, 2, "\"")))),
-
         TokenKind::Char => decode_char(body(text, 1, "'")).map(Literal::Char),
 
         _ => None,
@@ -148,16 +143,13 @@ fn body<'src>(text: &'src str, open: usize, close: &str) -> &'src str {
     }
 }
 
-/// Process escapes, and normalize CRLF to LF.
+/// Process escapes.
 ///
-/// §1 says line endings are normalized before lexing. Doing that literally
-/// would mean rewriting the buffer, and then every span would point into a
-/// string the editor doesn't have. Doing it here instead is the same
-/// observable semantics — a decoded string always holds LF — while spans stay
-/// pointed at bytes that exist on disk. Only a `"""` literal can contain a
-/// newline, so this is the only place it can arise.
+/// §1 also asks for CRLF to be normalized to LF, and there is nowhere left for
+/// that to happen: a string stops at a newline, so no literal can contain a
+/// raw one. Normalization comes back with whatever multi-line form does.
 fn decode(inner: &str) -> Cow<'_, str> {
-    if !inner.contains('\\') && !inner.contains('\r') {
+    if !inner.contains('\\') {
         return Cow::Borrowed(inner);
     }
 
@@ -169,9 +161,6 @@ fn decode(inner: &str) -> Cow<'_, str> {
                 if let Ok(character) = consume_escape(&mut cursor) {
                     decoded.push(character);
                 }
-            }
-            b'\r' if cursor.peek(1) == Some(b'\n') => {
-                cursor.consume();
             }
             _ => {
                 let start = cursor.index();

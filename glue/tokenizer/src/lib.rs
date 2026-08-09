@@ -16,6 +16,11 @@
 //!   file byte for byte. §1 says comments produce no tokens; the parser needs
 //!   trivia to build a lossless tree. Both hold if comments are tokens the
 //!   grammar never sees, which is what [`Tokens::significant`] is for.
+//!
+//! The token set is deliberately smaller than §1 describes: no doc comments,
+//! no raw or multiline strings, no bitwise or shift operators, no compound
+//! assignment, no `::`, `..`, or `...`. Those are features to add back when
+//! there is a reason to, not features that were tried and rejected.
 //! * **Context-free, with one exception.** No lexical decision depends on parse
 //!   state. Exactly one depends on the previous token — §1's `.5` rule — and it
 //!   is written down in [`TokenKind::can_end_expression`] rather than scattered
@@ -33,7 +38,7 @@
 //! assert_eq!(kinds, [
 //!     TokenKind::Let,
 //!     TokenKind::Ident,
-//!     TokenKind::Eq,
+//!     TokenKind::Equals,
 //!     TokenKind::Int,
 //!     TokenKind::Semicolon,
 //!     TokenKind::Eof,
@@ -70,11 +75,11 @@ pub struct Tokens {
 
 impl Tokens {
     /// The tokens the grammar sees: everything but whitespace and comments.
-    ///
-    /// Doc comments are *not* trivia — they attach to the declaration that
-    /// follows them (§1), so the parser has to see them.
     pub fn significant(&self) -> impl Iterator<Item = Token> + '_ {
-        self.tokens.iter().copied().filter(|token| !token.is_trivia())
+        self.tokens
+            .iter()
+            .copied()
+            .filter(|token| !token.is_trivia())
     }
 
     pub fn has_errors(&self) -> bool {

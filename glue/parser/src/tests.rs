@@ -172,18 +172,8 @@ fn precedence_ladder() {
     assert_eq!(shape("a as u8*b"), "((a as u8)*b)");
     // ...`*` tighter than `+`...
     assert_eq!(shape("a+b*c"), "(a+(b*c))");
-    // ...`+` tighter than the shifts...
-    assert_eq!(shape("a<<b+c"), "(a<<(b+c))");
-    // ...shifts tighter than `&`...
-    assert_eq!(shape("a&b<<c"), "(a&(b<<c))");
-    // ...`&` tighter than `^`...
-    assert_eq!(shape("a^b&c"), "(a^(b&c))");
-    // ...`^` tighter than `|`...
-    assert_eq!(shape("a|b^c"), "(a|(b^c))");
-    // ...`|` tighter than comparison — §2 corrects C here, and these two
-    // lines are what prove it...
-    assert_eq!(shape("a&b==c"), "((a&b)==c)");
-    assert_eq!(shape("a|b==c"), "((a|b)==c)");
+    // ...`+` tighter than comparison...
+    assert_eq!(shape("a+b==c"), "((a+b)==c)");
     // ...comparison tighter than `&&`...
     assert_eq!(shape("a&&b==c"), "(a&&(b==c))");
     // ...and `&&` tighter than `||`.
@@ -200,7 +190,7 @@ fn binary_operators_are_left_associative() {
 #[test]
 fn unary_operators_stack() {
     assert_eq!(shape("--a"), "(-(-a))");
-    assert_eq!(shape("!~a"), "(!(~a))");
+    assert_eq!(shape("!!a"), "(!(!a))");
 }
 
 #[test]
@@ -220,7 +210,7 @@ fn a_method_call_is_not_a_call_of_a_field() {
     assert!(parsed.diagnostics.is_empty());
     assert_eq!(
         parsed.tree.dump(),
-        "(SourceFile (MethodCallExpr (NameExpr Ident) Dot Ident (ArgList LParen (NameExpr Ident) RParen)))"
+        "(SourceFile (MethodCallExpr (NameExpr Ident) Dot Ident (ArgList ParenLeft (NameExpr Ident) ParenRight)))"
     );
 
     let parsed = parse("a.b");
@@ -238,7 +228,10 @@ fn parens_group_and_unit_is_its_own_thing() {
 
     let parsed = parse("()");
     assert!(parsed.diagnostics.is_empty());
-    assert_eq!(parsed.tree.dump(), "(SourceFile (UnitExpr LParen RParen))");
+    assert_eq!(
+        parsed.tree.dump(),
+        "(SourceFile (UnitExpr ParenLeft ParenRight))"
+    );
 }
 
 #[test]
@@ -259,18 +252,6 @@ fn casts_take_types() {
 }
 
 // ---- Statements -----------------------------------------------------------
-
-/// Parses, asserts it was clean, and renders node kinds only — statements are
-/// about structure, not grouping, so `dump` says more than `grouped` here.
-fn tree(source: &str) -> String {
-    let parsed = parse(source);
-    assert!(
-        parsed.diagnostics.is_empty(),
-        "{source:?} did not parse cleanly: {:?}",
-        parsed.diagnostics
-    );
-    parsed.tree.dump()
-}
 
 /// Nodes only, with tokens and trivia dropped, so a statement's shape is
 /// readable without every `;` and space in the way.
@@ -322,17 +303,13 @@ fn assignment_is_a_statement() {
         skeleton("count = count + 1;"),
         "(SourceFile (AssignStmt (NameExpr) (BinaryExpr (NameExpr) (LiteralExpr))))"
     );
-    assert_eq!(
-        skeleton("count += 1;"),
-        "(SourceFile (AssignStmt (NameExpr) (LiteralExpr)))"
-    );
     // The left side is a place: a name, a field, or an index (§3).
     assert_eq!(
         skeleton("p.x = 5;"),
         "(SourceFile (AssignStmt (FieldExpr (NameExpr)) (LiteralExpr)))"
     );
     assert_eq!(
-        skeleton("a[i] <<= 2;"),
+        skeleton("a[i] = 2;"),
         "(SourceFile (AssignStmt (IndexExpr (NameExpr) (NameExpr)) (LiteralExpr)))"
     );
 }
@@ -489,53 +466,53 @@ fn a_condition_takes_its_brace_as_the_body() {
     );
 }
 
+/// `(x) -> body`. The parameter list is spelled exactly like a parenthesized
+/// expression, so only the `->` after the `)` tells them apart.
 #[test]
 fn lambdas() {
     assert_eq!(
-        skeleton("let inc = |x: u64| x + 1;"),
+        skeleton("let inc = (x: u64) -> x + 1;"),
         "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam (NameType))) \
          (BinaryExpr (NameExpr) (LiteralExpr)))))"
     );
     // §5: parameter types come from context, unlike a `fn`.
     assert_eq!(
-        skeleton("let inc = |x| x + 1;"),
+        skeleton("let inc = (x) -> x + 1;"),
         "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam)) \
          (BinaryExpr (NameExpr) (LiteralExpr)))))"
     );
-    // §5: `||` in operand position opens a lambda with no parameters; between
-    // operands it is still the operator.
     assert_eq!(
-        skeleton("let go = || work();"),
+        skeleton("let go = () -> work();"),
         "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList) \
          (CallExpr (NameExpr) (ArgList)))))"
     );
     assert_eq!(
-        skeleton("a || b"),
-        "(SourceFile (BinaryExpr (NameExpr) (NameExpr)))"
+        skeleton("let add = (x, y) -> x + y;"),
+        "(SourceFile (LetStmt (NamePat) (LambdaExpr \
+         (LambdaParamList (LambdaParam) (LambdaParam)) \
+         (BinaryExpr (NameExpr) (NameExpr)))))"
     );
 }
 
-/// §1: a doc comment attaches to the declaration that follows it, and one
-/// attached to nothing is a warning rather than an error.
+/// The same text without a trailing `->` is grouping, or unit.
 #[test]
-fn doc_comments_attach_forward() {
+fn a_paren_is_not_a_lambda_without_an_arrow() {
+    assert_eq!(skeleton("(a)"), "(SourceFile (ParenExpr (NameExpr)))");
+    assert_eq!(skeleton("()"), "(SourceFile (UnitExpr))");
     assert_eq!(
-        tree("/// Adds.\nfn add() { }"),
-        "(SourceFile (FnDecl DocComment Whitespace Fn Whitespace Ident \
-         (ParamList LParen RParen) (BlockExpr Whitespace LBrace Whitespace RBrace)))"
+        skeleton("(a + b) * c"),
+        "(SourceFile (BinaryExpr (ParenExpr (BinaryExpr (NameExpr) (NameExpr))) (NameExpr)))"
     );
-
-    let parsed = parse("fn f() { }\n/// Attached to nothing.\n");
+    // `||` stays the operator; there is no lambda spelling that collides.
     assert_eq!(
-        parsed
-            .diagnostics
-            .iter()
-            .map(|d| (d.kind, d.severity()))
-            .collect::<Vec<_>>(),
-        [(
-            DiagnosticKind::DanglingDocComment,
-            tokenizer::Severity::Warning
-        )]
+        skeleton("a || b"),
+        "(SourceFile (BinaryExpr (NameExpr) (NameExpr)))"
+    );
+    // The lookahead has to cross nested brackets to find the `->`.
+    assert_eq!(
+        skeleton("let f = (x: fn(u64) -> u64) -> x;"),
+        "(SourceFile (LetStmt (NamePat) (LambdaExpr \
+         (LambdaParamList (LambdaParam (FnType (NameType) (RetType (NameType))))) (NameExpr))))"
     );
 }
 
@@ -720,8 +697,10 @@ fn every_byte_survives_a_bad_parse() {
         "}",
         ";;;",
         "let x = 1 let y = 2;",
-        "|x",
-        "|x|",
+        "(x",
+        "(x)",
+        "(x) ->",
+        "() ->",
         "P { x: }",
         "P { : 1 }",
         "/// dangling\n",

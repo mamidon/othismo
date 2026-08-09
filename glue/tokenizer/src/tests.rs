@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 
-use crate::{DiagnosticKind, Literal, NumericType, Token, TokenKind, Tokens, literal_value, tokenize};
+use crate::{
+    DiagnosticKind, Literal, NumericType, Token, TokenKind, Tokens, literal_value, tokenize,
+};
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -69,7 +71,7 @@ fn token_spans_tile_the_source() {
         "   ",
         "let x = 1;",
         "// comment\nlet x = 1; /* block */ x",
-        "\"string\" 'c' r\"raw\" \"\"\"multi\nline\"\"\"",
+        "\"string\" 'c'",
         "0xff 1_000 .5 1e10 1.0f32",
         "a.b().c[0] |> ??? é 🎉",
         "\u{feff}let x = 1;",
@@ -97,7 +99,7 @@ fn every_truncation_of_a_gnarly_program_lexes() {
     // Half-typed programs are the language server's normal case, so every
     // prefix has to survive — the progress invariant is what makes that true,
     // and a truncation is how you find the arm that forgot it.
-    let source = "let x = \"a\\u{1F600}\" + r\"b\" + \"\"\"c\"\"\" + 'd' + 0x1_f /* /**/ */ .5 é@";
+    let source = "let x = \"a\\u{1F600}\" + 'd' + 0x1_f /* /**/ */ .5 é@";
     for end in 0..=source.len() {
         if source.is_char_boundary(end) {
             assert_lossless(&source[..end]);
@@ -110,12 +112,18 @@ fn every_truncation_of_a_gnarly_program_lexes() {
 #[test]
 fn identifiers_and_keywords() {
     use TokenKind::*;
-    assert_eq!(kinds("let mut fn struct type"), [Let, Mut, Fn, Struct, Type]);
+    assert_eq!(
+        kinds("let mut fn struct type"),
+        [Let, Mut, Fn, Struct, Type]
+    );
     assert_eq!(
         kinds("return if else while for in break continue match"),
         [Return, If, Else, While, For, In, Break, Continue, Match]
     );
-    assert_eq!(kinds("import export true false as"), [Import, Export, True, False, As]);
+    assert_eq!(
+        kinds("import export true false as"),
+        [Import, Export, True, False, As]
+    );
     assert_eq!(kinds("_ _x x9 X_9 letx r"), [Ident; 6]);
 }
 
@@ -132,51 +140,32 @@ fn primitive_type_names_are_identifiers_not_keywords() {
 fn operators() {
     use TokenKind::*;
     let cases: &[(&str, TokenKind)] = &[
-        ("(", LParen),
-        (")", RParen),
-        ("{", LBrace),
-        ("}", RBrace),
-        ("[", LBracket),
-        ("]", RBracket),
+        ("(", ParenLeft),
+        (")", ParenRight),
+        ("{", BraceLeft),
+        ("}", BraceRight),
+        ("[", BracketLeft),
+        ("]", BracketRight),
         (",", Comma),
         (";", Semicolon),
         (":", Colon),
-        ("::", ColonColon),
         (".", Dot),
-        ("..", DotDot),
-        ("...", DotDotDot),
         ("->", Arrow),
         ("+", Plus),
         ("-", Minus),
         ("*", Star),
         ("/", Slash),
         ("%", Percent),
-        ("&", Amp),
-        ("|", Pipe),
-        ("^", Caret),
-        ("~", Tilde),
         ("!", Bang),
         ("&&", AmpAmp),
         ("||", PipePipe),
-        ("<<", Shl),
-        (">>", Shr),
-        ("=", Eq),
-        ("==", EqEq),
-        ("!=", BangEq),
-        ("<", Lt),
-        ("<=", Le),
-        (">", Gt),
-        (">=", Ge),
-        ("+=", PlusEq),
-        ("-=", MinusEq),
-        ("*=", StarEq),
-        ("/=", SlashEq),
-        ("%=", PercentEq),
-        ("&=", AmpEq),
-        ("|=", PipeEq),
-        ("^=", CaretEq),
-        ("<<=", ShlEq),
-        (">>=", ShrEq),
+        ("=", Equals),
+        ("==", EqualTo),
+        ("!=", NotEqualTo),
+        ("<", LessThan),
+        ("<=", LessThanOrEqualTo),
+        (">", GreaterThan),
+        (">=", GreaterThanOrEqualTo),
     ];
     for (source, expected) in cases {
         assert_eq!(kinds(source), [*expected], "lexing {source:?}");
@@ -186,12 +175,16 @@ fn operators() {
 #[test]
 fn takes_the_longest_operator() {
     use TokenKind::*;
-    assert_eq!(kinds("<<=<<<=<"), [ShlEq, Shl, Le, Lt]);
-    assert_eq!(kinds(">>=>>>=>"), [ShrEq, Shr, Ge, Gt]);
-    assert_eq!(kinds("->-=-"), [Arrow, MinusEq, Minus]);
-    assert_eq!(kinds("....."), [DotDotDot, DotDot]);
-    assert_eq!(kinds("&&&"), [AmpAmp, Amp]);
-    assert_eq!(kinds("|||"), [PipePipe, Pipe]);
+    assert_eq!(kinds("<=<"), [LessThanOrEqualTo, LessThan]);
+    assert_eq!(kinds(">=>"), [GreaterThanOrEqualTo, GreaterThan]);
+    assert_eq!(kinds("->-"), [Arrow, Minus]);
+    assert_eq!(kinds("!=!"), [NotEqualTo, Bang]);
+    assert_eq!(kinds("==="), [EqualTo, Equals]);
+    // `<<` and `>>` are two tokens now that there are no shifts, and `..` is
+    // two dots now that ranges are gone.
+    assert_eq!(kinds("<<"), [LessThan, LessThan]);
+    assert_eq!(kinds(">>"), [GreaterThan, GreaterThan]);
+    assert_eq!(kinds(".."), [Dot, Dot]);
 }
 
 // --- Comments --------------------------------------------------------------
@@ -201,8 +194,8 @@ fn comments() {
     use TokenKind::*;
     assert_eq!(all_kinds("// x"), [LineComment, Eof]);
     assert_eq!(all_kinds("/* x */"), [BlockComment, Eof]);
-    assert_eq!(all_kinds("/// x"), [DocComment, Eof]);
-    // A row of slashes is a divider, not a doc comment attached to nothing.
+    // No doc comments in the core, so any run of slashes is a line comment.
+    assert_eq!(all_kinds("/// x"), [LineComment, Eof]);
     assert_eq!(all_kinds("//// x"), [LineComment, Eof]);
     assert_eq!(all_kinds("/////"), [LineComment, Eof]);
 }
@@ -213,15 +206,19 @@ fn block_comments_nest() {
     assert_eq!(all_kinds("/* a /* b */ c */"), [BlockComment, Eof]);
     assert_eq!(all_kinds("/**/x"), [BlockComment, Ident, Eof]);
     assert_eq!(all_kinds("/*/ */x"), [BlockComment, Ident, Eof]);
-    assert_eq!(errors("/* a /* b */"), [DiagnosticKind::UnterminatedBlockComment]);
+    assert_eq!(
+        errors("/* a /* b */"),
+        [DiagnosticKind::UnterminatedBlockComment]
+    );
 }
 
 #[test]
-fn doc_comments_are_not_trivia() {
-    // They attach to the following declaration (§1), so the parser sees them.
+fn every_comment_is_trivia() {
+    // Nothing here survives `significant`: the core has no doc comments, so a
+    // `///` is a line comment like any other.
     assert_eq!(kinds("/// doc\nfn f() {}"), {
         use TokenKind::*;
-        vec![DocComment, Fn, Ident, LParen, RParen, LBrace, RBrace]
+        vec![Fn, Ident, ParenLeft, ParenRight, BraceLeft, BraceRight]
     });
 }
 
@@ -295,7 +292,10 @@ fn a_trailing_dot_is_not_part_of_a_literal() {
     // lookahead.
     use TokenKind::*;
     assert_eq!(kinds("1."), [Int, Dot]);
-    assert_eq!(kinds("1.method()"), [Int, Dot, Ident, LParen, RParen]);
+    assert_eq!(
+        kinds("1.method()"),
+        [Int, Dot, Ident, ParenLeft, ParenRight]
+    );
 }
 
 #[test]
@@ -364,10 +364,13 @@ fn leading_dot_floats_follow_left_context() {
     use TokenKind::*;
     // The table from §1, verbatim.
     assert_eq!(kinds(".5"), [Float]);
-    assert_eq!(kinds("f(.5)"), [Ident, LParen, Float, RParen]);
+    assert_eq!(kinds("f(.5)"), [Ident, ParenLeft, Float, ParenRight]);
     assert_eq!(kinds("a + .5"), [Ident, Plus, Float]);
     assert_eq!(kinds("pair.0"), [Ident, Dot, Int]);
-    assert_eq!(kinds("(a, b).0"), [LParen, Ident, Comma, Ident, RParen, Dot, Int]);
+    assert_eq!(
+        kinds("(a, b).0"),
+        [ParenLeft, Ident, Comma, Ident, ParenRight, Dot, Int]
+    );
 }
 
 #[test]
@@ -387,17 +390,21 @@ fn whitespace_does_not_rescue_the_ambiguity() {
 }
 
 #[test]
-fn ranges_lex_before_the_dot_rule_runs() {
+fn a_dot_cannot_end_an_expression() {
+    // With ranges gone there is no `..`, so `0..5` is a dot and then a
+    // leading-dot float — a `.` can't end an expression, so the float rule
+    // fires on the second one. It is a parse error either way; the point is
+    // that the same left-context rule decides it.
     use TokenKind::*;
-    assert_eq!(kinds("0..5"), [Int, DotDot, Int]);
-    assert_eq!(kinds("..5"), [DotDot, Int]);
+    assert_eq!(kinds("0..5"), [Int, Dot, Float]);
+    assert_eq!(kinds("..5"), [Dot, Float]);
 }
 
 #[test]
 fn a_block_can_end_an_expression() {
     use TokenKind::*;
-    assert_eq!(kinds("}.0"), [RBrace, Dot, Int]);
-    assert_eq!(kinds("].0"), [RBracket, Dot, Int]);
+    assert_eq!(kinds("}.0"), [BraceRight, Dot, Int]);
+    assert_eq!(kinds("].0"), [BracketRight, Dot, Int]);
     assert_eq!(kinds("true.0"), [True, Dot, Int]);
     // A keyword that cannot end an expression leaves the `.` to the float.
     assert_eq!(kinds("return .5"), [Return, Float]);
@@ -409,16 +416,20 @@ fn a_block_can_end_an_expression() {
 fn string_forms() {
     use TokenKind::*;
     assert_eq!(kinds("\"a\""), [Str]);
-    assert_eq!(kinds("r\"a\""), [RawStr]);
-    assert_eq!(kinds("\"\"\"a\"\"\""), [MultilineStr]);
     assert_eq!(kinds("'a'"), [Char]);
-    // `""` is an empty string, not the start of a multi-line one.
     assert_eq!(kinds("\"\" x"), [Str, Ident]);
+    // There is no raw string in the core, so `r` is just an identifier.
+    assert_eq!(kinds("r\"a\""), [Ident, Str]);
+    // And no multiline form, so `\"\"\"a\"\"\"` is three strings' worth of quotes.
+    assert_eq!(kinds("\"\"\"a\"\"\""), [Str, Str, Str]);
 }
 
 #[test]
 fn string_values() {
-    assert_eq!(first_literal("\"abc\""), Some(Literal::Str(Cow::Borrowed("abc"))));
+    assert_eq!(
+        first_literal("\"abc\""),
+        Some(Literal::Str(Cow::Borrowed("abc")))
+    );
     assert_eq!(
         first_literal("\"a\\nb\""),
         Some(Literal::Str(Cow::Owned("a\nb".to_string())))
@@ -427,16 +438,11 @@ fn string_values() {
         first_literal("\"\\u{1F600}\""),
         Some(Literal::Str(Cow::Owned("\u{1F600}".to_string())))
     );
-    // Raw strings process nothing.
-    assert_eq!(
-        first_literal("r\"a\\nb\""),
-        Some(Literal::Str(Cow::Borrowed("a\\nb")))
-    );
-    // A `"""` literal keeps its newlines and strips no indentation (§1).
-    assert_eq!(
-        first_literal("\"\"\"a\n  b\"\"\""),
-        Some(Literal::Str(Cow::Borrowed("a\n  b")))
-    );
+    // An escape-free string borrows the source rather than copying it.
+    assert!(matches!(
+        first_literal("\"a b\""),
+        Some(Literal::Str(Cow::Borrowed("a b")))
+    ));
 }
 
 #[test]
@@ -451,7 +457,10 @@ fn escape_free_strings_borrow() {
 fn character_values() {
     assert_eq!(first_literal("'a'"), Some(Literal::Char('a')));
     assert_eq!(first_literal("'\\n'"), Some(Literal::Char('\n')));
-    assert_eq!(first_literal("'\\u{1F600}'"), Some(Literal::Char('\u{1F600}')));
+    assert_eq!(
+        first_literal("'\\u{1F600}'"),
+        Some(Literal::Char('\u{1F600}'))
+    );
     assert_eq!(first_literal("'é'"), Some(Literal::Char('é')));
 }
 
@@ -465,17 +474,20 @@ fn boolean_literals_decode() {
 fn unterminated_strings_stop_at_the_newline() {
     use TokenKind::*;
     // One missing quote must not swallow the rest of the file.
-    assert_eq!(kinds("\"abc\nlet x = 1;"), [Str, Let, Ident, Eq, Int, Semicolon]);
+    assert_eq!(
+        kinds("\"abc\nlet x = 1;"),
+        [Str, Let, Ident, Equals, Int, Semicolon]
+    );
     assert_eq!(
         tokenize("\"abc\nlet x = 1;").diagnostics[0].kind,
         DiagnosticKind::UnterminatedString
     );
-    assert_eq!(errors("r\"abc\nx"), [DiagnosticKind::UnterminatedRawString]);
     assert_eq!(errors("'a\nx"), [DiagnosticKind::UnterminatedChar]);
-    // A `"""` string legitimately spans lines, so it runs to the end.
+    // Every string stops at a newline now that there is no multiline form, so
+    // `"""abc` is an empty string then an unterminated one.
     assert_eq!(
         errors("\"\"\"abc\nlet x = 1;"),
-        [DiagnosticKind::UnterminatedMultilineString]
+        [DiagnosticKind::UnterminatedString]
     );
 }
 
@@ -483,7 +495,6 @@ fn unterminated_strings_stop_at_the_newline() {
 fn escaped_quotes_do_not_terminate() {
     use TokenKind::*;
     assert_eq!(kinds("\"a\\\"b\" x"), [Str, Ident]);
-    assert_eq!(kinds("\"\"\"a\\\"\"\"b\"\"\" x"), [MultilineStr, Ident]);
 }
 
 #[test]
@@ -524,13 +535,18 @@ fn a_leading_byte_order_mark_is_skipped() {
 }
 
 #[test]
-fn crlf_is_whitespace_and_normalizes_only_in_values() {
+fn crlf_is_whitespace() {
     use TokenKind::*;
     assert_eq!(kinds("let\r\nx"), [Let, Ident]);
-    // Spans stay pointed at the untouched buffer; the decoded value is LF.
+    // No literal can hold a raw newline, so there is nothing left to
+    // normalize — a string stops at one, and the rest of the line starts
+    // another that is unterminated in its turn.
     assert_eq!(
-        first_literal("\"\"\"a\r\nb\"\"\""),
-        Some(Literal::Str(Cow::Owned("a\nb".to_string())))
+        errors("\"a\r\nb\""),
+        [
+            DiagnosticKind::UnterminatedString,
+            DiagnosticKind::UnterminatedString
+        ]
     );
 }
 
@@ -572,12 +588,12 @@ fn text_inside_strings_and_comments_is_left_alone() {
 // --- The API ---------------------------------------------------------------
 
 #[test]
-fn significant_skips_trivia_but_not_doc_comments() {
+fn significant_skips_every_comment() {
     use TokenKind::*;
-    let lexed = tokenize("  // c\n/// d\nlet");
+    let lexed = tokenize("  // c\n/// d\n/* e */let");
     assert_eq!(
         lexed.significant().map(|t| t.kind).collect::<Vec<_>>(),
-        [DocComment, Let, Eof]
+        [Let, Eof]
     );
 }
 

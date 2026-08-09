@@ -35,38 +35,24 @@ pub fn statements(cursor: &mut Cursor, terminator: TokenKind) {
 }
 
 fn statement(cursor: &mut Cursor, terminator: TokenKind) {
-    // §1: a doc comment attaches to what follows it, so the declaration has to
-    // open before them. They aren't trivia, which is why they're counted here
-    // rather than flushed like whitespace.
-    let docs = doc_comments(cursor);
-    let leading = cursor.nth(docs);
-
-    if docs > 0 && (leading == terminator || leading == TokenKind::Eof) {
-        // §1 promises a warning for a doc comment attached to nothing.
-        cursor.error(DiagnosticKind::DanglingDocComment);
-        bump_docs(cursor, docs);
-        return;
-    }
-
-    match leading {
-        TokenKind::Let => let_stmt(cursor, docs),
-        TokenKind::Fn => fn_decl(cursor, docs),
-        TokenKind::Struct => struct_decl(cursor, docs),
-        TokenKind::Type => type_alias(cursor, docs),
-        TokenKind::While => while_stmt(cursor, docs),
-        TokenKind::Break => jump(cursor, docs, NodeKind::BreakStmt),
-        TokenKind::Continue => jump(cursor, docs, NodeKind::ContinueStmt),
-        TokenKind::Return => return_stmt(cursor, docs),
+    match cursor.peek() {
+        TokenKind::Let => let_stmt(cursor),
+        TokenKind::Fn => fn_decl(cursor),
+        TokenKind::Struct => struct_decl(cursor),
+        TokenKind::Type => type_alias(cursor),
+        TokenKind::While => while_stmt(cursor),
+        TokenKind::Break => jump(cursor, NodeKind::BreakStmt),
+        TokenKind::Continue => jump(cursor, NodeKind::ContinueStmt),
+        TokenKind::Return => return_stmt(cursor),
         TokenKind::Semicolon => {
             // §3 has no empty statement, so this is always a mistake — but a
             // harmless one, and the `;` is consumed so it can't be re-reported.
             cursor.error(DiagnosticKind::StraySemicolon);
             let mark = cursor.open(NodeKind::Error);
-            bump_docs(cursor, docs);
             cursor.bump();
             cursor.close(mark);
         }
-        _ => expr_or_assign(cursor, docs, terminator),
+        _ => expr_or_assign(cursor, terminator),
     }
 }
 
@@ -74,18 +60,14 @@ fn statement(cursor: &mut Cursor, terminator: TokenKind) {
 ///
 /// Which of the three it is isn't known until the expression has been read, so
 /// all three start the same way and the node opens retroactively.
-fn expr_or_assign(cursor: &mut Cursor, docs: usize, terminator: TokenKind) {
-    // A doc comment on a plain expression is attached to nothing worth naming.
-    if docs > 0 {
-        cursor.error(DiagnosticKind::DanglingDocComment);
-        bump_docs(cursor, docs);
-    }
-
+fn expr_or_assign(cursor: &mut Cursor, terminator: TokenKind) {
     let parsed = expr(cursor);
     // Captured now, because `open_before` consumes `parsed`.
     let block_like = expr::is_block_like(parsed.kind());
 
-    if is_assignment_operator(cursor.peek()) {
+    // §3's compound forms — `+=` and the rest — are not in the core, so `=` is
+    // the only thing that makes this an assignment.
+    if cursor.at(TokenKind::Equals) {
         // §3: the left side is a *place* — a name, a field, or an index. That
         // it actually is one is checked later, so the message can name what
         // was assigned to rather than just refusing to parse.
@@ -121,31 +103,11 @@ fn expr_or_assign(cursor: &mut Cursor, docs: usize, terminator: TokenKind) {
     cursor.close(mark);
 }
 
-fn is_assignment_operator(kind: TokenKind) -> bool {
-    use TokenKind::*;
-    // §3's compound forms. Each is exactly `a = a op b` with the place
-    // evaluated once, so they are spelled out rather than derived.
-    matches!(
-        kind,
-        Eq | PlusEq
-            | MinusEq
-            | StarEq
-            | SlashEq
-            | PercentEq
-            | AmpEq
-            | PipeEq
-            | CaretEq
-            | ShlEq
-            | ShrEq
-    )
-}
-
 // ---- Bindings --------------------------------------------------------------
 
 /// `let mut? pattern (: Type)? = expr ;` (§3).
-fn let_stmt(cursor: &mut Cursor, docs: usize) {
+fn let_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::LetStmt);
-    bump_docs(cursor, docs);
     cursor.bump(); // `let`
     cursor.eat(TokenKind::Mut);
     pattern(cursor);
@@ -154,7 +116,7 @@ fn let_stmt(cursor: &mut Cursor, docs: usize) {
     }
     // §3: always required. There is no declare-then-assign, and so no
     // definite-assignment analysis to specify or implement.
-    cursor.expect(TokenKind::Eq, DiagnosticKind::ExpectedInitializer);
+    cursor.expect(TokenKind::Equals, DiagnosticKind::ExpectedInitializer);
     expr(cursor);
     cursor.expect(TokenKind::Semicolon, DiagnosticKind::ExpectedSemicolon);
     cursor.close(mark);
@@ -171,15 +133,14 @@ fn pattern(cursor: &mut Cursor) {
 // ---- Declarations ----------------------------------------------------------
 
 /// `fn name(a: T, b: mut U) -> R { … }` (§5).
-fn fn_decl(cursor: &mut Cursor, docs: usize) {
+fn fn_decl(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::FnDecl);
-    bump_docs(cursor, docs);
     cursor.bump(); // `fn`
     cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
 
     let params = cursor.open(NodeKind::ParamList);
-    cursor.expect(TokenKind::LParen, DiagnosticKind::ExpectedOpeningParen);
-    while !cursor.at(TokenKind::RParen) && !cursor.at_eof() {
+    cursor.expect(TokenKind::ParenLeft, DiagnosticKind::ExpectedOpeningParen);
+    while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
         let param = cursor.open(NodeKind::Param);
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
         // §5: parameter types are required — signatures are annotated, bodies
@@ -195,7 +156,7 @@ fn fn_decl(cursor: &mut Cursor, docs: usize) {
             break;
         }
     }
-    cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
+    cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
     cursor.close(params);
 
     // §5: omitted when the return type is unit.
@@ -211,17 +172,15 @@ fn fn_decl(cursor: &mut Cursor, docs: usize) {
 }
 
 /// `struct Name { x: T, y: U, }` (§6).
-fn struct_decl(cursor: &mut Cursor, docs: usize) {
+fn struct_decl(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::StructDecl);
-    bump_docs(cursor, docs);
     cursor.bump(); // `struct`
     cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
 
     let fields = cursor.open(NodeKind::FieldDeclList);
-    cursor.expect(TokenKind::LBrace, DiagnosticKind::ExpectedOpeningBrace);
-    while !cursor.at(TokenKind::RBrace) && !cursor.at_eof() {
+    cursor.expect(TokenKind::BraceLeft, DiagnosticKind::ExpectedOpeningBrace);
+    while !cursor.at(TokenKind::BraceRight) && !cursor.at_eof() {
         let field = cursor.open(NodeKind::FieldDecl);
-        bump_docs(cursor, doc_comments(cursor));
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
         // §6: field types are required; there is no inference across a
         // declaration boundary.
@@ -232,18 +191,17 @@ fn struct_decl(cursor: &mut Cursor, docs: usize) {
             break;
         }
     }
-    cursor.expect(TokenKind::RBrace, DiagnosticKind::ExpectedClosingBrace);
+    cursor.expect(TokenKind::BraceRight, DiagnosticKind::ExpectedClosingBrace);
     cursor.close(fields);
     cursor.close(mark);
 }
 
 /// `type Name = T ;` — a second name for one type, not a new one (§6).
-fn type_alias(cursor: &mut Cursor, docs: usize) {
+fn type_alias(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::TypeAliasDecl);
-    bump_docs(cursor, docs);
     cursor.bump(); // `type`
     cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
-    cursor.expect(TokenKind::Eq, DiagnosticKind::ExpectedInitializer);
+    cursor.expect(TokenKind::Equals, DiagnosticKind::ExpectedInitializer);
     ty(cursor);
     cursor.expect(TokenKind::Semicolon, DiagnosticKind::ExpectedSemicolon);
     cursor.close(mark);
@@ -252,9 +210,8 @@ fn type_alias(cursor: &mut Cursor, docs: usize) {
 // ---- Control flow ----------------------------------------------------------
 
 /// `while c { … }` — the only loop (§4), and a statement, so its value is unit.
-fn while_stmt(cursor: &mut Cursor, docs: usize) {
+fn while_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::WhileStmt);
-    bump_docs(cursor, docs);
     cursor.bump(); // `while`
     condition(cursor);
     block(cursor);
@@ -262,9 +219,8 @@ fn while_stmt(cursor: &mut Cursor, docs: usize) {
 }
 
 /// `break ;` and `continue ;` — unlabelled, applying to the innermost loop (§4).
-fn jump(cursor: &mut Cursor, docs: usize, kind: NodeKind) {
+fn jump(cursor: &mut Cursor, kind: NodeKind) {
     let mark = cursor.open(kind);
-    bump_docs(cursor, docs);
     cursor.bump();
     cursor.expect(TokenKind::Semicolon, DiagnosticKind::ExpectedSemicolon);
     cursor.close(mark);
@@ -272,29 +228,12 @@ fn jump(cursor: &mut Cursor, docs: usize, kind: NodeKind) {
 
 /// `return ;` or `return expr ;` — for *early* exit (§4). A well-shaped
 /// function often has none, since a body is a block and ends in its value.
-fn return_stmt(cursor: &mut Cursor, docs: usize) {
+fn return_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::ReturnStmt);
-    bump_docs(cursor, docs);
     cursor.bump(); // `return`
     if !cursor.at(TokenKind::Semicolon) {
         expr(cursor);
     }
     cursor.expect(TokenKind::Semicolon, DiagnosticKind::ExpectedSemicolon);
     cursor.close(mark);
-}
-
-// ---- Doc comments ----------------------------------------------------------
-
-fn doc_comments(cursor: &Cursor) -> usize {
-    let mut count = 0;
-    while cursor.nth(count) == TokenKind::DocComment {
-        count += 1;
-    }
-    count
-}
-
-fn bump_docs(cursor: &mut Cursor, count: usize) {
-    for _ in 0..count {
-        cursor.bump();
-    }
 }

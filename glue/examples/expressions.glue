@@ -16,13 +16,13 @@ let grouped = (1 + 2) * 3;
 let unit = ();
 
 // ---- Prefix ---------------------------------------------------------------
-// Unary `-` is defined on signed and float types only; negating an unsigned
-// value is a type error, not a runtime trap (§2).
+// Two of them. Unary `-` is defined on signed and float types only; negating
+// an unsigned value is a type error, not a runtime trap (§2). There is no `~`,
+// because the core has no bitwise operators to complement with.
 
 let negated = -1;
-let complemented = ~0xff;
 let inverted = !true;
-let stacked = -~1;
+let stacked = --1;
 
 // ---- Arithmetic -----------------------------------------------------------
 
@@ -31,16 +31,6 @@ let difference = 3 - 4;
 let product = 5 * 6;
 let quotient = 7 / 8;
 let remainder = 9 % 10;
-
-// ---- Bitwise and shifts ---------------------------------------------------
-// Integer types only, never `bool` — that's `&& || !`. `>>` is arithmetic on
-// signed types and logical on unsigned, so there is no third `>>>` (§2).
-
-let and_bits = 0xf0 & 0x0f;
-let or_bits = 0xf0 | 0x0f;
-let xor_bits = 0xf0 ^ 0x0f;
-let shifted_left = 1 << 4;
-let shifted_right = 256 >> 4;
 
 // ---- Comparison -----------------------------------------------------------
 // Non-associative (§2): `a < b < c` is a parse error rather than a type error,
@@ -108,16 +98,18 @@ let branch = if ok { 42 } else { 0 };
 let chain = if a { 1 } else if b { 2 } else { 3 };
 
 // ---- Lambdas --------------------------------------------------------------
-// Parameter and return types come from context, unlike a `fn`: a declaration
-// is read by others, a lambda is read in place (§5).
+// `(params) -> body`. Parameter and return types come from context, unlike a
+// `fn`: a declaration is read by others, a lambda is read in place (§5).
+//
+// The parameter list is spelled exactly like a parenthesized expression, so
+// the `->` after the `)` is the only thing that tells the two apart — which is
+// the one place the grammar needs to look past a closing bracket to decide.
 
-let typed = |x: u64| x + 1;
-let inferred = |x| x + 1;
-let several = |x: u64, y: u64| x + y;
-// `||` in operand position opens a lambda with no parameters; between two
-// operands it is the logical-or operator, above.
-let nullary = || work();
-let with_block = |x| {
+let typed = (x: u64) -> x + 1;
+let inferred = (x) -> x + 1;
+let several = (x: u64, y: u64) -> x + y;
+let nullary = () -> work();
+let with_block = (x) -> {
   let y = x * 2;
   y + 1
 };
@@ -126,21 +118,13 @@ let with_block = |x| {
 // Tightest to loosest, each line pinned against the one below it. The comment
 // beside each is the grouping §2's table gives it.
 
-let l01 = -a.b;             // (-(a.b))          postfix over unary
-let l02 = -a as u8;         // ((-a) as u8)      unary over `as`
-let l03 = a as u8 * b;      // ((a as u8) * b)   `as` over `*`
-let l04 = a + b * c;        // (a + (b * c))     `*` over `+`
-let l05 = a << b + c;       // (a << (b + c))    `+` over shifts
-let l06 = a & b << c;       // (a & (b << c))    shifts over `&`
-let l07 = a ^ b & c;        // (a ^ (b & c))     `&` over `^`
-let l08 = a | b ^ c;        // (a | (b ^ c))     `^` over `|`
-let l09 = a | b == c;       // ((a | b) == c)    `|` over comparison
-let l10 = a && b == c;      // (a && (b == c))   comparison over `&&`
-let l11 = a || b && c;      // (a || (b && c))   `&&` over `||`
-
-// Bitwise binds tighter than comparison. C's ordering here is a historical
-// accident that every C linter warns about; Rust corrected it and so do we.
-let corrected = a & b == c; // ((a & b) == c)
+let l1 = -a.b;          // (-(a.b))          postfix over unary
+let l2 = -a as u8;      // ((-a) as u8)      unary over `as`
+let l3 = a as u8 * b;   // ((a as u8) * b)   `as` over `*`
+let l4 = a + b * c;     // (a + (b * c))     `*` over `+`
+let l5 = a + b == c;    // ((a + b) == c)    `+` over comparison
+let l6 = a && b == c;   // (a && (b == c))   comparison over `&&`
+let l7 = a || b && c;   // (a || (b && c))   `&&` over `||`
 
 // Every binary operator is left-associative.
 let leans_left = a - b - c; // ((a - b) - c)

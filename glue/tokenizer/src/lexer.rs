@@ -38,10 +38,8 @@ pub(crate) fn tokenize(source: &str) -> Tokens {
         consume_next_token(&mut cursor, source, &mut out);
     }
 
-    out.tokens.push(Token::new(
-        TokenKind::Eof,
-        Span::empty_at(cursor.index()),
-    ));
+    out.tokens
+        .push(Token::new(TokenKind::Eof, Span::empty_at(cursor.index())));
     out
 }
 
@@ -58,108 +56,64 @@ fn consume_next_token(cursor: &mut Cursor<u8>, source: &str, out: &mut Tokens) {
         b'/' => consume_slash(cursor, &mut out.diagnostics),
         b'"' => consume_string(cursor, &mut out.diagnostics),
         b'\'' => consume_char(cursor, &mut out.diagnostics),
-        // `r` is an ordinary identifier unless a quote is glued to it.
-        b'r' if cursor.peek(1) == Some(b'"') => consume_raw_string(cursor, &mut out.diagnostics),
 
         b'0'..=b'9' => consume_number_token(cursor, source, &mut out.diagnostics),
         b'.' => consume_dot(cursor, source, out),
 
-        b'(' => single(cursor, TokenKind::LParen),
-        b')' => single(cursor, TokenKind::RParen),
-        b'{' => single(cursor, TokenKind::LBrace),
-        b'}' => single(cursor, TokenKind::RBrace),
-        b'[' => single(cursor, TokenKind::LBracket),
-        b']' => single(cursor, TokenKind::RBracket),
+        b'(' => single(cursor, TokenKind::ParenLeft),
+        b')' => single(cursor, TokenKind::ParenRight),
+        b'{' => single(cursor, TokenKind::BraceLeft),
+        b'}' => single(cursor, TokenKind::BraceRight),
+        b'[' => single(cursor, TokenKind::BracketLeft),
+        b']' => single(cursor, TokenKind::BracketRight),
         b',' => single(cursor, TokenKind::Comma),
         b';' => single(cursor, TokenKind::Semicolon),
-        b'~' => single(cursor, TokenKind::Tilde),
+        b':' => single(cursor, TokenKind::Colon),
+        b'+' => single(cursor, TokenKind::Plus),
+        b'*' => single(cursor, TokenKind::Star),
+        b'%' => single(cursor, TokenKind::Percent),
 
-        b':' => {
-            cursor.consume();
-            // `::` has no construct yet — §13 owns paths — but lexing it means
-            // the parser can say so instead of tripping over two colons.
-            or_else(cursor, b':', TokenKind::ColonColon, TokenKind::Colon)
-        }
-        b'+' => {
-            cursor.consume();
-            or_else(cursor, b'=', TokenKind::PlusEq, TokenKind::Plus)
-        }
-        b'*' => {
-            cursor.consume();
-            or_else(cursor, b'=', TokenKind::StarEq, TokenKind::Star)
-        }
-        b'%' => {
-            cursor.consume();
-            or_else(cursor, b'=', TokenKind::PercentEq, TokenKind::Percent)
-        }
-        b'^' => {
-            cursor.consume();
-            or_else(cursor, b'=', TokenKind::CaretEq, TokenKind::Caret)
-        }
         b'!' => {
             cursor.consume();
-            or_else(cursor, b'=', TokenKind::BangEq, TokenKind::Bang)
+            or_else(cursor, b'=', TokenKind::NotEqualTo, TokenKind::Bang)
         }
         b'=' => {
             cursor.consume();
-            or_else(cursor, b'=', TokenKind::EqEq, TokenKind::Eq)
-        }
-        b'-' => {
-            cursor.consume();
-            if cursor.eat(b'=') {
-                TokenKind::MinusEq
-            } else if cursor.eat(b'>') {
-                TokenKind::Arrow
-            } else {
-                TokenKind::Minus
-            }
-        }
-        b'&' => {
-            cursor.consume();
-            if cursor.eat(b'&') {
-                TokenKind::AmpAmp
-            } else if cursor.eat(b'=') {
-                TokenKind::AmpEq
-            } else {
-                TokenKind::Amp
-            }
-        }
-        // `||` with no operand to its left opens a zero-parameter lambda (§5).
-        // That's the parser's to sort out; both spellings are one token here.
-        b'|' => {
-            cursor.consume();
-            if cursor.eat(b'|') {
-                TokenKind::PipePipe
-            } else if cursor.eat(b'=') {
-                TokenKind::PipeEq
-            } else {
-                TokenKind::Pipe
-            }
+            or_else(cursor, b'=', TokenKind::EqualTo, TokenKind::Equals)
         }
         b'<' => {
             cursor.consume();
-            if cursor.eat_seq(b"<=") {
-                TokenKind::ShlEq
-            } else if cursor.eat(b'<') {
-                TokenKind::Shl
-            } else if cursor.eat(b'=') {
-                TokenKind::Le
-            } else {
-                TokenKind::Lt
-            }
+            or_else(
+                cursor,
+                b'=',
+                TokenKind::LessThanOrEqualTo,
+                TokenKind::LessThan,
+            )
         }
-        // No generics yet (§8), so nothing needs `>>` split back apart.
         b'>' => {
             cursor.consume();
-            if cursor.eat_seq(b">=") {
-                TokenKind::ShrEq
-            } else if cursor.eat(b'>') {
-                TokenKind::Shr
-            } else if cursor.eat(b'=') {
-                TokenKind::Ge
-            } else {
-                TokenKind::Gt
-            }
+            or_else(
+                cursor,
+                b'=',
+                TokenKind::GreaterThanOrEqualTo,
+                TokenKind::GreaterThan,
+            )
+        }
+        b'-' => {
+            cursor.consume();
+            or_else(cursor, b'>', TokenKind::Arrow, TokenKind::Minus)
+        }
+        // `&` and `|` are only ever doubled: the logical operators exist and
+        // the bitwise ones don't, so a single one of either is not a token.
+        b'&' if cursor.peek(1) == Some(b'&') => {
+            cursor.consume();
+            cursor.consume();
+            TokenKind::AmpAmp
+        }
+        b'|' if cursor.peek(1) == Some(b'|') => {
+            cursor.consume();
+            cursor.consume();
+            TokenKind::PipePipe
         }
 
         b if b.is_ascii_alphabetic() || b == b'_' => {
@@ -189,21 +143,11 @@ fn is_whitespace(byte: u8) -> bool {
 
 // --- Dots ------------------------------------------------------------------
 
-/// `...`, `..`, a leading-dot float, or field access — in that order.
+/// A leading-dot float, or field access.
 ///
-/// Resolving punctuation first is what keeps `0..5` sane: it lexes as
-/// `INT DOTDOT INT`, and the float rule never runs. Neither `..` nor `...` has
-/// a construct yet (ranges are deferred in §2), but lexing them means a range
-/// gets a diagnostic about ranges rather than something incoherent about
-/// numbers.
+/// Ranges are deferred (§2) and nothing else spells a dot, so unlike the
+/// spec's `..`/`...` this has only the two cases.
 fn consume_dot(cursor: &mut Cursor<u8>, source: &str, out: &mut Tokens) -> TokenKind {
-    if cursor.eat_seq(b"...") {
-        return TokenKind::DotDotDot;
-    }
-    if cursor.eat_seq(b"..") {
-        return TokenKind::DotDot;
-    }
-
     // §1's one exception to context-free lexing: `.5` is a float unless the
     // preceding significant token could end an expression, in which case the
     // `.` is field access. Decided by the previous *token*, not by adjacency,
@@ -229,18 +173,7 @@ fn previous_can_end_expression(tokens: &[Token]) -> bool {
 // --- Comments --------------------------------------------------------------
 
 fn consume_slash(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> TokenKind {
-    if cursor.eat_seq(b"///") {
-        // Exactly three slashes. A fourth makes it an ordinary comment, so a
-        // row of them used as a divider isn't a doc comment attached to
-        // nothing.
-        let kind = if cursor.peek(0) == Some(b'/') {
-            TokenKind::LineComment
-        } else {
-            TokenKind::DocComment
-        };
-        consume_to_end_of_line(cursor);
-        return kind;
-    }
+    // No doc comments in the core: `///` is a line comment like any other.
     if cursor.eat_seq(b"//") {
         consume_to_end_of_line(cursor);
         return TokenKind::LineComment;
@@ -248,8 +181,7 @@ fn consume_slash(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> 
     if cursor.peek(1) == Some(b'*') {
         return consume_block_comment(cursor, diagnostics);
     }
-    cursor.consume();
-    or_else(cursor, b'=', TokenKind::SlashEq, TokenKind::Slash)
+    single(cursor, TokenKind::Slash)
 }
 
 fn consume_to_end_of_line(cursor: &mut Cursor<u8>) {
@@ -285,10 +217,6 @@ fn consume_block_comment(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnost
 
 fn consume_string(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> TokenKind {
     let start = cursor.index();
-    if cursor.eat_seq(b"\"\"\"") {
-        return consume_multiline_string(cursor, start, diagnostics);
-    }
-
     cursor.consume();
     loop {
         match cursor.peek(0) {
@@ -297,8 +225,8 @@ fn consume_string(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) ->
                 break;
             }
             Some(b'\\') => consume_escape_reporting(cursor, diagnostics),
-            // A `"` string does not span lines — that is what `"""` is for — so
-            // one missing quote doesn't turn the rest of the file red.
+            // A string does not span lines, so one missing quote doesn't turn
+            // the rest of the file red.
             None | Some(b'\n') | Some(b'\r') => {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticKind::UnterminatedString,
@@ -312,60 +240,6 @@ fn consume_string(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) ->
         }
     }
     TokenKind::Str
-}
-
-fn consume_multiline_string(
-    cursor: &mut Cursor<u8>,
-    start: usize,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> TokenKind {
-    loop {
-        if cursor.eat_seq(b"\"\"\"") {
-            break;
-        }
-        match cursor.peek(0) {
-            None => {
-                diagnostics.push(Diagnostic::new(
-                    DiagnosticKind::UnterminatedMultilineString,
-                    Span::new(start, cursor.index()),
-                ));
-                break;
-            }
-            // Escapes are processed inside `"""` (§1) — which also means an
-            // escaped quote can't be mistaken for the terminator.
-            Some(b'\\') => consume_escape_reporting(cursor, diagnostics),
-            Some(_) => {
-                cursor.consume_utf8();
-            }
-        }
-    }
-    TokenKind::MultilineStr
-}
-
-/// `r"…"` — no escapes, so the first quote ends it. There is no `r#"…"#` form,
-/// which means a raw string cannot contain a quote at all.
-fn consume_raw_string(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> TokenKind {
-    let start = cursor.index();
-    cursor.eat_seq(b"r\"");
-    loop {
-        match cursor.peek(0) {
-            Some(b'"') => {
-                cursor.consume();
-                break;
-            }
-            None | Some(b'\n') | Some(b'\r') => {
-                diagnostics.push(Diagnostic::new(
-                    DiagnosticKind::UnterminatedRawString,
-                    Span::new(start, cursor.index()),
-                ));
-                break;
-            }
-            Some(_) => {
-                cursor.consume_utf8();
-            }
-        }
-    }
-    TokenKind::RawStr
 }
 
 /// `'x'` — exactly one Unicode scalar value (§1). Nothing else in the language
@@ -522,5 +396,5 @@ fn is_token_start(byte: u8) -> bool {
         | b'(' | b')' | b'{' | b'}' | b'[' | b']'
         | b',' | b';' | b':' | b'.'
         | b'+' | b'-' | b'*' | b'/' | b'%'
-        | b'&' | b'|' | b'^' | b'~' | b'!' | b'=' | b'<' | b'>')
+        | b'&' | b'|' | b'!' | b'=' | b'<' | b'>')
 }

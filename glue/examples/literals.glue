@@ -3,6 +3,10 @@
 // The files in this directory are a regression suite: the parser's
 // `the_examples_parse_cleanly` test asserts that each one lexes and parses
 // without a single diagnostic and comes back out of the tree byte for byte.
+//
+// The token set is a deliberately small core. Absent here, and meant to come
+// back when there is a reason for them: raw and multiline strings, doc
+// comments, bitwise and shift operators, compound assignment, `::`, and `..`.
 
 // ---- Integers -------------------------------------------------------------
 
@@ -32,17 +36,12 @@ let exponent = 1e10;
 let float_suffix = 1.0f32;
 
 // ---- Text -----------------------------------------------------------------
+// One string form. It takes escapes and stops at a newline, so a missing quote
+// costs one line rather than the rest of the file.
 
 let string = "hello";
 let escapes = "newline \n tab \t null \0 quote \" backslash \\ apostrophe \'";
 let unicode = "grinning face: \u{1F600}";
-
-// A raw string takes no escapes.
-let raw = r"C:\not\an\escape";
-
-let multiline = """
-  Spans lines, and holds "quotes" without escaping them.
-""";
 
 let character = 'x';
 let char_escape = '\n';
@@ -61,16 +60,17 @@ let no = false;
 let nothing = ();
 
 // ---- Comments -------------------------------------------------------------
+// Both forms are trivia. There is no doc comment in the core, so a `///` is a
+// line comment like any other and a row of slashes is just a divider.
 
 // A line comment.
 
+/// Three slashes, and still only a comment.
+
+//// -------------------------------------------------------------------------
+
 /* A block comment. /* They nest. */ Still inside the outer one. */
 
-/// A doc comment attaches to the declaration that follows it (§1, §14).
-/// Exactly three slashes make one — a fourth takes it back to an ordinary
-/// comment, so a row of slashes used as a divider is not a doc comment
-/// attached to nothing:
-//// -------------------------------------------------------------------------
 type Marker = u64;
 
 // A file may end in an expression with no `;`, which is the file's value (§3).

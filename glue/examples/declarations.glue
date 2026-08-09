@@ -5,12 +5,10 @@
 
 // ---- Functions ------------------------------------------------------------
 
-/// Adds two numbers.
-///
-/// Parameter types are required, and the return type is required when it isn't
-/// unit. That is §10's local-inference boundary: signatures are annotated,
-/// bodies are inferred — which keeps a function's meaning readable without
-/// reading its body.
+// Parameter types are required, and the return type is required when it isn't
+// unit. That is §10's local-inference boundary: signatures are annotated,
+// bodies are inferred — which keeps a function's meaning readable without
+// reading its body.
 fn add(a: u64, b: u64) -> u64 {
   a + b
 }
@@ -73,27 +71,25 @@ fn compose(callback: fn(u64) -> u64) -> fn(u64) -> u64 {
 // ---- Lambdas --------------------------------------------------------------
 // Lambdas capture by reference, implicitly — there is no capture list (§5).
 
-let inc = |x: u64| x + 1;
-let inferred = |x| x + 1;
-let several = |x: u64, y: u64| x + y;
-let nullary = || work();
-let with_block = |x| {
+let inc = (x: u64) -> x + 1;
+let inferred = (x) -> x + 1;
+let several = (x: u64, y: u64) -> x + y;
+let nullary = () -> work();
+let with_block = (x) -> {
   let y = x * 2;
   y + 1
 };
 
-let mapped = apply(|x| x * 3, 4);
+let mapped = apply((x) -> x * 3, 4);
 
 // ---- Structs --------------------------------------------------------------
 // Nominal, not structural: two structs with identical fields are different
 // types. A name is a decision, and structural typing makes every field name
 // load-bearing forever (§6).
 
-/// A point in two dimensions.
+// A point in two dimensions.
 struct Point {
-  /// The horizontal coordinate.
   x: s64,
-  /// The vertical coordinate.
   y: s64,
 }
 
@@ -124,7 +120,7 @@ let diagonal = Line {
 // `u64` are interchangeable everywhere. A distinct type sharing a
 // representation is a different feature, and isn't here yet (§6).
 
-/// Identifies a live instance in the Othismo namespace.
+// Identifies a live instance in the Othismo namespace.
 type InstanceId = u64;
 type Handler = fn(Str);
 type Transform = fn(u64) -> u64;

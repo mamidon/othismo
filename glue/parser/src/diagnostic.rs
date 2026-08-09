@@ -54,8 +54,8 @@ pub enum DiagnosticKind {
     ExpectedClosingBracket,
     ExpectedOpeningBrace,
     ExpectedClosingBrace,
-    /// The `|` closing a lambda's parameters.
-    ExpectedClosingPipe,
+    /// `(x)` with no `->` after it — a lambda whose body never arrived.
+    ExpectedLambdaBody,
 
     // ---- Misuse -----------------------------------------------------------
     /// `a < b < c`. §2 makes comparison non-associative so that the error
@@ -64,9 +64,6 @@ pub enum DiagnosticKind {
     ChainedComparison,
     /// A `;` where no statement preceded it. §3 has no empty statement.
     StraySemicolon,
-    /// §1 promises this one: a doc comment attached to nothing is a warning,
-    /// and the parser is what notices.
-    DanglingDocComment,
 
     // ---- Leftovers --------------------------------------------------------
     /// Input the parser could not attach to anything. The tokens are kept in
@@ -92,22 +89,19 @@ impl DiagnosticKind {
             ExpectedClosingBracket => "expected a closing `]`",
             ExpectedOpeningBrace => "expected a `{`",
             ExpectedClosingBrace => "expected a closing `}`",
-            ExpectedClosingPipe => "expected a closing `|`",
+            ExpectedLambdaBody => "expected `->` and a body",
             ChainedComparison => {
                 "comparison operators cannot be chained — parenthesize, or use `&&`"
             }
             StraySemicolon => "unnecessary `;` — there is no empty statement",
-            DanglingDocComment => "this doc comment is attached to nothing",
             UnexpectedInput => "unexpected input",
         }
     }
 
     pub fn severity(&self) -> Severity {
-        match self {
-            // §1 says a doc comment attached to nothing is a warning, not an
-            // error — the program is still perfectly well-formed.
-            DiagnosticKind::DanglingDocComment => Severity::Warning,
-            _ => Severity::Error,
-        }
+        // Every grammatical problem is an error today. `Severity` stays
+        // because the language server wants one uniform path, and because the
+        // warnings that lint-shaped checks will want go through it.
+        Severity::Error
     }
 }

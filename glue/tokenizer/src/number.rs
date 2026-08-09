@@ -192,7 +192,10 @@ fn consume_exponent(
     } else {
         1
     };
-    if !cursor.peek(offset).is_some_and(|byte| byte.is_ascii_digit()) {
+    if !cursor
+        .peek(offset)
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
         return;
     }
 

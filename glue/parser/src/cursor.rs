@@ -82,6 +82,32 @@ impl Cursor {
         self.pos
     }
 
+    /// The kind of the significant token just past the bracketed group the
+    /// cursor is sitting on.
+    ///
+    /// For where two constructs are identical up to their closing bracket and
+    /// differ only after it — `(a)` is a parenthesized expression and
+    /// `(a) -> a` is a lambda, and nothing before the `)` says which.
+    ///
+    /// One pass over the remaining tokens rather than repeated [`Cursor::nth`],
+    /// which would make the scan quadratic in the length of the group.
+    pub fn after_group(&self, open: TokenKind, close: TokenKind) -> TokenKind {
+        debug_assert!(self.at(open), "after_group starts on the opening bracket");
+        let mut depth = 0usize;
+        let mut significant = self.significant();
+        for token in significant.by_ref() {
+            if token.kind == open {
+                depth += 1;
+            } else if token.kind == close {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+        }
+        significant.next().map_or(TokenKind::Eof, |t| t.kind)
+    }
+
     // ---- Looking ----------------------------------------------------------
 
     /// The kind of the `n`th significant token from here. Past the end this is

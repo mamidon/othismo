@@ -46,10 +46,6 @@ pub enum TokenKind {
     LineComment,
     BlockComment,
 
-    // ---- Comments the grammar cares about ---------------------------------
-    /// `///`. Attaches to the following declaration (§1, §14).
-    DocComment,
-
     // ---- Names ------------------------------------------------------------
     Ident,
 
@@ -83,33 +79,25 @@ pub enum TokenKind {
     Float,
     /// `"…"`
     Str,
-    /// `r"…"`
-    RawStr,
-    /// `"""…"""`
-    MultilineStr,
     /// `'x'`
     Char,
 
     // ---- Delimiters -------------------------------------------------------
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    LBracket,
-    RBracket,
+    // Named opener-then-side, so a pair sorts together and reads as one thing.
+    ParenLeft,
+    ParenRight,
+    BraceLeft,
+    BraceRight,
+    BracketLeft,
+    BracketRight,
 
     // ---- Punctuation ------------------------------------------------------
     Comma,
     Semicolon,
+    /// Annotates a binding, a parameter, a field, or a struct-literal field.
     Colon,
-    /// `::` — lexed, but no construct uses it yet (§13 owns paths).
-    ColonColon,
     Dot,
-    /// `..` — lexed, but ranges are deferred (§2).
-    DotDot,
-    /// `...` — lexed, but nothing uses it yet.
-    DotDotDot,
-    /// `->`
+    /// `->` — a function's return type, and a lambda's body (§5).
     Arrow,
 
     // ---- Operators --------------------------------------------------------
@@ -118,32 +106,18 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
-    Amp,
-    Pipe,
-    Caret,
-    Tilde,
+    /// `!` — logical, never bitwise; there is no bitwise complement.
     Bang,
     AmpAmp,
+    /// `||`. Also the operator that is *not* a lambda: `(x) -> …` is (§5).
     PipePipe,
-    Shl,
-    Shr,
-    Eq,
-    EqEq,
-    BangEq,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    PlusEq,
-    MinusEq,
-    StarEq,
-    SlashEq,
-    PercentEq,
-    AmpEq,
-    PipeEq,
-    CaretEq,
-    ShlEq,
-    ShrEq,
+    Equals,
+    EqualTo,
+    NotEqualTo,
+    LessThan,
+    LessThanOrEqualTo,
+    GreaterThan,
+    GreaterThanOrEqualTo,
 
     // ---- Recovery and end -------------------------------------------------
     /// Text that isn't a token. Always accompanied by a diagnostic.
@@ -188,10 +162,7 @@ impl TokenKind {
 
     pub fn is_literal(&self) -> bool {
         use TokenKind::*;
-        matches!(
-            self,
-            Int | Float | Str | RawStr | MultilineStr | Char | True | False
-        )
+        matches!(self, Int | Float | Str | Char | True | False)
     }
 
     /// The reserved word this text spells, if any.
@@ -235,14 +206,12 @@ impl TokenKind {
                 | Int
                 | Float
                 | Str
-                | RawStr
-                | MultilineStr
                 | Char
                 | True
                 | False
-                | RParen
-                | RBracket
-                | RBrace
+                | ParenRight
+                | BracketRight
+                | BraceRight
         )
     }
 
@@ -253,11 +222,10 @@ impl TokenKind {
             Whitespace => "whitespace",
             LineComment => "a line comment",
             BlockComment => "a block comment",
-            DocComment => "a doc comment",
             Ident => "an identifier",
             Int => "an integer literal",
             Float => "a float literal",
-            Str | RawStr | MultilineStr => "a string literal",
+            Str => "a string literal",
             Char => "a character literal",
             Unknown => "unrecognized text",
             Eof => "end of file",
@@ -288,51 +256,32 @@ impl TokenKind {
             True => "true",
             Type => "type",
             While => "while",
-            LParen => "(",
-            RParen => ")",
-            LBrace => "{",
-            RBrace => "}",
-            LBracket => "[",
-            RBracket => "]",
+            ParenLeft => "(",
+            ParenRight => ")",
+            BraceLeft => "{",
+            BraceRight => "}",
+            BracketLeft => "[",
+            BracketRight => "]",
             Comma => ",",
             Semicolon => ";",
             Colon => ":",
-            ColonColon => "::",
             Dot => ".",
-            DotDot => "..",
-            DotDotDot => "...",
             Arrow => "->",
             Plus => "+",
             Minus => "-",
             Star => "*",
             Slash => "/",
             Percent => "%",
-            Amp => "&",
-            Pipe => "|",
-            Caret => "^",
-            Tilde => "~",
             Bang => "!",
             AmpAmp => "&&",
             PipePipe => "||",
-            Shl => "<<",
-            Shr => ">>",
-            Eq => "=",
-            EqEq => "==",
-            BangEq => "!=",
-            Lt => "<",
-            Le => "<=",
-            Gt => ">",
-            Ge => ">=",
-            PlusEq => "+=",
-            MinusEq => "-=",
-            StarEq => "*=",
-            SlashEq => "/=",
-            PercentEq => "%=",
-            AmpEq => "&=",
-            PipeEq => "|=",
-            CaretEq => "^=",
-            ShlEq => "<<=",
-            ShrEq => ">>=",
+            Equals => "=",
+            EqualTo => "==",
+            NotEqualTo => "!=",
+            LessThan => "<",
+            LessThanOrEqualTo => "<=",
+            GreaterThan => ">",
+            GreaterThanOrEqualTo => ">=",
             _ => return None,
         })
     }

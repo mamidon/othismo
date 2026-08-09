@@ -27,20 +27,12 @@ let input = parse(input);
 // A statement, not an expression, so `if x = 1 { … }` does not compile — the
 // typo class is gone by construction rather than by lint (§3).
 
+// `=` is the only assignment operator in the core. The compound forms —
+// `+=` and the rest — come back when there is a reason for them; each is
+// exactly `a = a op b` with the place evaluated once (§3).
 counter = counter + 1;
-
-// Each compound form is exactly `a = a op b` with the place evaluated once,
-// and each traps on overflow like the operator it wraps (§2).
-counter += 1;
-counter -= 1;
-counter *= 2;
-counter /= 2;
-counter %= 3;
-counter &= 0xff;
-counter |= 0x0f;
-counter ^= 0xf0;
-counter <<= 1;
-counter >>= 1;
+counter = counter * 2;
+counter = counter % 3;
 
 // The left side is a place — a name, a field, or an index — not a pattern.
 point.x = 5;
@@ -65,7 +57,7 @@ if ready { log("go"); }
 // loop produce something, and `while true { … }` covers the control flow (§4).
 
 while counter < 10 {
-  counter += 1;
+  counter = counter + 1;
 }
 
 // `break` and `continue` apply to the innermost enclosing loop. Unlabelled
@@ -96,7 +88,7 @@ while (Point { x: 0, y: 0 }) == target {
 while counter > 0 {
   let step = counter * 2;
   observe(step);
-  counter -= 1;
+  counter = counter - 1;
 }
 
 // ---- Early exit -----------------------------------------------------------

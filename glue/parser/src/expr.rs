@@ -1,10 +1,11 @@
 //! Expressions, by precedence climbing.
 //!
-//! §2's precedence table is a ladder of twelve rungs, and writing it as twelve
-//! mutually recursive functions would mean twelve near-identical bodies and a
-//! stack frame per rung for every operand. It is written here as binding
-//! powers instead: one loop, one table, and the table is the only thing to
-//! read when checking it against the spec.
+//! §2's precedence table is a ladder — eight rungs in the core, since the
+//! bitwise and shift levels are gone — and writing it as eight mutually
+//! recursive functions would mean eight near-identical bodies and a stack
+//! frame per rung for every operand. It is written here as binding powers
+//! instead: one loop, one table, and the table is the only thing to read when
+//! checking it against the spec.
 //!
 //! Binding power runs the other way from §2's level numbers — level 1 binds
 //! tightest, so it gets the *largest* power. A left-associative operator takes
@@ -21,15 +22,11 @@ use crate::syntax::NodeKind;
 /// §2's ladder, tightest first. Names here are the table's row labels; the
 /// numbers are derived from them so that the two can't drift.
 mod level {
-    pub const POSTFIX: u8 = 12; // f(…)  a[…]  .field  .method(…)
-    pub const UNARY: u8 = 11; //   -  !  ~
-    pub const AS: u8 = 10;
-    pub const PRODUCT: u8 = 9; //  *  /  %
-    pub const SUM: u8 = 8; //      +  -
-    pub const SHIFT: u8 = 7; //    <<  >>
-    pub const BIT_AND: u8 = 6; //  &
-    pub const BIT_XOR: u8 = 5; //  ^
-    pub const BIT_OR: u8 = 4; //   |
+    pub const POSTFIX: u8 = 8; // f(…)  a[…]  .field  .method(…)
+    pub const UNARY: u8 = 7; //   -  !
+    pub const AS: u8 = 6;
+    pub const PRODUCT: u8 = 5; //  *  /  %
+    pub const SUM: u8 = 4; //      +  -
     pub const COMPARE: u8 = 3; //  ==  !=  <  <=  >  >=   (non-associative)
     pub const AND: u8 = 2; //      &&
     pub const OR: u8 = 1; //       ||
@@ -88,7 +85,7 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
 
         // `Point { x: 1 }` (§6). Only after a bare name, and only where a
         // brace can't be a block instead — see `Cursor::no_struct_literal`.
-        if operator == TokenKind::LBrace
+        if operator == TokenKind::BraceLeft
             && lhs.kind() == NodeKind::NameExpr
             && cursor.struct_literals_allowed()
         {
@@ -128,9 +125,10 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
     lhs
 }
 
-/// §2's prefix operators. No `+`, which would be a no-op with a spelling.
+/// §2's prefix operators. No `+`, which would be a no-op with a spelling, and
+/// no `~` — the core has no bitwise operators to complement with.
 fn is_unary_operator(kind: TokenKind) -> bool {
-    matches!(kind, TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde)
+    matches!(kind, TokenKind::Minus | TokenKind::Bang)
 }
 
 fn binary_operator(kind: TokenKind) -> Option<(u8, u8)> {
@@ -138,11 +136,8 @@ fn binary_operator(kind: TokenKind) -> Option<(u8, u8)> {
     Some(left_assoc(match kind {
         Star | Slash | Percent => level::PRODUCT,
         Plus | Minus => level::SUM,
-        Shl | Shr => level::SHIFT,
-        Amp => level::BIT_AND,
-        Caret => level::BIT_XOR,
-        Pipe => level::BIT_OR,
-        EqEq | BangEq | Lt | Le | Gt | Ge => level::COMPARE,
+        EqualTo | NotEqualTo | LessThan | LessThanOrEqualTo | GreaterThan
+        | GreaterThanOrEqualTo => level::COMPARE,
         AmpAmp => level::AND,
         PipePipe => level::OR,
         _ => return None,
@@ -154,10 +149,10 @@ fn binary_operator(kind: TokenKind) -> Option<(u8, u8)> {
 /// expression grammar that does.
 fn postfix_operator(cursor: &Cursor, kind: TokenKind) -> Option<NodeKind> {
     Some(match kind {
-        TokenKind::LParen => NodeKind::CallExpr,
-        TokenKind::LBracket => NodeKind::IndexExpr,
+        TokenKind::ParenLeft => NodeKind::CallExpr,
+        TokenKind::BracketLeft => NodeKind::IndexExpr,
         TokenKind::Dot => {
-            if cursor.nth(1) == TokenKind::Ident && cursor.nth(2) == TokenKind::LParen {
+            if cursor.nth(1) == TokenKind::Ident && cursor.nth(2) == TokenKind::ParenLeft {
                 NodeKind::MethodCallExpr
             } else {
                 NodeKind::FieldExpr
@@ -176,7 +171,10 @@ fn postfix(cursor: &mut Cursor, lhs: Closed, kind: NodeKind) -> Closed {
             let allowed = cursor.set_struct_literals_allowed(true);
             expr(cursor);
             cursor.set_struct_literals_allowed(allowed);
-            cursor.expect(TokenKind::RBracket, DiagnosticKind::ExpectedClosingBracket);
+            cursor.expect(
+                TokenKind::BracketRight,
+                DiagnosticKind::ExpectedClosingBracket,
+            );
         }
         NodeKind::FieldExpr => {
             cursor.bump(); // `.`
@@ -198,7 +196,7 @@ fn arg_list(cursor: &mut Cursor) {
     // Inside brackets a `{` can only be a struct literal, so whatever
     // restriction a surrounding condition imposed does not reach here.
     let allowed = cursor.set_struct_literals_allowed(true);
-    while !cursor.at(TokenKind::RParen) && !cursor.at_eof() {
+    while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
         expr(cursor);
         // Progress is the comma's job: an argument that parsed nothing leaves
         // the cursor where it was, so without a separator to consume there is
@@ -208,7 +206,7 @@ fn arg_list(cursor: &mut Cursor) {
         }
     }
     cursor.set_struct_literals_allowed(allowed);
-    cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
+    cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
     cursor.close(mark);
 }
 
@@ -217,7 +215,7 @@ fn field_init_list(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::FieldInitList);
     cursor.bump(); // `{`
     let allowed = cursor.set_struct_literals_allowed(true);
-    while !cursor.at(TokenKind::RBrace) && !cursor.at_eof() {
+    while !cursor.at(TokenKind::BraceRight) && !cursor.at_eof() {
         let field = cursor.open(NodeKind::FieldInit);
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedFieldName);
         cursor.expect(TokenKind::Colon, DiagnosticKind::ExpectedColon);
@@ -228,7 +226,7 @@ fn field_init_list(cursor: &mut Cursor) {
         }
     }
     cursor.set_struct_literals_allowed(allowed);
-    cursor.expect(TokenKind::RBrace, DiagnosticKind::ExpectedClosingBrace);
+    cursor.expect(TokenKind::BraceRight, DiagnosticKind::ExpectedClosingBrace);
     cursor.close(mark);
 }
 
@@ -236,12 +234,12 @@ fn field_init_list(cursor: &mut Cursor) {
 /// initializer are all the same node.
 pub fn block(cursor: &mut Cursor) -> Closed {
     let mark = cursor.open(NodeKind::BlockExpr);
-    cursor.expect(TokenKind::LBrace, DiagnosticKind::ExpectedOpeningBrace);
+    cursor.expect(TokenKind::BraceLeft, DiagnosticKind::ExpectedOpeningBrace);
     // A brace is unambiguous once we're inside one.
     let allowed = cursor.set_struct_literals_allowed(true);
-    crate::stmt::statements(cursor, TokenKind::RBrace);
+    crate::stmt::statements(cursor, TokenKind::BraceRight);
     cursor.set_struct_literals_allowed(allowed);
-    cursor.expect(TokenKind::RBrace, DiagnosticKind::ExpectedClosingBrace);
+    cursor.expect(TokenKind::BraceRight, DiagnosticKind::ExpectedClosingBrace);
     cursor.close(mark)
 }
 
@@ -273,36 +271,47 @@ fn if_expr(cursor: &mut Cursor) -> Closed {
     cursor.close(mark)
 }
 
-/// `|x| x + 1`, or `|| work()` (§5).
+/// `(x) -> x + 1`, `(x: u64) -> x + 1`, or `() -> work()` (§5).
 ///
 /// Parameter types are optional here, unlike a `fn`: a declaration is read by
 /// others, a lambda is read in place.
+///
+/// The parameter list is spelled exactly like a parenthesized expression, so
+/// [`at_lambda`] is what tells them apart — and it has to look past the `)` to
+/// do it, since `(a)` and `(a) -> a` agree on every token before that.
 fn lambda(cursor: &mut Cursor) -> Closed {
     let mark = cursor.open(NodeKind::LambdaExpr);
+
     let params = cursor.open(NodeKind::LambdaParamList);
-    if cursor.at(TokenKind::PipePipe) {
-        // §5: in operand position `||` opens a lambda with no parameters. It
-        // is the same token as the operator, and only the position tells them
-        // apart — the wart Rust has, which has not proved to be a problem.
-        cursor.bump();
-    } else {
-        cursor.bump(); // `|`
-        while !cursor.at(TokenKind::Pipe) && !cursor.at_eof() {
-            let param = cursor.open(NodeKind::LambdaParam);
-            cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
-            if cursor.eat(TokenKind::Colon) {
-                ty(cursor);
-            }
-            cursor.close(param);
-            if !cursor.eat(TokenKind::Comma) {
-                break;
-            }
+    cursor.bump(); // `(`
+    while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
+        let param = cursor.open(NodeKind::LambdaParam);
+        cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
+        if cursor.eat(TokenKind::Colon) {
+            ty(cursor);
         }
-        cursor.expect(TokenKind::Pipe, DiagnosticKind::ExpectedClosingPipe);
+        cursor.close(param);
+        if !cursor.eat(TokenKind::Comma) {
+            break;
+        }
     }
+    cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
     cursor.close(params);
+
+    // `->` introduces the *body*, not a return type: a lambda's types come
+    // from context (§5), so there is nowhere for one to go.
+    cursor.expect(TokenKind::Arrow, DiagnosticKind::ExpectedLambdaBody);
     expr(cursor);
     cursor.close(mark)
+}
+
+/// Whether the `(` at the cursor opens a lambda's parameters.
+///
+/// The one place the grammar needs unbounded lookahead. `(a)`, `()`, and
+/// `(a, b)` are all parenthesized expressions or unit; the same text followed
+/// by `->` is a lambda, and nothing nearer than that decides it.
+fn at_lambda(cursor: &Cursor) -> bool {
+    cursor.after_group(TokenKind::ParenLeft, TokenKind::ParenRight) == TokenKind::Arrow
 }
 
 /// The operand at the bottom of the ladder.
@@ -321,9 +330,12 @@ fn primary(cursor: &mut Cursor) -> Closed {
             cursor.bump();
             cursor.close(mark)
         }
-        TokenKind::LParen => {
+        // `(…)` is three things — a lambda's parameters, unit, or grouping —
+        // and only what follows the `)` says which.
+        TokenKind::ParenLeft if at_lambda(cursor) => lambda(cursor),
+        TokenKind::ParenLeft => {
             // `()` is the unit value, not an empty grouping (§6).
-            let unit = cursor.nth(1) == TokenKind::RParen;
+            let unit = cursor.nth(1) == TokenKind::ParenRight;
             let mark = cursor.open(if unit {
                 NodeKind::UnitExpr
             } else {
@@ -335,12 +347,11 @@ fn primary(cursor: &mut Cursor) -> Closed {
                 expr(cursor);
                 cursor.set_struct_literals_allowed(allowed);
             }
-            cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
+            cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
             cursor.close(mark)
         }
-        TokenKind::LBrace => block(cursor),
+        TokenKind::BraceLeft => block(cursor),
         TokenKind::If => if_expr(cursor),
-        TokenKind::Pipe | TokenKind::PipePipe => lambda(cursor),
         // Nothing is consumed. The caller's loop then finds no operator and
         // stops, or finds one and consumes it — either way the parse advances,
         // and whatever is really here is swept up by the enclosing construct.
@@ -359,7 +370,7 @@ pub fn ty(cursor: &mut Cursor) -> Closed {
             cursor.bump();
             cursor.close(mark)
         }
-        TokenKind::LParen if cursor.nth(1) == TokenKind::RParen => {
+        TokenKind::ParenLeft if cursor.nth(1) == TokenKind::ParenRight => {
             let mark = cursor.open(NodeKind::UnitType);
             cursor.bump();
             cursor.bump();
@@ -368,14 +379,14 @@ pub fn ty(cursor: &mut Cursor) -> Closed {
         TokenKind::Fn => {
             let mark = cursor.open(NodeKind::FnType);
             cursor.bump(); // `fn`
-            cursor.expect(TokenKind::LParen, DiagnosticKind::ExpectedClosingParen);
-            while !cursor.at(TokenKind::RParen) && !cursor.at_eof() {
+            cursor.expect(TokenKind::ParenLeft, DiagnosticKind::ExpectedClosingParen);
+            while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
                 ty(cursor);
                 if !cursor.eat(TokenKind::Comma) {
                     break;
                 }
             }
-            cursor.expect(TokenKind::RParen, DiagnosticKind::ExpectedClosingParen);
+            cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
             if cursor.at(TokenKind::Arrow) {
                 let ret = cursor.open(NodeKind::RetType);
                 cursor.bump();

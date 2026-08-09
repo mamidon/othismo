@@ -1,6 +1,5 @@
-// A scratch file for poking at the editor integration.
-// This tokenizes cleanly — the tokenizer's test suite asserts it — but the
-// parser is still empty, so nothing here parses yet.
+// A scratch file for poking at the editor integration — the smallest program
+// that uses a bit of everything.
 
 struct Point {
   x: s64,
