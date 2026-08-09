@@ -1,10 +1,9 @@
 //! Glue tokenizer: source text in, tokens plus diagnostics out.
 //!
-//! The language it lexes is §1 of the construct checklist, plus the operators
-//! §2 and §3 spell out. Anything decided in those documents is implemented
-//! here; anything deferred there is deferred here, with two exceptions noted on
-//! [`TokenKind::ColonColon`] and [`TokenKind::DotDot`], which lex so the parser
-//! can produce a useful error rather than a confusing one.
+//! The language it lexes is a core cut from §1 of the construct checklist,
+//! plus the operators §2 and §3 spell out. Nothing is lexed that the grammar
+//! has no use for: a token that exists only to give the parser something to
+//! complain about is a token to add back when the construct arrives.
 //!
 //! Three properties shape the API:
 //!

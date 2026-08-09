@@ -143,10 +143,7 @@ fn is_whitespace(byte: u8) -> bool {
 
 // --- Dots ------------------------------------------------------------------
 
-/// A leading-dot float, or field access.
-///
-/// Ranges are deferred (§2) and nothing else spells a dot, so unlike the
-/// spec's `..`/`...` this has only the two cases.
+/// A leading-dot float, or field access — the only two things a `.` can be.
 fn consume_dot(cursor: &mut Cursor<u8>, source: &str, out: &mut Tokens) -> TokenKind {
     // §1's one exception to context-free lexing: `.5` is a float unless the
     // preceding significant token could end an expression, in which case the

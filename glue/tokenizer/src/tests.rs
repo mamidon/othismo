@@ -180,8 +180,7 @@ fn takes_the_longest_operator() {
     assert_eq!(kinds("->-"), [Arrow, Minus]);
     assert_eq!(kinds("!=!"), [NotEqualTo, Bang]);
     assert_eq!(kinds("==="), [EqualTo, Equals]);
-    // `<<` and `>>` are two tokens now that there are no shifts, and `..` is
-    // two dots now that ranges are gone.
+    // Nothing in the core spells `<<`, `>>`, or `..`, so each is two tokens.
     assert_eq!(kinds("<<"), [LessThan, LessThan]);
     assert_eq!(kinds(">>"), [GreaterThan, GreaterThan]);
     assert_eq!(kinds(".."), [Dot, Dot]);
@@ -391,10 +390,10 @@ fn whitespace_does_not_rescue_the_ambiguity() {
 
 #[test]
 fn a_dot_cannot_end_an_expression() {
-    // With ranges gone there is no `..`, so `0..5` is a dot and then a
-    // leading-dot float — a `.` can't end an expression, so the float rule
-    // fires on the second one. It is a parse error either way; the point is
-    // that the same left-context rule decides it.
+    // `0..5` is a dot and then a leading-dot float: a `.` cannot end an
+    // expression, so the float rule fires on the second one. It is a parse
+    // error either way — the point is that the ordinary left-context rule
+    // decides it, with no special case for a construct that doesn't exist.
     use TokenKind::*;
     assert_eq!(kinds("0..5"), [Int, Dot, Float]);
     assert_eq!(kinds("..5"), [Dot, Float]);

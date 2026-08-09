@@ -82,8 +82,8 @@ impl<'a, T: Copy + PartialEq> Cursor<'a, T> {
         self.try_consume(|item| item == want).is_some()
     }
 
-    /// Consume `want` in full, or nothing at all. This is what makes `"""`,
-    /// `...`, and `*/` one line each.
+    /// Consume `want` in full, or nothing at all. This is what makes `//`,
+    /// `/*`, and `*/` one line each.
     pub fn eat_seq(&mut self, want: &[T]) -> bool {
         if self.rest().starts_with(want) {
             self.index += want.len();
