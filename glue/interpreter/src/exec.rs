@@ -186,9 +186,8 @@ impl<'a> Machine<'a> {
     /// A `break` or `continue` written *in* the condition — which needs a block
     /// expression, so `while { break; true } { … }` — belongs to this loop, on
     /// §4's reading that the innermost enclosing loop of a condition is the
-    /// loop it conditions. Elaboration counts the header as outside the loop
-    /// when it checks that a jump has one at all, so the two disagree about
-    /// whether that program is legal; they agree about what it does.
+    /// loop it conditions. Elaboration counts the header inside the loop for
+    /// the same reason, so the two agree about which loop such a jump leaves.
     fn while_(
         &mut self,
         func: &'a Func,

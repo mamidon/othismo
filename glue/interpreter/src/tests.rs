@@ -401,6 +401,26 @@ fn break_and_continue_apply_to_the_nearest_loop() {
     );
 }
 
+/// §4: the header runs every iteration, because a condition is re-evaluated
+/// every iteration — so a condition with an effect has it every time round.
+#[test]
+fn a_condition_runs_every_iteration() {
+    assert_eq!(int("let mut i = 0u64; while { i = i + 1; i < 3 } { } i"), 3);
+}
+
+/// And a jump written in the condition belongs to the loop it conditions,
+/// which is the same reading elaboration takes when it checks that a jump has
+/// a loop at all.
+#[test]
+fn a_jump_in_a_condition_leaves_its_loop() {
+    assert_eq!(
+        int("let mut i = 0u64;
+             while { i = i + 1; if i > 2 { break; } true } { }
+             i"),
+        3
+    );
+}
+
 /// §4: a jump needs a loop, and elaboration is where that is settled now.
 #[test]
 fn a_jump_outside_a_loop_is_refused() {

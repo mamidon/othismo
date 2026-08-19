@@ -342,6 +342,18 @@ fn a_jump_needs_a_loop() {
 
 /// §4: a loop is a statement and its value is unit, so the `while` carries no
 /// destination.
+/// §4: a jump written in a loop's *condition* belongs to that loop — it is the
+/// innermost one enclosing it. The condition needs a block expression to hold a
+/// statement, which is the only way to write one there.
+#[test]
+fn a_jump_in_a_condition_belongs_to_its_loop() {
+    let ir = ir("while { break; true } { }");
+    assert!(ir.contains("(header 1\n        (break))"), "{ir}");
+    // The body is the *second* block, and empty. Finding it by kind would find
+    // the condition.
+    assert!(ir.contains("(body 2)"), "{ir}");
+}
+
 #[test]
 fn a_loop_has_no_value() {
     let ir = ir("let mut n = 0u64; while n < 3u64 { n = n + 1u64; } n");

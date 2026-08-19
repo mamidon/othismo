@@ -932,17 +932,28 @@ impl Lowerer<'_> {
     }
 
     fn while_stmt(&mut self, blk: BlockId, node: NodeId) {
-        let children = cst::nodes(self.tree, node);
+        // By position: the condition, then the body. Finding the body by kind
+        // would find the condition instead when the condition is itself a
+        // block — which is the only way to write a statement in one, and so
+        // the only way to write a jump there.
+        let children = cst::expr_children(self.tree, node);
         let cond_node = children.first().copied();
         let body_node = children
-            .iter()
-            .find(|child| self.tree.kind(**child) == NodeKind::BlockExpr)
-            .copied();
+            .get(1)
+            .copied()
+            .filter(|child| self.tree.kind(*child) == NodeKind::BlockExpr);
 
         // The header re-runs every iteration, so the condition's computation
         // belongs inside it rather than before the loop. That is ANF's price,
         // and it is visible right here.
+        //
+        // The condition is lowered *inside* the loop for §4's purposes: a jump
+        // written in it — which needs a block expression, so `while { break;
+        // true } { … }` — has this loop as its innermost enclosing one, since
+        // this is the loop it conditions. The header is where it lands, and
+        // both back ends leave the loop from there.
         let header = self.new_block();
+        self.cur_mut().loop_depth += 1;
         let cond = match cond_node {
             Some(cond_node) => {
                 let checked = self.expr(header, cond_node, Some(self.t_bool));
@@ -950,6 +961,7 @@ impl Lowerer<'_> {
             }
             None => Operand::Const(self.c_unit),
         };
+        self.cur_mut().loop_depth -= 1;
 
         let body = self.new_block();
         if let Some(body_node) = body_node {
