@@ -1,10 +1,18 @@
 # Core IR — the structures
 
-> **Status:** Draft for review, 2026-08-18. Not yet folded into [`core-ir.md`](core-ir.md).
+> **Status:** Reviewed and resolved 2026-08-18. Superseded by `../ir/`.
 >
-> A concrete rendering of the representation `core-ir.md` specifies in prose. Two items at
-> the end **sharpen decisions already recorded there** and should be reconciled before this
-> is merged or discarded.
+> This was the review draft that turned [`core-ir.md`](core-ir.md)'s prose into a concrete
+> representation. Both of the sharpenings it proposed were adjudicated — see the end — and
+> `core-ir.md` now carries them. It is kept for the review trail, not as a specification.
+>
+> **The Rust below is the pre-implementation draft and has since drifted.** The crate is
+> authoritative: `ir/src/program.rs` for the instruction set, `ir/src/types.rs` for the type
+> table, `ir/src/consts.rs` for the constant pool. Known differences: `Instantiation`,
+> `HostImport`, `Index`, and `Trap` were dropped under the rule that the IR contains only
+> what lowering can produce, and `Place` lost its `Slot` variant as redundant with `Assign`.
+> The two worked examples below are current — they are pinned as tests in `ir/src/tests.rs`,
+> so they cannot drift without failing the build.
 
 Here's the whole thing. It's about 150 lines of Rust, which is itself worth noticing — the
 smallness is what the five decisions bought.
@@ -271,20 +279,26 @@ enclosing function — `counter.λ0`. In the data it is an ordinary `FuncId` lik
 the name exists for diagnostics and for dumps, and `Func::name` is `Option<Sym>` for
 exactly this reason.
 
-## Two things this sharpened, versus what I wrote in the doc
+## Two things this sharpened — both resolved
 
-**A capture needs a cell only if the binding is `mut`.** The doc says captured bindings get
-cells; that's stronger than necessary. A non-`mut` binding can never be assigned, so copying
-its value into the closure environment is observationally identical — and under §6's
-reference semantics, copying a struct binding copies the *reference*, so mutation of the
-object stays visible either way. What the cell protects is assignment to the *name*, which
-requires `mut`.
+**A capture needs a cell only if the binding is assigned.** *(Proposed as "only if `mut`";
+corrected and accepted 2026-08-18.)* `core-ir.md` said captured bindings get cells, which is
+stronger than necessary: copying an unassigned binding's value into the closure environment
+is observationally identical, because every copy stays equal forever — and under §6's
+reference semantics copying a struct binding copies the *reference*, so mutation of the
+object stays visible either way. What the cell protects is assignment to the **name**.
 
-That also makes §5's per-iteration promise fall out more cheaply than I described: a
-non-`mut` `let` in a loop body is copied fresh into each closure, per iteration, with no
-allocation at all. Only captured `mut` bindings pay.
+The draft said that meant `mut`, and that was wrong. §3 is explicit that rebinding is
+unrestricted on any binding and that `mut` gates only in-place mutation, so a lambda can
+rebind a non-`mut` captured binding and the criterion has to be assignment. §5 reads the
+other way — "the binding must be `mut` for the lambda to mutate it at all" — and that
+disagreement is now written down in `core-ir.md` rather than silently resolved here.
 
-**The constant pool needs no `Rc<RefCell>` and no unsafe.** `Const::Struct` holds
+That still makes §5's per-iteration promise fall out more cheaply than the doc described: an
+unassigned `let` in a loop body is copied fresh into each closure, per iteration, with no
+allocation at all. Only captured *and assigned* bindings pay.
+
+**The constant pool needs no `Rc<RefCell>` and no unsafe.** *(Accepted 2026-08-18.)* `Const::Struct` holds
 `Vec<ConstId>`, so sharing is "the same id twice" and a cycle is just an id that
 transitively reaches itself. Index arenas represent cyclic object graphs that Rust
 ownership can't. That's decision 3 — no restrictions on comptime values — getting cheaper
@@ -293,5 +307,5 @@ evaluator's working heap gets interned into ids.
 
 ---
 
-Want me to fold both into `core-ir.md` and stand up an `ir/` crate with this as the
-skeleton?
+Both were folded into `core-ir.md` on 2026-08-18, and the crate was built from this draft.
+Nothing here is outstanding.

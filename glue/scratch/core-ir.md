@@ -6,6 +6,10 @@
 > the shared artifact the two back ends consume. Named and required by
 > [§14](constructs/14-metaprogramming-and-tooling.md#what-reaches-the-back-ends);
 > specified here.
+>
+> **Implemented in `../ir/`.** The crate is this document executable: `ir::lower` takes a
+> CST and returns a `Program` plus diagnostics, and `ir::dump` renders it. Where the two
+> disagree the crate is wrong, except where this document says otherwise and dates it.
 
 ## What this is
 
@@ -135,10 +139,15 @@ inside it. Nodes holding Rust references would make that an immediate borrow con
 instantiation.
 
 The consequence worth preserving: **keep IR nodes free of native heap pointers even though
-nothing requires it.** The constant pool is the one place that holds live Rust values. If
-goal §4.1 ever ships an interpreter tier inside a running image — which is serialization
-by another name — the expensive-to-change part is already right and the deferred part is
-isolated to one component.
+nothing requires it.** If goal §4.1 ever ships an interpreter tier inside a running image —
+which is serialization by another name — the expensive-to-change part is already right.
+
+**Revised 2026-08-18.** This originally said the constant pool would be the one place
+holding live Rust values, and that turned out not to be necessary. A `Const::Struct` holds
+`ConstId`s, so sharing is the same id appearing twice and a cycle is an id that
+transitively reaches itself. An index arena represents graphs Rust ownership cannot, with
+no `Rc<RefCell<…>>` and no unsafe — which makes decision 3 cheaper than it looked, since
+the pool is the *frozen* result of evaluation rather than the evaluator's working heap.
 
 ### 5. Slots, not SSA
 
@@ -163,74 +172,82 @@ classic loop-variable trap, absent by construction. Function-scoped slots reintr
 one slot, reused, shared by every lambda the loop creates.
 
 So capture analysis — which §12 already lists as a separate static pass — marks each
-binding as captured or not, and:
+binding, and:
 
 - an **uncaptured** binding is a slot, and costs nothing;
-- a **captured** binding is a heap cell allocated at its point of declaration, with the
-  slot holding a reference to the cell.
+- a binding that is **captured and assigned** is a heap cell allocated at its point of
+  declaration, with the slot holding a reference to the cell;
+- a binding that is **captured and never assigned** is copied into the closure
+  environment. Every copy stays equal forever, so the sharing a cell provides is
+  unobservable — and under §6's reference semantics copying a struct binding copies the
+  *reference*, so mutation of the object is visible either way. What a cell protects is
+  assignment to the **name**.
 
 A `let` in a loop body allocates a fresh cell per iteration, so §5's per-iteration
 semantics falls out rather than needing a rule, and §5's "captured bindings outlive the
-frame that created them" is satisfied by the same mechanism.
+frame that created them" is satisfied by the same mechanism. In the copied case it falls
+out even more cheaply: each iteration copies its own value and there is no allocation at
+all.
+
+**Assigned, not `mut` — and that is a place two sections disagree.** §3 says rebinding is
+unrestricted on any binding (`x = Foo::create(); // fine — rebinding is unrestricted`) and
+that `mut` gates only in-place mutation. §5 says "the binding must be `mut` for the lambda
+to mutate it at all (§3)". Under §3's rule a lambda can rebind a non-`mut` captured
+binding, so the criterion has to be assignment. **Decided 2026-08-18: assignment.** If §5
+turns out to mean that assigning a captured binding requires `mut`, this tightens and
+fewer cells are allocated; nothing else moves.
+
+Both halves are syntactic, which is deliberate — §1 asks for exactly that, since "a rule
+needing type inference or dataflow to answer is a rule the two back ends will eventually
+disagree about." The scan over-approximates by ignoring shadowing, so the cost of
+imprecision is a cell nobody needed rather than a missing one.
 
 **Per binding, not per frame.** A per-frame environment would re-share everything declared
 in one iteration, which is the bug in a different shape.
 
-This adds `MakeCell` / `CellGet` / `CellSet` to the IR, and makes a closure's captures a
-list of cell references rather than slot copies. It is the upvalue treatment Lua uses and
-the `let`-versus-`var` distinction JavaScript arrived at the hard way.
+This adds `MakeCell` and `CellGet` to the IR, plus a `Place::Cell` for the write side —
+assignment through a cell is an ordinary `Store`, not a third instruction. A closure's
+captures are cell references for the cell case and slot copies otherwise. It is the upvalue
+treatment Lua uses and the `let`-versus-`var` distinction JavaScript arrived at the hard
+way.
 
 ---
 
 ## Shape
 
-Illustrative, not normative — the normative statement is the prose above.
+**The crate is the normative statement.** `ir/src/program.rs` holds the instruction set and
+the three invariants above as doc comments; `ir/src/types.rs` and `ir/src/consts.rs` hold
+the type table and the constant pool. An abridged copy here would drift, and it did — the
+sketch that used to sit in this section predated the `Operand` refinement and still carried
+a `Cast { to: TypeId }`, which invariant 1 forbids.
 
-```rust
-struct Program {
-    funcs:  Vec<Func>,        // monomorphic; index = FuncId
-    types:  Vec<TypeDef>,     // index = TypeId
-    consts: ConstPool,        // comptime-produced values
-    instantiations: HashMap<(DeclId, Vec<ConstId>), FuncId>,
-}
+What the reader should know without opening the crate:
 
-struct Func {
-    params: u32,              // the first `params` slots
-    ret:    TypeId,
-    slots:  Vec<TypeId>,      // user bindings and ANF temporaries alike
-    body:   BlockId,
-    origin: InstantiationId,  // provenance: the chain of call sites
-}
+- A `Stmt` is `Assign`, `Store`, `If`, `While`, `Break`, `Continue`, `Return`, or `Drop`.
+  Nothing else, and nothing that jumps.
+- An `Rvalue` is `Use`, `Unary`, `Binary`, `Cast`, `Call`, `CallIndirect`, `MakeStruct`,
+  `Field`, `MakeCell`, `CellGet`, or `MakeClosure`.
+- An `Operand` is a `Slot` or a `ConstId`. Invariant 2 is that rule, and it is the reason
+  the list above has no nested-expression variant.
+- A `Place` — the target of a `Store` — is a field or a cell. Assigning a plain local is
+  an `Assign`, so `Place` carries only the forms `Assign` cannot express.
 
-enum Stmt {
-    Assign  { slot: Slot, rhs: Rvalue },
-    Store   { place: Place, value: Slot },        // §3's place: name | field | index
-    If      { cond: Slot, then: BlockId, els: BlockId },
-    While   { cond: BlockId, cond_slot: Slot, body: BlockId },
-    Break, Continue,
-    Return(Option<Slot>),
-    Drop(Rvalue),                                  // §3's expression statement
-}
+`CallIndirect` exists from the first day even though §11 is unstarted, because lambdas need
+it already (§5: `funcref` in a table, `call_indirect`) and vtables will be the same node
+when §11 arrives.
 
-enum Rvalue {
-    Const(ConstId),
-    Copy(Slot),
-    Unary(UnOp, Slot),
-    Binary(BinOp, Slot, Slot),
-    Cast { value: Slot, to: TypeId },              // §2 has no implicit conversion
-    Call(FuncId, Vec<Slot>),
-    CallIndirect { callee: Slot, sig: TypeId, args: Vec<Slot> },
-    MakeStruct { ty: TypeId, fields: Vec<Slot> },
-    Field(Slot, FieldIdx),
-    MakeCell(Slot),
-    CellGet(Slot),
-    MakeClosure { func: FuncId, captures: Vec<Slot> },
-}
-```
+### What the IR deliberately lacks
 
-`CallIndirect` exists from the first day even though §11 is unstarted, because lambdas
-need it already (§5: `funcref` in a table, `call_indirect`) and vtables will be the same
-node when §11 arrives.
+The rule the crate follows: **it contains only what lowering can produce**, so there is no
+node that cannot be exercised. Four things this document anticipated are therefore absent,
+each additive and each blocked on a section rather than on a decision:
+
+| Absent | Waiting on |
+| --- | --- |
+| An instantiation chain on provenance; `Instantiation`, `InstId` | §14, once `comptime` has a token. Provenance is one CST node today. |
+| `CallHost`, `HostId` | §13, once a program can declare what it needs from the host. Until then a program can compute but cannot observably *do* anything (§3). |
+| `Index`, and every collection type | §6 and §8. `Str` is the only indexable thing, and what indexing it returns is open. |
+| `Trap` | §9. Constant failures are diagnostics (§2), and nothing else traps at lowering time yet. |
 
 ### The type table
 
@@ -251,6 +268,15 @@ instantiation can name real source in both the generic body and the call that in
 it.
 
 ### Crate layout
+
+Today, `ir` holds the representation, elaboration, and the dump:
+
+```
+tokenizer ← parser ← ir
+```
+
+Where it goes, once decision 2's evaluator exists. Elaboration and evaluation are mutually
+recursive (§14), so they end up in one crate or with `elab` depending on `eval`:
 
 ```
 ir    ← eval  (executes a Program)
