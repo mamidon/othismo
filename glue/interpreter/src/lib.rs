@@ -1,73 +1,73 @@
 //! Glue interpreter: source in, a value out.
 //!
-//! A tree-walking interpreter over the concrete syntax tree — the one
-//! [`parser::parse`] produces, with no lowering in between. That is a stopgap
-//! and is meant to be: the IL is being designed separately, and when it lands
-//! this crate's job becomes walking that instead. Until then the cheapest thing
-//! that runs a program is worth more than a second tree to keep in step with
-//! the first, and everything decided here — §2's arithmetic, §3's bindings,
-//! §4's loop — survives the change of input.
-//!
-//! # What runs today
-//!
-//! Expressions, `let`, assignment, blocks, `if`, `while`, and §5's functions —
-//! declarations, calls, `return`, functions as values, and lambdas with
-//! capture. A file is a block (§3), so its value is its trailing expression,
-//! and `let x = 2; x * 21` and `42` are both whole programs.
+//! Source is parsed, elaborated to core IR by `ir`, and executed. The
+//! interpreter used to walk the concrete syntax tree instead; that was a
+//! bring-up artifact, and it sat at the wrong end of the pipeline — name
+//! resolution, coercion, and evaluation order accumulated in it and lived
+//! nowhere else, which is exactly the divergence goal §2.2 names. They live in
+//! elaboration now, where the wasm back end will read them too.
 //!
 //! ```
 //! use interpreter::{Value, run};
 //!
-//! assert_eq!(run("let x = 2; x * 21").unwrap(), Value::Int(42));
+//! assert_eq!(run("let x = 2; x * 21").unwrap(), Value::u64(42));
 //! ```
 //!
-//! Everything else parses and then says it isn't implemented yet, which is a
-//! different thing to hear than a syntax error: `struct`, `type`, `as`,
-//! indexing, field access, and method calls.
+//! # What runs today
 //!
-//! # What is knowingly missing
+//! The scalar core: expressions, `let`, assignment, blocks, `if`, `while`, and
+//! §5's `fn` declarations, calls, and `return`. A file is a block (§3), so its
+//! value is its trailing expression, and `let x = 2; x * 21` and `42` are both
+//! whole programs.
 //!
-//! **There are no types.** Every integer is an `i64` and every float an `f64`,
-//! so §1's numeric tower is absent, a literal's suffix is read only to tell an
-//! integer from a float, and every annotation — on a `let`, a parameter, or a
-//! return — is read past and dropped. §2's rules that don't depend on width —
-//! trapping overflow, truncating division, no implicit conversion, no
-//! truthiness, no cross-type comparison — all hold. See [`Value`] for the
-//! details of what that costs.
+//! Closures, cells, structs, field access, and `as` elaborate but do not
+//! execute yet: each is an IR node the executor reports as
+//! [`TrapKind::Unsupported`] rather than running. They are the next two steps
+//! rather than open questions.
 //!
-//! The one place that absence is visible in a *message* rather than a missing
-//! check is arity: §5 checks it statically, so this checks it at the call and
-//! says so. §10 should make that unreachable.
+//! # What changed when the IR arrived
 //!
-//! **Declarations are hoisted per block.** §5 needs top-level declarations to be
-//! order-independent for mutual recursion, and §12 — which owes the general
-//! rule — is still empty. Hoisting every `fn` to the top of its own block is the
-//! smallest thing that covers it, and it is provisional.
+//! **There are types.** §1's numeric tower is real: a literal is pinned to a
+//! width, `255u8 + 1` traps where `255u16 + 1` does not, and an annotation is
+//! checked rather than read past. See [`Value`].
+//!
+//! **Most of what used to be a runtime error is a compile error.** An unbound
+//! name, a condition that isn't `bool`, the wrong number of arguments, `1 +
+//! 1.5` — all of them are [`ir::Diagnostic`]s now, reported before anything
+//! runs. §2's "constant expressions are checked at compile time rather than
+//! trapping" moves further still: `1 / 0` is a diagnostic, and the trap needs a
+//! value that isn't constant.
+//!
+//! What is left at run time is §2's traps: overflow, division by zero, and the
+//! recursion limit.
 
-mod env;
 mod error;
-mod eval;
-mod function;
+mod exec;
 mod ops;
 mod value;
 
 #[cfg(test)]
 mod tests;
 
-pub use crate::error::{RuntimeError, RuntimeErrorKind};
-pub use crate::value::Value;
+pub use crate::error::{RuntimeError, Trap, TrapKind};
+pub use crate::value::{IntTy, Value};
 
 use std::fmt;
 
+use ir::Program;
 use parser::Tree;
 use tokenizer::{Severity, Span};
 
 /// Everything that can stop a program producing a value.
+///
+/// Three stages, three shapes. A syntax error is a list because a caller
+/// running a file wants every problem in it; so is an elaboration error, for
+/// the same reason. A trap is one, because it happened.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Error {
-    /// The program didn't parse. Every problem found, in source order, because
-    /// a caller running a file wants the whole list and not the first one.
     Syntax(Vec<SyntaxError>),
+    /// Name resolution and type checking (§10, §12), in source order.
+    Elaboration(Vec<ir::Diagnostic>),
     Runtime(RuntimeError),
 }
 
@@ -94,6 +94,15 @@ impl fmt::Display for Error {
                 }
                 Ok(())
             }
+            Error::Elaboration(diagnostics) => {
+                for (index, diagnostic) in diagnostics.iter().enumerate() {
+                    if index > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{}", diagnostic.message())?;
+                }
+                Ok(())
+            }
             Error::Runtime(error) => write!(f, "{error}"),
         }
     }
@@ -101,18 +110,30 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Parses `source` and evaluates it.
+/// Parses `source`, elaborates it, and runs it.
 ///
-/// Refuses to run a program with any syntax error in it. A half-parsed tree is
-/// exactly what the language server wants and exactly what an interpreter does
-/// not: evaluating around an error node means guessing what the missing text
-/// said.
+/// Refuses to run a program with a diagnostic against it, at either stage. A
+/// half-parsed tree is exactly what the language server wants and exactly what
+/// an interpreter does not, and the same is true one stage later: elaboration
+/// is total, so a program with an unbound name still produces IR, with
+/// `TypeDef::Error` where the answer would have been. Running that would mean
+/// guessing what the program meant.
 pub fn run(source: &str) -> Result<Value, Error> {
     let errors = syntax_errors(source);
     if !errors.is_empty() {
         return Err(Error::Syntax(errors));
     }
-    eval(&parser::parse(source).tree, source).map_err(Error::Runtime)
+
+    let parse = parser::parse(source);
+    let lowered = ir::lower(&parse.tree, source);
+    if !lowered.diagnostics.is_empty() {
+        return Err(Error::Elaboration(lowered.diagnostics));
+    }
+
+    // The trap knows which IR node it came from; only here is the tree still
+    // around to say where that node is in the file.
+    eval(&lowered.program)
+        .map_err(|trap| Error::Runtime(RuntimeError::new(trap.kind, span(&parse.tree, trap.at))))
 }
 
 /// Every syntax error in `source`, lexical and grammatical, in source order.
@@ -142,11 +163,17 @@ pub fn syntax_errors(source: &str) -> Vec<SyntaxError> {
     errors
 }
 
-/// Evaluates an already-parsed tree.
+/// Runs an already-elaborated program.
 ///
-/// The seam the IL will move: this is the only entry point that takes a tree,
-/// so swapping the concrete syntax tree for a lowered one is a change to this
-/// signature and to the walk behind it, and nothing else.
-pub fn eval(tree: &Tree, source: &str) -> Result<Value, RuntimeError> {
-    eval::Interpreter::new(tree, source).run()
+/// The seam goal §2.2 asks for: this takes core IR and nothing else, so what it
+/// computes is what a wasm back end reading the same IR has to compute. A trap
+/// carries the IR node it happened at rather than a span, because the IR is all
+/// this side of the seam can see.
+pub fn eval(program: &Program) -> Result<Value, Trap> {
+    exec::Machine::new(program).run()
+}
+
+/// Where a piece of IR came from, in the file.
+fn span(tree: &Tree, at: ir::program::CstId) -> Span {
+    tree.span(at)
 }

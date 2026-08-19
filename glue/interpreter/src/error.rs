@@ -1,28 +1,50 @@
-//! What the interpreter refuses to do, and why.
+//! What stops a program mid-flight.
 //!
-//! Unlike [`parser::Diagnostic`], these kinds carry data. The parser's are
-//! data-free so a message is a `&'static str` on a path the language server
-//! runs per keystroke; a runtime error happens once, at the end of an
-//! evaluation that is already over, so there is nothing to save by leaving the
-//! offending name out of the message.
+//! The list is short now, and that is the point of having elaborated first.
+//! Everything this crate used to refuse — an unbound name, a condition that
+//! isn't `bool`, the wrong number of arguments, `1 + 1.5` — is an
+//! [`ir::Diagnostic`] before the program runs. What is left is §2's traps:
+//! the operations that are well typed and still have no answer.
 //!
-//! Every error is fatal. §9 hasn't decided what a trap is or whether one is
+//! Every trap is fatal. §9 hasn't decided what a trap is or whether one is
 //! recoverable, so the interpreter does the one thing that can't be wrong in
 //! advance of that decision: it stops, and says where.
+//!
+//! # Two types, one shape
+//!
+//! [`Trap`] carries a [`CstId`] — core IR's provenance, which is what the
+//! executor has. [`RuntimeError`] carries a [`Span`], which is what a person
+//! reading a terminal needs. The conversion happens in [`crate::run`], the one
+//! place that still holds the tree. Everything below the seam talks about IR
+//! nodes; everything above it talks about source.
 
 use std::fmt;
 
+use ir::program::CstId;
 use tokenizer::Span;
 
-/// Something that went wrong while evaluating, and the source it went wrong at.
+/// A trap, located where the executor can locate it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Trap {
+    pub kind: TrapKind,
+    pub at: CstId,
+}
+
+impl Trap {
+    pub fn new(kind: TrapKind, at: CstId) -> Trap {
+        Trap { kind, at }
+    }
+}
+
+/// A trap, located where a person can read it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RuntimeError {
-    pub kind: RuntimeErrorKind,
+    pub kind: TrapKind,
     pub span: Span,
 }
 
 impl RuntimeError {
-    pub fn new(kind: RuntimeErrorKind, span: Span) -> RuntimeError {
+    pub fn new(kind: TrapKind, span: Span) -> RuntimeError {
         RuntimeError { kind, span }
     }
 }
@@ -36,141 +58,36 @@ impl fmt::Display for RuntimeError {
 impl std::error::Error for RuntimeError {}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum RuntimeErrorKind {
-    // ---- Names ------------------------------------------------------------
-    UnknownName(String),
-    /// §3: `mut` gates mutation. Rebinding with a second `let` is always
-    /// allowed, which is what the message points at.
-    ImmutableBinding(String),
-    /// §3's left-hand side is a *place*. A name is the only one that exists at
-    /// this stage — fields and indexes need §6's types.
-    NotAPlace,
-    /// §5: a `fn` captures nothing. The name is in scope where the function was
-    /// written, and a `fn` is not the thing that can reach it.
-    NotCaptured(String),
-
-    // ---- Types ------------------------------------------------------------
-    /// §2: there is no truthiness. A condition is `bool` or it is nothing.
-    ConditionNotBool(&'static str),
-    BinaryTypeMismatch {
+pub enum TrapKind {
+    /// §2: overflow is an error, not a wrap. wasm's native behaviour is silent
+    /// wrapping, so this is a check the interpreter pays for deliberately —
+    /// and §1's widths are what make it reachable at all.
+    Overflow {
         operator: &'static str,
-        left: &'static str,
-        right: &'static str,
+        ty: String,
     },
-    UnaryTypeMismatch {
-        operator: &'static str,
-        operand: &'static str,
-    },
-
-    // ---- Calls (§5) -------------------------------------------------------
-    NotCallable(&'static str),
-    /// §5 checks arity statically, and there is no type checker yet — so this
-    /// is a runtime stand-in for a compile error, and should stop being
-    /// reachable when §10 lands.
-    WrongArity {
-        callee: String,
-        expected: usize,
-        found: usize,
-    },
-    /// §5: a `mut` parameter writes through to the caller's binding, so the
-    /// argument has to *be* a binding.
-    MutArgumentNotAPlace {
-        parameter: String,
-    },
-    /// §5: and that binding has to be `mut`, so that a call which mutates is
-    /// visible at the call site rather than only at the declaration.
-    MutArgumentNotMutable {
-        parameter: String,
-        argument: String,
-    },
-    /// §4: `return` exits the enclosing function. Getting here means there
-    /// wasn't one.
-    ReturnOutsideFunction,
-
-    // ---- Traps ------------------------------------------------------------
-    // §2: overflow is an error, not a wrap. wasm's native behaviour is silent
-    // wrapping, so this is a check the interpreter pays for deliberately.
-    Overflow(&'static str),
     DividedByZero,
-    /// An integer literal too large for the `i64` every integer is today. Not a
-    /// language rule — see the note on [`crate::Value`].
-    IntegerTooLarge,
     /// §5: there is no tail-call guarantee, so deep recursion exhausts the
     /// stack and traps. This is that trap, raised at a depth the host stack
     /// still has room for rather than by falling off it.
     RecursionLimit,
-
-    // ---- Not yet ----------------------------------------------------------
-    /// A construct that parses and that this stage of the interpreter doesn't
-    /// evaluate. Named rather than lumped together, because "functions are not
-    /// implemented yet" is a different thing to hear than "syntax error".
+    /// An IR node this stage of the executor doesn't run yet. Named rather than
+    /// panicked on, because "closures are not implemented yet" is a different
+    /// thing to hear than a crash — and every entry here is scheduled to go
+    /// away.
     Unsupported(&'static str),
-    /// `break` or `continue` with no loop to apply to (§4).
-    BreakOutsideLoop,
-    ContinueOutsideLoop,
-    /// A literal the tokenizer already complained about, or an error node.
-    /// Reachable only by evaluating a tree that didn't parse cleanly.
-    MalformedProgram,
 }
 
-impl fmt::Display for RuntimeErrorKind {
+impl fmt::Display for TrapKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use RuntimeErrorKind::*;
+        use TrapKind::*;
         match self {
-            UnknownName(name) => write!(f, "`{name}` is not bound to anything"),
-            ImmutableBinding(name) => write!(
-                f,
-                "`{name}` is not mutable — declare it `let mut {name}`, or rebind it with a new `let`"
-            ),
-            NotAPlace => f.write_str("this cannot be assigned to — the left of a `=` is a name"),
-            NotCaptured(name) => write!(
-                f,
-                "`{name}` is bound outside this `fn`, and a `fn` captures nothing — take it as a parameter, or use a lambda"
-            ),
-            NotCallable(found) => write!(f, "{found} is not a function"),
-            WrongArity {
-                callee,
-                expected,
-                found,
-            } => write!(
-                f,
-                "{callee} takes {expected} {}, and got {found}",
-                if *expected == 1 { "argument" } else { "arguments" }
-            ),
-            MutArgumentNotAPlace { parameter } => write!(
-                f,
-                "the `{parameter}` parameter is `mut`, so the argument must be a binding rather than an expression"
-            ),
-            MutArgumentNotMutable {
-                parameter,
-                argument,
-            } => write!(
-                f,
-                "the `{parameter}` parameter is `mut`, so `{argument}` must be too — declare it `let mut {argument}`"
-            ),
-            ReturnOutsideFunction => f.write_str("`return` outside a function"),
+            Overflow { operator, ty } => write!(f, "`{operator}` overflowed `{ty}`"),
+            DividedByZero => f.write_str("divided by zero"),
             RecursionLimit => f.write_str(
                 "recursion went too deep — there are no tail calls, so an unbounded recursion needs a loop or a worklist"
             ),
-            ConditionNotBool(found) => write!(
-                f,
-                "a condition must be a boolean, and this is {found} — there is no truthiness"
-            ),
-            BinaryTypeMismatch {
-                operator,
-                left,
-                right,
-            } => write!(f, "`{operator}` does not apply to {left} and {right}"),
-            UnaryTypeMismatch { operator, operand } => {
-                write!(f, "`{operator}` does not apply to {operand}")
-            }
-            Overflow(operator) => write!(f, "`{operator}` overflowed"),
-            DividedByZero => f.write_str("divided by zero"),
-            IntegerTooLarge => f.write_str("this integer does not fit in 64 bits"),
             Unsupported(what) => write!(f, "{what} is not implemented yet"),
-            BreakOutsideLoop => f.write_str("`break` outside a loop"),
-            ContinueOutsideLoop => f.write_str("`continue` outside a loop"),
-            MalformedProgram => f.write_str("this program did not parse"),
         }
     }
 }

@@ -1,11 +1,18 @@
-//! Tests for evaluation.
+//! Tests for execution.
 //!
-//! Written against the source text rather than against a hand-built tree: the
-//! thing worth pinning is what a program means, and that has to survive the
-//! move to the IL, where a hand-built concrete tree would not.
+//! Written against source text rather than against a hand-built program: what
+//! is worth pinning is what a program *means*, and that survived the move from
+//! the concrete syntax tree to core IR — which is the move these tests were
+//! written to survive.
+//!
+//! Two things about them read differently than they used to. First, most of
+//! what this crate once refused at run time is refused before it runs, so
+//! [`refused`] appears where [`trap`] used to. Second, §2 checks constant
+//! expressions at compile time, so a test that wants a *trap* has to route its
+//! operands through a function — `255u8 + 1` never runs at all.
 
-use crate::error::RuntimeErrorKind::{self, *};
-use crate::value::Value;
+use crate::error::TrapKind::{self, *};
+use crate::value::{IntTy, Value};
 use crate::{Error, run};
 
 #[track_caller]
@@ -17,9 +24,9 @@ fn value(source: &str) -> Value {
 }
 
 #[track_caller]
-fn int(source: &str) -> i64 {
+fn int(source: &str) -> i128 {
     match value(source) {
-        Value::Int(value) => value,
+        Value::Int { value, .. } => value,
         other => panic!("`{source}` should have been an integer, and was {other}"),
     }
 }
@@ -32,19 +39,41 @@ fn boolean(source: &str) -> bool {
     }
 }
 
+/// The trap a program runs into.
 #[track_caller]
-fn failure(source: &str) -> RuntimeErrorKind {
+fn trap(source: &str) -> TrapKind {
     match run(source) {
         Err(Error::Runtime(error)) => error.kind,
-        Ok(value) => panic!("`{source}` should have failed, and was {value}"),
-        Err(problem) => panic!("`{source}` should have failed at runtime: {problem}"),
+        Ok(value) => panic!("`{source}` should have trapped, and was {value}"),
+        Err(problem) => panic!("`{source}` should have trapped: {problem}"),
+    }
+}
+
+/// The one elaboration diagnostic a program is refused for.
+///
+/// The diagnostics themselves are `ir`'s to test; what is worth checking here
+/// is that a program carrying one does not run.
+#[track_caller]
+fn refused(source: &str) -> String {
+    match run(source) {
+        Err(Error::Elaboration(diagnostics)) => {
+            assert_eq!(
+                diagnostics.len(),
+                1,
+                "`{source}` should have had one diagnostic: {diagnostics:#?}"
+            );
+            diagnostics[0].message()
+        }
+        Ok(value) => panic!("`{source}` should have been refused, and was {value}"),
+        Err(problem) => panic!("`{source}` should have been refused by elaboration: {problem}"),
     }
 }
 
 // ---- A program is a block --------------------------------------------------
 
 /// Goal §2.1: a bare expression is a valid program. Not a REPL special case —
-/// the block rule (§3) applied to the outermost block.
+/// the block rule (§3) applied to the outermost block, and by now not even
+/// that: elaboration makes the file an ordinary function.
 #[test]
 fn a_file_is_worth_its_trailing_expression() {
     assert_eq!(int("42"), 42);
@@ -62,120 +91,140 @@ fn an_empty_file_is_worth_unit() {
     assert_eq!(value("// nothing but a comment\n"), Value::Unit);
 }
 
-// ---- Literals --------------------------------------------------------------
+// ---- Literals and their types (§1) -----------------------------------------
 
 #[test]
 fn literals_decode() {
-    assert_eq!(value("42"), Value::Int(42));
-    assert_eq!(value("1_000_000"), Value::Int(1_000_000));
-    assert_eq!(value("0xff"), Value::Int(255));
-    assert_eq!(value("0o17"), Value::Int(15));
-    assert_eq!(value("0b1010"), Value::Int(10));
-    assert_eq!(value("1.5"), Value::Float(1.5));
-    assert_eq!(value(".5"), Value::Float(0.5));
-    assert_eq!(value("1e3"), Value::Float(1000.0));
+    assert_eq!(value("42"), Value::u64(42));
+    assert_eq!(value("1_000_000"), Value::u64(1_000_000));
+    assert_eq!(value("0xff"), Value::u64(255));
+    assert_eq!(value("0o17"), Value::u64(15));
+    assert_eq!(value("0b1010"), Value::u64(10));
+    assert_eq!(value("1.5"), Value::f64(1.5));
+    assert_eq!(value(".5"), Value::f64(0.5));
+    assert_eq!(value("1e3"), Value::f64(1000.0));
     assert_eq!(value("true"), Value::Bool(true));
     assert_eq!(value("'x'"), Value::Char('x'));
     assert_eq!(value(r#""hi\n""#), Value::string("hi\n"));
     assert_eq!(value("()"), Value::Unit);
 }
 
-/// §1 makes an unsuffixed literal an unpinned constant, and pinning is §10's.
-/// So a suffix decides one thing here: integer or float.
+/// §1: an unpinned constant takes its type from context; with none, the sign
+/// decides. This is the whole of what "there are types now" changed about a
+/// literal.
 #[test]
-fn a_float_suffix_makes_an_integer_literal_a_float() {
-    assert_eq!(value("1f64"), Value::Float(1.0));
-    assert_eq!(value("1_000u32"), Value::Int(1000));
-    assert_eq!(value("7s16"), Value::Int(7));
+fn an_unpinned_constant_pins_by_sign() {
+    assert_eq!(value("1"), Value::u64(1));
+    assert_eq!(value("-1"), Value::s64(-1));
+    assert_eq!(value("let x: u8 = 200; x"), Value::int(200, IntTy::new(false, 8)));
 }
 
-/// Not a language rule — see the note on `Value`. Pinned so that the day §10
-/// gives integers real widths, this test is the one that has to change.
 #[test]
-fn an_integer_wider_than_i64_is_refused() {
-    assert_eq!(failure("18446744073709551615"), IntegerTooLarge);
+fn a_suffix_pins_a_width() {
+    assert_eq!(value("255u8"), Value::int(255, IntTy::new(false, 8)));
+    assert_eq!(value("1f32"), Value::f32(1.0));
+}
+
+/// The annotation used to be read and dropped, because there was nothing to
+/// check it against. §10 arrived.
+#[test]
+fn an_annotation_is_checked() {
+    assert_eq!(
+        refused("let x: u8 = 300; x"),
+        "the constant 300 does not fit in `u8`"
+    );
 }
 
 // ---- Arithmetic (§2) -------------------------------------------------------
 
+/// Through a function, because §2 folds and checks a constant expression at
+/// compile time — so `2 + 3` never reaches the executor, and a test of the
+/// executor has to hand it something that isn't constant.
 #[test]
 fn arithmetic_evaluates() {
-    assert_eq!(int("1 + 2"), 3);
-    assert_eq!(int("3 - 4"), -1);
-    assert_eq!(int("5 * 6"), 30);
-    assert_eq!(int("9 % 10"), 9);
-    assert_eq!(value("1.0 + 2.5"), Value::Float(3.5));
+    assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a + b } f(2, 3)"), 5);
+    assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a - b } f(5, 3)"), 2);
+    assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a * b } f(6, 7)"), 42);
+    assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a / b } f(7, 2)"), 3);
+    assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a % b } f(7, 2)"), 1);
+    assert_eq!(
+        value("fn f(a: f64, b: f64) -> f64 { a * b } f(1.5, 2.0)"),
+        Value::f64(3.0)
+    );
 }
 
-/// §2: integer division truncates toward zero, matching wasm's `div_s`, and
-/// remainder takes the sign of the dividend, matching `rem_s`.
+/// §2: division truncates toward zero and the remainder takes the dividend's
+/// sign — `div_s` and `rem_s`, which is what wasm does natively.
 #[test]
 fn division_truncates_and_remainder_follows_the_dividend() {
-    assert_eq!(int("7 / 2"), 3);
-    assert_eq!(int("-7 / 2"), -3);
-    assert_eq!(int("-7 % 2"), -1);
-    assert_eq!(int("7 % -2"), 1);
+    assert_eq!(int("fn f(a: s64, b: s64) -> s64 { a / b } f(-7, 2)"), -3);
+    assert_eq!(int("fn f(a: s64, b: s64) -> s64 { a % b } f(-7, 2)"), -1);
+    assert_eq!(int("fn f(a: s64, b: s64) -> s64 { a % b } f(7, -2)"), 1);
 }
 
-/// §2: overflow is an error, not a wrap. wasm's native behaviour is silent
-/// wrapping, so this is a check paid for deliberately.
+/// §2: overflow is an error rather than a wrap — and §1's widths are what make
+/// the same addition an error at one type and an answer at another. The old
+/// interpreter, where every integer was an `i64`, could not tell these apart.
 #[test]
-fn overflow_traps() {
-    assert_eq!(failure("9223372036854775807 + 1"), Overflow("+"));
-    assert_eq!(failure("9223372036854775807 * 2"), Overflow("*"));
+fn overflow_traps_at_the_operands_width() {
+    assert_eq!(
+        trap("fn f(a: u8, b: u8) -> u8 { a + b } f(255, 1)"),
+        Overflow {
+            operator: "+",
+            ty: "u8".to_string(),
+        }
+    );
+    assert_eq!(int("fn f(a: u16, b: u16) -> u16 { a + b } f(255, 1)"), 256);
+    assert_eq!(
+        trap("fn f(a: u64, b: u64) -> u64 { a - b } f(0, 1)"),
+        Overflow {
+            operator: "-",
+            ty: "u64".to_string(),
+        }
+    );
 }
 
 #[test]
 fn division_by_zero_traps() {
-    assert_eq!(failure("1 / 0"), DividedByZero);
-    assert_eq!(failure("1 % 0"), DividedByZero);
+    assert_eq!(
+        trap("fn f(a: u64, b: u64) -> u64 { a / b } f(1, 0)"),
+        DividedByZero
+    );
+    assert_eq!(
+        trap("fn f(a: u64, b: u64) -> u64 { a % b } f(1, 0)"),
+        DividedByZero
+    );
 }
 
-/// §2 also says floats follow IEEE-754, and IEEE's answer to division by zero
-/// is an infinity rather than an absence of one.
+/// §2: floats follow IEEE-754, and IEEE's answer to division by zero is an
+/// infinity. Trapping is for the operation with no representable answer.
 #[test]
 fn float_division_by_zero_follows_ieee() {
-    assert_eq!(value("1.0 / 0.0"), Value::Float(f64::INFINITY));
-}
-
-/// §1 has no implicit conversion, so there is no widening to reach for.
-#[test]
-fn mixing_an_integer_and_a_float_is_an_error() {
     assert_eq!(
-        failure("1 + 1.5"),
-        BinaryTypeMismatch {
-            operator: "+",
-            left: "an integer",
-            right: "a float",
-        }
+        value("fn f(a: f64, b: f64) -> f64 { a / b } f(1.0, 0.0)"),
+        Value::f64(f64::INFINITY)
     );
 }
 
+/// §2: "constant expressions are checked at compile time rather than
+/// trapping". The trap and the diagnostic are the same rule at two stages, and
+/// this is the stage that moved.
 #[test]
-fn precedence_follows_the_ladder() {
-    assert_eq!(int("1 + 2 * 3"), 7);
-    assert_eq!(int("(1 + 2) * 3"), 9);
-    assert_eq!(int("-2 * 3"), -6);
+fn a_constant_that_would_trap_is_refused_instead() {
     assert_eq!(
-        int("10 - 3 - 2"),
-        5,
-        "every binary operator is left-associative"
+        refused("255u8 + 1"),
+        "this constant expression overflows — constants are checked at compile time"
     );
-    assert!(boolean("1 + 1 == 2"));
-    assert!(boolean("true || false && false"));
+    assert_eq!(refused("1 / 0"), "this constant expression divides by zero");
 }
 
 #[test]
 fn unary_operators_apply() {
-    assert_eq!(int("-1"), -1);
-    assert_eq!(int("--1"), 1);
-    assert!(!boolean("!true"));
+    assert_eq!(int("fn f(a: s64) -> s64 { -a } f(1)"), -1);
+    assert!(!boolean("fn f(a: bool) -> bool { !a } f(true)"));
     assert_eq!(
-        failure("!1"),
-        UnaryTypeMismatch {
-            operator: "!",
-            operand: "an integer",
-        }
+        value("fn f(a: f64) -> f64 { -a } f(1.5)"),
+        Value::f64(-1.5)
     );
 }
 
@@ -183,86 +232,66 @@ fn unary_operators_apply() {
 
 #[test]
 fn comparison_evaluates() {
-    assert!(boolean("1 == 1"));
-    assert!(boolean("1 != 2"));
-    assert!(boolean("1 < 2"));
-    assert!(boolean("2 >= 2"));
-    assert!(boolean("'a' < 'b'"));
-    assert!(boolean(r#""abc" < "abd""#), "strings compare by bytes");
-    assert!(boolean("() == ()"));
+    assert!(boolean("fn f(a: u64, b: u64) -> bool { a < b } f(1, 2)"));
+    assert!(!boolean("fn f(a: u64, b: u64) -> bool { a > b } f(1, 2)"));
+    assert!(boolean("fn f(a: u64, b: u64) -> bool { a <= b } f(2, 2)"));
+    assert!(boolean("fn f(a: u64, b: u64) -> bool { a == b } f(2, 2)"));
+    assert!(boolean("fn f(a: u64, b: u64) -> bool { a != b } f(2, 3)"));
+    assert!(boolean("fn f(a: char, b: char) -> bool { a < b } f('a', 'b')"));
 }
 
-/// §2: `1 == "1"` is a type error, not `false`.
-#[test]
-fn cross_type_comparison_does_not_exist() {
-    assert_eq!(
-        failure(r#"1 == "1""#),
-        BinaryTypeMismatch {
-            operator: "==",
-            left: "an integer",
-            right: "a string",
-        }
-    );
-}
-
-/// Equatable but not ordered: §2 gives no meaning to `false < true`.
-#[test]
-fn booleans_are_not_ordered() {
-    assert!(boolean("true == true"));
-    assert_eq!(
-        failure("true < false"),
-        BinaryTypeMismatch {
-            operator: "<",
-            left: "a boolean",
-            right: "a boolean",
-        }
-    );
-}
-
-/// §2: floats follow IEEE-754, so `NaN != NaN` and all four orderings against
-/// it are false.
+/// §2: IEEE-754, so every ordering against NaN is false and `NaN != NaN`.
 #[test]
 fn nan_compares_unequal_to_everything() {
     let nan = "let nan = 0.0 / 0.0;";
-    assert!(!boolean(&format!("{nan} nan == nan")));
-    assert!(boolean(&format!("{nan} nan != nan")));
-    assert!(!boolean(&format!("{nan} nan < 1.0")));
-    assert!(!boolean(&format!("{nan} nan >= 1.0")));
+    assert!(!boolean(&format!(
+        "{nan} fn f(x: f64) -> bool {{ x == x }} f(nan)"
+    )));
+    assert!(boolean(&format!(
+        "{nan} fn f(x: f64) -> bool {{ x != x }} f(nan)"
+    )));
+    assert!(!boolean(&format!(
+        "{nan} fn f(x: f64) -> bool {{ x < 1.0 }} f(nan)"
+    )));
+    assert!(!boolean(&format!(
+        "{nan} fn f(x: f64) -> bool {{ x >= 1.0 }} f(nan)"
+    )));
 }
 
 /// §2: `&&` and `||` short-circuit, which makes them control flow wearing an
-/// operator's clothes — so the right operand's error never happens.
+/// operator's clothes — so the right operand's trap never happens. Elaboration
+/// lowers them to a branch, and there is no lazy operator in the IR for a back
+/// end to get wrong.
 #[test]
 fn logical_operators_short_circuit() {
-    assert!(!boolean("false && 1 / 0 == 0"));
-    assert!(boolean("true || 1 / 0 == 0"));
-    assert_eq!(failure("true && 1 / 0 == 0"), DividedByZero);
-}
+    let and = "fn f(a: bool, n: u64) -> bool { a && 10 / n == 0 }";
+    assert!(!boolean(&format!("{and} f(false, 0)")));
+    assert_eq!(trap(&format!("{and} f(true, 0)")), DividedByZero);
 
-#[test]
-fn logical_operators_take_booleans_only() {
-    assert_eq!(
-        failure("1 && true"),
-        UnaryTypeMismatch {
-            operator: "&&",
-            operand: "an integer",
-        }
-    );
+    let or = "fn f(a: bool, n: u64) -> bool { a || 10 / n == 0 }";
+    assert!(boolean(&format!("{or} f(true, 0)")));
+    assert_eq!(trap(&format!("{or} f(false, 0)")), DividedByZero);
 }
 
 // ---- Strings ---------------------------------------------------------------
 
 #[test]
 fn strings_concatenate_with_plus() {
-    assert_eq!(value(r#""a" + "bc""#), Value::string("abc"));
     assert_eq!(
-        failure(r#""a" - "b""#),
-        BinaryTypeMismatch {
-            operator: "-",
-            left: "a string",
-            right: "a string",
-        }
+        value(r#"fn f(a: Str, b: Str) -> Str { a + b } f("a", "bc")"#),
+        Value::string("abc")
     );
+}
+
+/// §1: strings are UTF-8, so byte order is code-point order.
+#[test]
+fn strings_compare_by_bytes() {
+    assert!(boolean(
+        r#"fn f(a: Str, b: Str) -> bool { a < b } f("apple", "banana")"#
+    ));
+    assert!(boolean(
+        r#"fn f(a: Str, b: Str) -> bool { a == b } f("a", "a")"#
+    ));
 }
 
 // ---- Bindings (§3) ---------------------------------------------------------
@@ -270,18 +299,14 @@ fn strings_concatenate_with_plus() {
 #[test]
 fn a_binding_holds_its_value() {
     assert_eq!(int("let x = 41; x + 1"), 42);
-    assert_eq!(failure("x"), UnknownName("x".to_string()));
 }
 
-/// §3: `mut` gates mutation, not rebinding.
+/// §3: `mut` gates in-place mutation only. Rebinding is unrestricted on every
+/// binding, so this needs no `mut` — which is the opposite of what this crate
+/// used to enforce.
 #[test]
-fn assignment_needs_mut() {
-    assert_eq!(int("let mut x = 1; x = 2; x"), 2);
-    assert_eq!(
-        failure("let x = 1; x = 2; x"),
-        ImmutableBinding("x".to_string())
-    );
-    assert_eq!(failure("x = 1;"), UnknownName("x".to_string()));
+fn assignment_needs_no_mut() {
+    assert_eq!(int("let x = 1u64; x = 2; x"), 2);
 }
 
 /// §3: shadowing is allowed, including in the same scope — the natural way to
@@ -291,45 +316,31 @@ fn a_let_may_shadow_in_the_same_scope() {
     assert_eq!(int("let x = 1; let x = x + 1; x"), 2);
 }
 
-/// §3's place is a name, a field, or an index. The other two need §6's types,
-/// and the check lives here so the message can name what was assigned to.
+/// §1: a binding whose initializer is a constant expression and which is never
+/// assigned stays unpinned, so this is `-2` rather than an underflow of `u64`.
 #[test]
-fn only_a_place_can_be_assigned_to() {
-    assert_eq!(failure("let mut x = 1; x + 1 = 2;"), NotAPlace);
-}
-
-/// Read and ignored — there is nothing to check it against yet. This test is a
-/// marker for §10, not an endorsement.
-#[test]
-fn a_type_annotation_is_ignored() {
-    assert_eq!(int("let x: u8 = 300; x"), 300);
+fn an_unassigned_constant_binding_stays_unpinned() {
+    assert_eq!(value("let n = 3; n - 5"), Value::s64(-2));
 }
 
 // ---- Blocks (§2) -----------------------------------------------------------
 
 #[test]
 fn a_block_is_worth_its_trailing_expression() {
-    assert_eq!(int("{ let t = 21; t * 2 }"), 42);
+    assert_eq!(int("let x = { let y = 2; y * 21 }; x"), 42);
 }
 
-/// §2's semicolon rule: a `;` discards.
 #[test]
 fn a_semicolon_discards_a_blocks_value() {
-    assert_eq!(value("{ 42; }"), Value::Unit);
-    assert_eq!(value("{ let x = 1; }"), Value::Unit);
+    assert_eq!(value("let x = { 42; }; x"), Value::Unit);
 }
 
 #[test]
 fn a_block_scopes_its_bindings() {
-    assert_eq!(int("let x = 1; { let x = 2; }; x"), 1);
+    assert_eq!(int("let x = 1; { let x = 2; } x"), 1);
     assert_eq!(
-        failure("{ let inner = 1; }; inner"),
-        UnknownName("inner".to_string())
-    );
-    assert_eq!(
-        int("let mut x = 1; { x = 2; }; x"),
-        2,
-        "assignment reaches out"
+        refused("{ let inner = 1; } inner"),
+        "no binding named `inner` is in scope"
     );
 }
 
@@ -337,356 +348,190 @@ fn a_block_scopes_its_bindings() {
 
 #[test]
 fn if_is_an_expression() {
-    assert_eq!(int("if true { 1 } else { 2 }"), 1);
-    assert_eq!(int("if false { 1 } else { 2 }"), 2);
-    assert_eq!(int("if false { 1 } else if true { 2 } else { 3 }"), 2);
+    assert_eq!(int("let x = if true { 1 } else { 2 }; x"), 1);
+    assert_eq!(
+        int("fn f(n: u64) -> u64 { if n < 10 { 1 } else if n < 20 { 2 } else { 3 } } f(15)"),
+        2
+    );
 }
 
-/// §2: an `if` with no `else` has type unit, so it is usable as a statement but
-/// not as a value.
+/// §2: with no `else` its value is unit, which is what makes it usable as a
+/// statement and not as a value.
 #[test]
 fn an_if_with_no_else_is_worth_unit() {
     assert_eq!(value("if false { 1 }"), Value::Unit);
 }
 
-/// §2: there is no truthiness. This falls out of §1 having no `nil` and no
-/// implicit conversion.
-#[test]
-fn a_condition_must_be_a_boolean() {
-    assert_eq!(
-        failure("if 1 { 2 } else { 3 }"),
-        ConditionNotBool("an integer")
-    );
-    assert_eq!(failure("while 1 { }"), ConditionNotBool("an integer"));
-}
-
 #[test]
 fn while_loops() {
     assert_eq!(
-        int("let mut total = 0; while total < 10 { total = total + 1; } total"),
+        int("let mut i = 0u64;
+             let mut total = 0u64;
+             while i < 5 {
+               total = total + i;
+               i = i + 1;
+             }
+             total"),
         10
     );
 }
 
-/// §4: unlabelled, applying to the innermost enclosing loop.
+/// §4: unlabelled, and applying to the innermost enclosing loop.
 #[test]
 fn break_and_continue_apply_to_the_nearest_loop() {
     assert_eq!(
-        int("let mut n = 0; while true { n = n + 1; if n > 3 { break; } } n"),
+        int("let mut i = 0u64;
+             while true {
+               i = i + 1;
+               if i > 3 { break; }
+             }
+             i"),
         4
     );
     assert_eq!(
-        int(
-            "let mut n = 0; let mut seen = 0; while n < 5 { n = n + 1; if n < 3 { continue; } seen = seen + 1; } seen"
-        ),
+        int("let mut i = 0u64;
+             let mut odd = 0u64;
+             while i < 6 {
+               i = i + 1;
+               if i % 2 == 0 { continue; }
+               odd = odd + 1;
+             }
+             odd"),
         3
     );
 }
 
+/// §4: a jump needs a loop, and elaboration is where that is settled now.
 #[test]
-fn break_outside_a_loop_is_an_error() {
-    assert_eq!(failure("break;"), BreakOutsideLoop);
-    assert_eq!(failure("continue;"), ContinueOutsideLoop);
-}
-
-/// §5: a binding made in a loop body is fresh each iteration, which is why the
-/// classic loop-variable capture trap is absent.
-#[test]
-fn a_loop_body_is_a_fresh_scope() {
+fn a_jump_outside_a_loop_is_refused() {
     assert_eq!(
-        int("let mut n = 0; while n < 3 { let step = 1; n = n + step; } n"),
-        3
+        refused("break;"),
+        "`break` is only meaningful inside a loop"
     );
-}
-
-// ---- The edges of this stage -----------------------------------------------
-
-#[test]
-fn unimplemented_constructs_say_so() {
-    assert_eq!(
-        failure("struct P { x: u64, }"),
-        Unsupported("a struct declaration")
-    );
-    assert_eq!(failure("type T = u64;"), Unsupported("a type alias"));
-    assert_eq!(failure("1 as u8"), Unsupported("the `as` operator"));
-    assert_eq!(failure("let a = 1; a[0]"), Unsupported("indexing"));
-    assert_eq!(failure("let a = 1; a.x"), Unsupported("field access"));
-    assert_eq!(failure("let a = 1; a.next()"), Unsupported("a method call"));
 }
 
 // ---- Functions (§5) --------------------------------------------------------
 
 #[test]
 fn a_function_is_declared_and_called() {
-    assert_eq!(int("fn add(a: u64, b: u64) -> u64 { a + b } add(1, 2)"), 3);
-    assert_eq!(int("fn one() -> u64 { 1 } one()"), 1);
+    assert_eq!(int("fn double(n: u64) -> u64 { n * 2 } double(21)"), 42);
 }
 
-/// §5: the body is a block, so its value is its trailing expression, and
-/// `return` is for *early* exit — a well-shaped function often has none.
+/// §5: a body is a block, so its value is its trailing expression; `return` is
+/// the early exit a well-shaped function often has none of.
 #[test]
 fn a_body_is_a_block_and_return_is_the_early_exit() {
-    let clamp = "fn clamp(n: u64, limit: u64) -> u64 { if n > limit { return limit; } n }";
-    assert_eq!(int(&format!("{clamp} clamp(3, 10)")), 3);
-    assert_eq!(int(&format!("{clamp} clamp(30, 10)")), 10);
+    assert_eq!(
+        int("fn clamp(n: u64) -> u64 { if n > 10 { return 10; } n } clamp(42)"),
+        10
+    );
+    assert_eq!(
+        int("fn clamp(n: u64) -> u64 { if n > 10 { return 10; } n } clamp(3)"),
+        3
+    );
 }
 
-/// §5: a function with no `-> T` returns unit, which is a real value rather
-/// than an absence — it can be bound, returned, and stored.
+/// §5: unit is a real value with one inhabitant, not an absence.
 #[test]
 fn a_function_with_no_return_type_returns_unit() {
     assert_eq!(value("fn nothing() { } nothing()"), Value::Unit);
-    assert_eq!(value("fn nothing() { return; } nothing()"), Value::Unit);
-    assert_eq!(value("fn nothing() { } let x = nothing(); x"), Value::Unit);
 }
 
-#[test]
-fn return_outside_a_function_is_an_error() {
-    assert_eq!(failure("return;"), ReturnOutsideFunction);
-    assert_eq!(failure("if true { return 1; }"), ReturnOutsideFunction);
-}
-
-/// §4: `break` applies to the innermost enclosing loop, and a call is not
-/// something it reaches across.
-#[test]
-fn break_does_not_cross_a_call() {
-    assert_eq!(
-        failure("fn escape() { break; } while true { escape(); }"),
-        BreakOutsideLoop
-    );
-}
-
-/// §5: recursion is permitted, and mutual recursion needs declarations to be
-/// order-independent. §12 owes the general rule; hoisting per block is the
-/// stand-in.
+/// §5: mutual recursion needs declarations to be order-independent, which is
+/// what hoisting them per block buys.
 #[test]
 fn functions_recurse_and_see_each_other() {
     assert_eq!(
-        int("fn fact(n: u64) -> u64 { if n == 0 { 1 } else { n * fact(n - 1) } } fact(10)"),
+        int("fn factorial(n: u64) -> u64 {
+               if n == 0 { 1 } else { n * factorial(n - 1) }
+             }
+             factorial(10)"),
         3628800
     );
-    assert_eq!(
-        int(
-            "fn even(n: u64) -> bool { if n == 0 { true } else { odd(n - 1) } }
-             fn odd(n: u64) -> bool { if n == 0 { false } else { even(n - 1) } }
-             if even(10) { 1 } else { 0 }"
-        ),
-        1
-    );
-    assert_eq!(
-        int("let answer = twice(21); fn twice(n: u64) -> u64 { n * 2 } answer"),
-        42,
-        "a declaration is visible above where it is written"
-    );
+    assert!(boolean(
+        "fn even(n: u64) -> bool { if n == 0 { true } else { odd(n - 1) } }
+         fn odd(n: u64) -> bool { if n == 0 { false } else { even(n - 1) } }
+         even(10)"
+    ));
 }
 
-/// §5: no tail-call guarantee, so deep recursion traps. Raised at a depth the
-/// host stack can still afford, rather than by falling off it.
+/// §5: there is no tail-call guarantee, so an unbounded recursion traps —
+/// raised at a depth the host stack still has room for rather than by falling
+/// off it.
 #[test]
 fn runaway_recursion_traps() {
     assert_eq!(
-        failure("fn forever(n: u64) -> u64 { forever(n) } forever(0)"),
+        trap("fn forever(n: u64) -> u64 { forever(n) } forever(1)"),
         RecursionLimit
     );
 }
 
-/// §5 checks arity statically. There is no static anything yet, so it is
-/// checked at the call — a stand-in for a compile error.
+/// §5 checks arity statically, and now something does.
 #[test]
-fn arity_is_checked() {
+fn arity_is_checked_before_it_runs() {
     assert_eq!(
-        failure("fn add(a: u64, b: u64) -> u64 { a + b } add(1)"),
-        WrongArity {
-            callee: "`add`".to_string(),
-            expected: 2,
-            found: 1,
-        }
-    );
-    assert_eq!(failure("let x = 1; x()"), NotCallable("an integer"));
-}
-
-/// §5: one name, one function — no overloading, by arity or by type.
-#[test]
-fn a_function_is_a_value() {
-    assert_eq!(
-        int("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)"),
-        3
-    );
-    assert_eq!(
-        int("fn twice(n: u64) -> u64 { n * 2 }
-             fn apply(g: fn(u64) -> u64, x: u64) -> u64 { g(x) }
-             apply(twice, 21)"),
-        42
-    );
-    assert_eq!(
-        value("fn add(a: u64) -> u64 { a } add").to_string(),
-        "<fn add>"
+        refused("fn f(a: u64) -> u64 { a } f(1, 2)"),
+        "this function takes 1 argument(s), and 2 were given"
     );
 }
 
-/// §2 says nothing about comparing functions, so `==` refuses rather than
-/// inventing an answer.
-#[test]
-fn functions_do_not_compare() {
-    assert_eq!(
-        failure("fn f() { } f == f"),
-        BinaryTypeMismatch {
-            operator: "==",
-            left: "a function",
-            right: "a function",
-        }
-    );
-}
-
-// ---- What a `fn` can see (§5) ----------------------------------------------
-
-/// §5: a nested `fn` is scoped to its block and **captures nothing** — an
-/// ordinary function that happens to be private. Keeping it capture-free is
-/// what lets every `fn` compile to a plain wasm function with no environment.
-#[test]
-fn a_fn_captures_nothing() {
-    assert_eq!(
-        failure("let outer = 1; fn read() -> u64 { outer } read()"),
-        NotCaptured("outer".to_string())
-    );
-    assert_eq!(
-        failure("let mut outer = 1; fn write() { outer = 2; } write()"),
-        NotCaptured("outer".to_string())
-    );
-}
-
-#[test]
-fn a_nested_fn_is_scoped_to_its_block() {
-    assert_eq!(int("{ fn inner() -> u64 { 1 } inner() }"), 1);
-    assert_eq!(
-        failure("{ fn inner() -> u64 { 1 } }; inner()"),
-        UnknownName("inner".to_string())
-    );
-}
-
-// ---- Lambdas (§5) ----------------------------------------------------------
-
-#[test]
-fn a_lambda_is_a_value_and_calls() {
-    assert_eq!(int("let inc = (x) -> x + 1; inc(41)"), 42);
-    assert_eq!(int("let inc = (x: u64) -> x + 1; inc(41)"), 42);
-    assert_eq!(int("let go = () -> 7; go()"), 7);
-    assert_eq!(
-        int("let f = (x) -> { let y = x * 2; y + 1 }; f(20)"),
-        41,
-        "a lambda body may be a block"
-    );
-    assert_eq!(value("let f = () -> 1; f").to_string(), "<lambda>");
-}
-
-/// §5: lambdas capture by reference, implicitly. Mutation of a captured binding
-/// is visible to everyone holding it, and the binding must be `mut` to be
-/// mutated at all (§3).
-#[test]
-fn a_lambda_captures_by_reference() {
-    assert_eq!(int("let n = 1; let read = () -> n; read()"), 1);
-    assert_eq!(
-        int("let mut n = 1; let read = () -> n; n = 2; read()"),
-        2,
-        "by reference, so the later write is seen"
-    );
-    assert_eq!(
-        int("let mut n = 1; let bump = () -> { n = n + 1; }; bump(); bump(); n"),
-        3
-    );
-}
-
-/// §5: captured bindings outlive the frame that created them.
-#[test]
-fn a_capture_outlives_its_frame() {
-    assert_eq!(
-        int("let make = () -> { let mut n = 0; () -> { n = n + 1; n } };
-             let counter = make();
-             counter();
-             counter()"),
-        2
-    );
-}
-
-/// A lambda inherits its creator's barrier rather than raising a new one, so
-/// one written inside a `fn` cannot reach what the `fn` itself couldn't.
-#[test]
-fn a_lambda_inside_a_fn_sees_no_further_than_the_fn() {
-    assert_eq!(
-        failure("let outer = 1; fn f() -> u64 { let g = () -> outer; g() } f()"),
-        NotCaptured("outer".to_string())
-    );
-    assert_eq!(
-        int("fn f(n: u64) -> u64 { let g = () -> n + 1; g() } f(41)"),
-        42,
-        "a parameter is the function's own, and is captured normally"
-    );
-}
-
-// ---- `mut` parameters (§5) -------------------------------------------------
-
-/// §5: `mut` on a parameter means the function may mutate the caller's value,
-/// and the caller must pass a `mut` binding — so a call that mutates is visible
-/// at the call site rather than only at the declaration.
-#[test]
-fn a_mut_parameter_writes_back_to_the_caller() {
-    assert_eq!(
-        int("fn advance(c: mut u64, by: u64) { c = c + by; }
-             let mut tally = 0;
-             advance(tally, 5);
-             tally"),
-        5
-    );
-}
-
-#[test]
-fn a_mut_parameter_needs_a_mut_binding() {
-    assert_eq!(
-        failure("fn advance(c: mut u64) { c = c + 1; } let frozen = 0; advance(frozen);"),
-        MutArgumentNotMutable {
-            parameter: "c".to_string(),
-            argument: "frozen".to_string(),
-        }
-    );
-    assert_eq!(
-        failure("fn advance(c: mut u64) { c = c + 1; } advance(1 + 1);"),
-        MutArgumentNotAPlace {
-            parameter: "c".to_string(),
-        }
-    );
-}
-
-/// §5: parameters are immutable bindings by default, exactly like a `let`.
-#[test]
-fn a_plain_parameter_is_immutable() {
-    assert_eq!(
-        failure("fn f(n: u64) -> u64 { n = n + 1; n } f(1)"),
-        ImmutableBinding("n".to_string())
-    );
-}
+// ---- What is refused before it runs ----------------------------------------
 
 /// A half-parsed tree is what the language server wants and what an interpreter
 /// does not: evaluating around an error node means guessing at the missing text.
 #[test]
 fn a_program_that_did_not_parse_does_not_run() {
-    let Err(Error::Syntax(errors)) = run("let x = ;") else {
-        panic!("`let x = ;` should not have run");
+    let Err(Error::Syntax(errors)) = run("let = 5;") else {
+        panic!("a program that did not parse should not have run");
     };
     assert!(!errors.is_empty());
 }
 
-/// `parser::parse` drops the tokenizer's diagnostics, so this is the test that
-/// keeps them from going missing here too.
 #[test]
 fn a_lexical_error_is_reported_even_when_the_parse_survives() {
-    let Err(Error::Syntax(errors)) = run(r#"let x = "\q";"#) else {
-        panic!("a bad escape should not have run");
+    let Err(Error::Syntax(errors)) = run(r#""\q""#) else {
+        panic!("a program with a bad escape should not have run");
     };
     assert_eq!(errors.len(), 1);
-    assert!(
-        errors[0].message.contains("escape"),
-        "{}",
-        errors[0].message
+}
+
+/// The same rule one stage later: elaboration is total, so a program with an
+/// unbound name still produces IR. Running it would mean guessing.
+#[test]
+fn a_program_that_did_not_elaborate_does_not_run() {
+    assert_eq!(refused("x"), "no binding named `x` is in scope");
+    assert_eq!(
+        refused("fn f(n: u64) -> u64 { if n { 1 } else { 2 } } f(1)"),
+        "a condition must be `bool`, and this is `u64` — there is no truthiness"
+    );
+    assert_eq!(
+        refused("fn f(a: u64, b: f64) -> u64 { a + b } f(1, 1.5)"),
+        "`+` needs both operands to have the same type, and these are `u64` and `f64` — \
+         conversions are explicit"
+    );
+}
+
+// ---- The edges of this stage -----------------------------------------------
+
+/// IR this executor does not run yet. Each one elaborates cleanly — the gap is
+/// here, not in front of it — and each is scheduled.
+#[test]
+fn unrun_constructs_say_so() {
+    assert_eq!(
+        trap("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)"),
+        Unsupported("a function used as a value")
+    );
+    assert_eq!(
+        trap("fn apply(g: fn(u64) -> u64) -> u64 { g(1) } apply((x) -> x + 1)"),
+        Unsupported("a function used as a value")
+    );
+    assert_eq!(
+        trap("struct P { x: u64 } let p = P { x: 1 }; 0u64"),
+        Unsupported("a struct literal")
+    );
+    assert_eq!(
+        trap("fn f(n: u64) -> u8 { n as u8 } f(1)"),
+        Unsupported("the `as` operator")
     );
 }
 
@@ -695,18 +540,11 @@ fn a_lexical_error_is_reported_even_when_the_parse_survives() {
 #[test]
 fn values_display_as_they_are_echoed() {
     assert_eq!(value("42").to_string(), "42");
+    assert_eq!(value("-1").to_string(), "-1");
     assert_eq!(value("1.5").to_string(), "1.5");
-    assert_eq!(
-        value("2.0 + 1.0").to_string(),
-        "3.0",
-        "a float keeps its point"
-    );
+    assert_eq!(value("2.0").to_string(), "2.0");
     assert_eq!(value("true").to_string(), "true");
-    assert_eq!(value("()").to_string(), "()");
     assert_eq!(value("'x'").to_string(), "'x'");
-    assert_eq!(
-        value(r#""hi\n""#).to_string(),
-        r#""hi\n""#,
-        "a string is quoted, so it can't be mistaken for a name"
-    );
+    assert_eq!(value(r#""hi""#).to_string(), "\"hi\"");
+    assert_eq!(value("()").to_string(), "()");
 }

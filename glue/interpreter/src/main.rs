@@ -43,6 +43,15 @@ fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
+        // §10 and §12's, and the reason a program can now fail without having
+        // run at all. Every one of them, in source order, because a person
+        // fixing a file wants the list rather than the first line of it.
+        Err(Error::Elaboration(diagnostics)) => {
+            for diagnostic in diagnostics {
+                report(&name, &source, diagnostic.span.start, &diagnostic.message());
+            }
+            ExitCode::FAILURE
+        }
         Err(Error::Runtime(error)) => {
             report(&name, &source, error.span.start, &error.to_string());
             ExitCode::FAILURE

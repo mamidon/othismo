@@ -1,176 +1,164 @@
 //! §2's operators, applied to values.
 //!
-//! Separate from the tree walk so that the semantics are readable on their own
-//! — this file is what to check against §2's table, and `eval.rs` is what to
-//! check against the grammar.
+//! Separate from the executor so that the semantics are readable on their own —
+//! this file is what to check against §2's table, and `exec.rs` is what to check
+//! against core IR's instruction set.
 //!
-//! `&&` and `||` are absent, deliberately. They short-circuit, which makes them
-//! control flow wearing an operator's clothes (§2), and control flow needs the
-//! unevaluated right operand rather than its value. They live in `eval.rs` with
-//! the other things that decide what to evaluate.
+//! `&&` and `||` are absent, and now absent twice over: they short-circuit,
+//! which makes them control flow wearing an operator's clothes (§2), so
+//! elaboration lowers them to [`ir::program::Stmt::If`] and there is no
+//! [`BinOp`] for either. Neither back end implements laziness.
 //!
 //! What §2 promises and this delivers:
 //!
-//! * **Overflow traps.** Every integer operation is checked.
+//! * **Overflow traps**, at the operand's own width — `255u8 + 1` traps where
+//!   `255u16 + 1` does not. Every integer operation is checked.
 //! * **Division truncates toward zero**, and **remainder takes the sign of the
-//!   dividend** — `-7 / 2` is `-3` and `-7 % 2` is `-1`, which is what Rust's
-//!   `i64` operators already do and what wasm's `div_s`/`rem_s` do.
+//!   dividend** — `-7s64 / 2s64` is `-3` and `-7s64 % 2s64` is `-1`, which is
+//!   what wasm's `div_s`/`rem_s` do.
 //! * **Integer division and remainder by zero trap.** Float division does not:
 //!   §2 also says floats follow IEEE-754, and IEEE's answer is an infinity.
-//!   Trapping is the rule for the operation that has no representable answer,
-//!   and float division by zero has one.
-//! * **No implicit conversion** (§1). `1 + 1.5` is an error, not a widening.
-//! * **Cross-type comparison does not exist** (§2). `1 == "1"` is an error, not
-//!   `false`.
+//!   Trapping is the rule for the operation with no representable answer, and
+//!   float division by zero has one.
 //! * **Strings**: `+` concatenates, and comparison is by bytes (§1: strings are
 //!   UTF-8, so byte order is code-point order).
+//!
+//! What is *not* here any more: the type checks. §1's "no implicit conversion"
+//! and §2's "cross-type comparison does not exist" are elaboration's now, so a
+//! pair of operands that disagree cannot reach this file. Where one appears to,
+//! the answer is `unreachable!` rather than a message — an interpreter bug, not
+//! a program's.
 
-use tokenizer::TokenKind;
+use std::cmp::Ordering;
 
-use crate::error::RuntimeErrorKind;
-use crate::value::Value;
+use ir::program::{BinOp, UnOp};
 
-/// The failure carries no span — the caller has the node and adds one.
-type OpResult = Result<Value, RuntimeErrorKind>;
+use crate::error::TrapKind;
+use crate::value::{IntTy, Value};
 
-/// Every binary operator but `&&` and `||`.
-pub(crate) fn binary(operator: TokenKind, left: Value, right: Value) -> OpResult {
-    use TokenKind::*;
-    match operator {
-        Plus | Minus | Star | Slash | Percent => arithmetic(operator, left, right),
-        EqualTo | NotEqualTo => equality(operator, left, right),
-        LessThan | LessThanOrEqualTo | GreaterThan | GreaterThanOrEqualTo => {
-            ordering(operator, left, right)
-        }
-        _ => unreachable!("the parser builds a BinaryExpr for no other operator"),
-    }
-}
+/// The failure carries no location — the caller has the statement's [`CstId`]
+/// and adds one.
+///
+/// [`CstId`]: ir::program::CstId
+type OpResult = Result<Value, TrapKind>;
 
-pub(crate) fn unary(operator: TokenKind, operand: Value) -> OpResult {
-    let name = spelling(operator);
-    match (operator, &operand) {
-        // §2 defines `-` on signed and float types only, and negating an
-        // unsigned value is a type error. Which of §1's integer types a value
-        // has is §10's to decide, so every integer is negatable here and the
-        // rule arrives with the type checker.
-        (TokenKind::Minus, Value::Int(value)) => value
-            .checked_neg()
-            .map(Value::Int)
-            .ok_or(RuntimeErrorKind::Overflow(name)),
-        (TokenKind::Minus, Value::Float(value)) => Ok(Value::Float(-value)),
-        (TokenKind::Bang, Value::Bool(value)) => Ok(Value::Bool(!value)),
-        _ => Err(RuntimeErrorKind::UnaryTypeMismatch {
-            operator: name,
-            operand: operand.type_name(),
+pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
+    match (left, right) {
+        (Value::Int { value: a, ty }, Value::Int { value: b, .. }) => integer(op, a, b, ty),
+        (Value::Float { value: a, bits }, Value::Float { value: b, .. }) => Ok(float(op, a, b, bits)),
+        (Value::Str(a), Value::Str(b)) => Ok(match op {
+            // §2: `+` concatenates. Nothing else about a string is arithmetic.
+            BinOp::Add => Value::string(&format!("{a}{b}")),
+            _ => Value::Bool(compare(op, Some(a.as_bytes().cmp(b.as_bytes())))),
         }),
+        (Value::Char(a), Value::Char(b)) => Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
+        // §2 gives no meaning to `false < true`, so elaboration admits only
+        // equality here and the ordering arm is unreachable.
+        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
+        // Unit has one inhabitant, so two of them are equal (§6).
+        (Value::Unit, Value::Unit) => Ok(Value::Bool(compare(op, Some(Ordering::Equal)))),
+        (left, right) => unreachable!(
+            "§1 has no implicit conversion, so elaboration refuses `{}` against `{}`",
+            left.type_name(),
+            right.type_name()
+        ),
     }
 }
 
-fn arithmetic(operator: TokenKind, left: Value, right: Value) -> OpResult {
-    use TokenKind::*;
-    let name = spelling(operator);
-    match (&left, &right) {
-        (Value::Int(a), Value::Int(b)) => {
-            let (a, b) = (*a, *b);
-            match operator {
-                Plus => a.checked_add(b),
-                Minus => a.checked_sub(b),
-                Star => a.checked_mul(b),
-                // `checked_div` and `checked_rem` fold division by zero in with
-                // overflow, and the two deserve different messages.
-                Slash | Percent if b == 0 => return Err(RuntimeErrorKind::DividedByZero),
-                Slash => a.checked_div(b),
-                Percent => a.checked_rem(b),
-                _ => unreachable!("arithmetic is called for no other operator"),
-            }
-            .map(Value::Int)
-            .ok_or(RuntimeErrorKind::Overflow(name))
-        }
-
-        (Value::Float(a), Value::Float(b)) => {
-            let (a, b) = (*a, *b);
-            Ok(Value::Float(match operator {
-                Plus => a + b,
-                Minus => a - b,
-                Star => a * b,
-                Slash => a / b,
-                // IEEE remainder, which takes the dividend's sign exactly as
-                // the integer one does.
-                Percent => a % b,
-                _ => unreachable!("arithmetic is called for no other operator"),
-            }))
-        }
-
-        // §2: `+` concatenates strings. No other operator applies to one.
-        (Value::Str(a), Value::Str(b)) if operator == Plus => Ok(Value::string(&format!("{a}{b}"))),
-
-        _ => Err(mismatch(name, &left, &right)),
+pub(crate) fn unary(op: UnOp, operand: Value) -> OpResult {
+    match (op, operand) {
+        // §2 defines `-` on signed and float types only; negating an unsigned
+        // value is a type error elaboration has already reported. What is left
+        // is the one signed value whose negation does not fit.
+        (UnOp::Neg, Value::Int { value, ty }) => checked(-value, ty, "-"),
+        (UnOp::Neg, Value::Float { value, bits }) => Ok(round(-value, bits)),
+        (UnOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
+        (op, operand) => unreachable!(
+            "elaboration refuses `{}` on `{}`",
+            op.name(),
+            operand.type_name()
+        ),
     }
 }
 
-fn equality(operator: TokenKind, left: Value, right: Value) -> OpResult {
-    if !same_type(&left, &right) {
-        return Err(mismatch(spelling(operator), &left, &right));
-    }
-    // Structural, and IEEE for floats — so `NaN != NaN`, which is what Rust's
-    // own `PartialEq` on `f64` gives.
-    let equal = left == right;
-    Ok(Value::Bool(match operator {
-        TokenKind::EqualTo => equal,
-        _ => !equal,
-    }))
-}
-
-fn ordering(operator: TokenKind, left: Value, right: Value) -> OpResult {
-    use std::cmp::Ordering::*;
-
-    // `partial_cmp` returning `None` is NaN against anything, and §2 says all
-    // four comparisons against NaN are `false`.
-    let order = match (&left, &right) {
-        (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
-        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
-        (Value::Char(a), Value::Char(b)) => a.partial_cmp(b),
-        // Byte order, which for UTF-8 is code-point order.
-        (Value::Str(a), Value::Str(b)) => a.as_bytes().partial_cmp(b.as_bytes()),
-        // Booleans and unit are equatable but not ordered: §2 gives no meaning
-        // to `false < true`, and inventing one here would be inventing language.
-        _ => return Err(mismatch(spelling(operator), &left, &right)),
+fn integer(op: BinOp, a: i128, b: i128, ty: IntTy) -> OpResult {
+    let name = op.spelling();
+    let value = match op {
+        BinOp::Add => a.checked_add(b),
+        BinOp::Sub => a.checked_sub(b),
+        BinOp::Mul => a.checked_mul(b),
+        // Division by zero and overflow deserve different messages, so the
+        // zero case is taken first.
+        BinOp::Div | BinOp::Rem if b == 0 => return Err(TrapKind::DividedByZero),
+        BinOp::Div => a.checked_div(b),
+        BinOp::Rem => a.checked_rem(b),
+        _ => return Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
     };
-
-    Ok(Value::Bool(match operator {
-        TokenKind::LessThan => order == Some(Less),
-        TokenKind::LessThanOrEqualTo => matches!(order, Some(Less | Equal)),
-        TokenKind::GreaterThan => order == Some(Greater),
-        TokenKind::GreaterThanOrEqualTo => matches!(order, Some(Greater | Equal)),
-        _ => unreachable!("ordering is called for no other operator"),
-    }))
-}
-
-/// Whether two values are of the same type — which for now is whether they are
-/// the same variant, since §1's numeric tower isn't represented yet.
-fn same_type(left: &Value, right: &Value) -> bool {
-    use Value::*;
-    matches!(
-        (left, right),
-        (Unit, Unit)
-            | (Bool(_), Bool(_))
-            | (Int(_), Int(_))
-            | (Float(_), Float(_))
-            | (Char(_), Char(_))
-            | (Str(_), Str(_))
-    )
-}
-
-fn mismatch(operator: &'static str, left: &Value, right: &Value) -> RuntimeErrorKind {
-    RuntimeErrorKind::BinaryTypeMismatch {
-        operator,
-        left: left.type_name(),
-        right: right.type_name(),
+    match value {
+        Some(value) => checked(value, ty, name),
+        // Only reachable for `i128`'s own edges, which the widths §1 has cannot
+        // produce — but the answer is the same one the width check gives.
+        None => Err(overflow(name, ty)),
     }
 }
 
-/// Every operator that reaches here has a fixed spelling, so the fallback is
-/// unreachable rather than a real name.
-fn spelling(operator: TokenKind) -> &'static str {
-    operator.spelling().unwrap_or("that operator")
+/// §2's overflow rule: the mathematical result, or a trap if the type cannot
+/// hold it. There is no wrapping.
+fn checked(value: i128, ty: IntTy, operator: &'static str) -> OpResult {
+    if ty.holds(value) {
+        Ok(Value::Int { value, ty })
+    } else {
+        Err(overflow(operator, ty))
+    }
+}
+
+fn overflow(operator: &'static str, ty: IntTy) -> TrapKind {
+    TrapKind::Overflow {
+        operator,
+        ty: ty.name(),
+    }
+}
+
+fn float(op: BinOp, a: f64, b: f64, bits: u8) -> Value {
+    match op {
+        BinOp::Add => round(a + b, bits),
+        BinOp::Sub => round(a - b, bits),
+        BinOp::Mul => round(a * b, bits),
+        BinOp::Div => round(a / b, bits),
+        // IEEE remainder, which takes the dividend's sign exactly as the
+        // integer one does.
+        BinOp::Rem => round(a % b, bits),
+        // `partial_cmp` gives `None` for NaN against anything, which is where
+        // §2's "every ordering against NaN is false, and `NaN != NaN`" comes
+        // from rather than being a rule of its own.
+        _ => Value::Bool(compare(op, a.partial_cmp(&b))),
+    }
+}
+
+/// An `f32` is held at `f64` width, so every operation on one rounds back —
+/// which is what wasm's `f32` instructions do, and what keeps the two back ends
+/// agreeing about a value neither of them can represent exactly.
+fn round(value: f64, bits: u8) -> Value {
+    Value::Float {
+        value: if bits == 32 { value as f32 as f64 } else { value },
+        bits,
+    }
+}
+
+/// The six comparisons, against an ordering that may not exist.
+///
+/// `None` is NaN against anything. Every ordering against it is false and `!=`
+/// is true, which falls out of comparing the `Option` rather than needing to be
+/// written down.
+fn compare(op: BinOp, order: Option<Ordering>) -> bool {
+    use Ordering::*;
+    match op {
+        BinOp::Eq => order == Some(Equal),
+        BinOp::Ne => order != Some(Equal),
+        BinOp::Lt => order == Some(Less),
+        BinOp::Le => matches!(order, Some(Less | Equal)),
+        BinOp::Gt => order == Some(Greater),
+        BinOp::Ge => matches!(order, Some(Greater | Equal)),
+        _ => unreachable!("`{}` is not a comparison", op.name()),
+    }
 }
