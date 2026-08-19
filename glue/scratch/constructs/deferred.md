@@ -29,6 +29,7 @@ last part of this file points at them so there's one place to look.
 | [String interpolation](#string-interpolation) | §1 | §1 | nothing; wants §11 |
 | [Multi-line indentation stripping](#multi-line-indentation-stripping) | §1 | §1 | waits on `"""` returning |
 | [Labelled break and continue](#labelled-break-and-continue) | §4 | §4 | nothing |
+| [Comptime access to the image](#comptime-access-to-the-image) | §14 | §14 | self-hosted compilation |
 
 ## Cut from the core
 
@@ -140,6 +141,42 @@ a spelling: §1 admits no sigils in identifiers, so Rust's `'outer` is unavailab
 label form (`outer: while …`) would need to not collide with whatever §7 does with `:` in
 patterns — or with map literals, if collections bring them back.
 
+## Comptime access to the image
+
+**Deferred 2026-08-18.** Raised in §14.
+
+§14 makes comptime **hermetic**: compile-time evaluation sees pure computation over
+comptime-known values and the declarations of the compilation unit, and nothing else — no
+image, no namespace, no messages, no host imports, no clock, no randomness.
+
+Othismo makes the opposite genuinely interesting. Every other language's compiler runs
+outside the world its output will live in; Glue's could run *inside* one. Comptime code
+could ask the namespace which instances exist, read an instance's shape, or specialize
+against what is actually deployed. That is not a feature other languages could copy, which
+is the usual sign that it is worth the novelty budget (goal §2.3).
+
+It is deferred rather than declined for three reasons, in order of how much they cost:
+
+- **Reproducibility.** A program whose meaning depends on image state cannot be rebuilt
+  from source — goal §4.5's hazard at its sharpest, met in the worst possible place.
+- **Tooling.** Deterministic comptime is what lets the language server cache
+  instantiations across keystrokes. A comptime that reads mutable state invalidates every
+  cached instantiation on every edit, and §14's fuel budget stops being an upper bound on
+  anything.
+- **It needs a compiler that runs in the image at all.** The compiler is a native Rust
+  crate today. Compiling *it* to wasm and hosting it as an Othismo instance is the
+  prerequisite, and it is not close.
+
+**The asymmetry is the argument.** Opening this later is additive: programs written
+against a hermetic comptime keep working when it stops being hermetic. Closing it later
+breaks every program that reached out. Start closed.
+
+**What it would take to open.** A defined comptime world — which queries exist, what they
+return, and what happens when the image changes between two compilations of the same
+source. That is a §13 question as much as a §14 one, since it is the namespace being
+addressed. Nothing in §14 forecloses it: `comptime` already denotes a stage, and giving
+that stage more capabilities does not change what the keyword means.
+
 ---
 
 ## Doc comments
@@ -246,10 +283,16 @@ designed. Listed here only so there's a single place to look.
 | Opt-in value semantics for small structs (Rust's `Copy`) | §6 | §11 |
 | What a length returns, and iteration during mutation | §6 | §8, with collections |
 | Whether sorting APIs justify a three-way comparison | §2 | §8, with collections |
-| Whether array sizes need *required* compile-time evaluation (`const`) | §3 | §8 |
 | Whether `+` and `==` are user-implementable | §2 | §11, with traits |
 | Whether a trap is recoverable | §2 | §9, §15 |
 | Whether `obj.method` without parens is a bound value | §2 | §11 |
 | Whether inference needs expression-level type ascription | §2 | §10 |
 | Where `mut` attaches in a destructuring pattern | §3 | §7 |
-| How top-level declarations can be mutually recursive while statements run in order | §3 | §12, §13 |
+| How top-level declarations can be mutually recursive while statements run in order (sharpened by §6's sugar rule: mutually recursive types are ordinary) | §3, §6 | §12, §13 |
+| Whether an uninstantiated generic can be checked at all, given bounds | §14 | §8 |
+| How a comptime function rejects its arguments (`@compileError`) | §14 | §14 |
+| Whether comptime evaluation may mutate during its own execution (`comptime var`) | §14 | §14 |
+| Unrolled iteration over a comptime-known bound with a runtime body (`inline for`) | §14 | §14 |
+| Whether type arguments may be inferred at a call site rather than passed | §14 | §10 |
+| Whether `Type` values support equality, ordering, or printing at comptime | §14 | §14 |
+| Where a runtime value reaching a comptime parameter is caught and blamed | §14 | §10 |

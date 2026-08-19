@@ -60,8 +60,10 @@ representation all leak into the host ABI whether or not you intend them to.
 
 - **Enums / tagged unions** — §7. They are structs with a tag, and they share this
   section's semantics, but their declaration and matching are §7's.
-- **Generics** — §8. This is why there are no collections yet: `List[T]` and `Map[K, V]`
-  are generic types, so they can't precede §8. §1's collection literals came out with them.
+- **Generics** — §8, with the mechanism in §14. This is why there are no collections yet:
+  `List(T)` and `Map(K, V)` are generic types, so they can't precede them. §1's collection
+  literals came out with them. What §14 settles and this section uses is *Structs without
+  a name*, below.
 - **Traits, interfaces, and operator overloading** — §11. Until then `+` and `==` are
   built-in and closed (§2).
 - **Tuples** — not now. §1's `.5` lexing rule keeps `pair.0` available should they arrive.
@@ -98,11 +100,50 @@ q.x = 5;                             // permitted — q is mut
 
 - **Nominal, not structural.** Two structs with identical fields are different types. A
   name is a decision, and structural typing makes every field name load-bearing forever.
+  What gives an anonymous struct its identity is under *Semantics*.
 - Field types are required; there is no inference across a declaration boundary (§5, §10).
 - **Field mutability follows the binding**, not the field. There is no per-field `mut`:
   a `mut` binding permits assigning any field, a non-`mut` binding permits none. Per-field
   mutability is additive later and buys little before there's a reason for it.
 - Field visibility is §13's, with modules.
+
+### Structs without a name
+
+**Added 2026-08-18, with §14.** `struct { … }` with the name left off is an **expression**
+whose value is a type:
+
+```
+let Point = struct { x: s64, y: s64 };
+```
+
+§14 needs it because a generic returns a type it cannot name in advance:
+
+```
+fn Pair(comptime A: Type, comptime B: Type) -> Type {
+  struct { first: A, second: B }
+}
+```
+
+The named form is then sugar, and so is the alias below:
+
+```
+struct Point { x: s64, y: s64 }     ≡   let Point = struct { x: s64, y: s64 };
+type InstanceId = u64;              ≡   let InstanceId = u64;
+```
+
+Both spellings stay. They cost two sugar rules and they keep the declaration a reader
+already recognizes, which is the trade goal §2.3 asks for — the novelty is that a type is
+a value, and nobody who doesn't need that fact has to meet it. What it costs is the
+`type` spelling: the keyword stays on the alias form, so the type of types is `Type`,
+a predeclared name alongside `u64` and `Str` rather than a keyword.
+
+**This raises the stakes on a question §3 already had.** If `struct Point { … }` is a
+`let` statement, then two structs that refer to each other are two statements that each
+need the other to have run — and §3's rule is that statements run in order. That question
+(how top-level declarations can be mutually recursive while statements run in order) was
+already open and owned by §12 and §13; what changes today is that mutually recursive
+*types* are an ordinary thing to write, not an edge case, so the answer can no longer be
+"declarations are special" without saying what a declaration is now that it is sugar.
 
 ### Type aliases
 
@@ -111,9 +152,13 @@ type InstanceId = u64;
 ```
 
 An alias is a second name for one type, not a new one — `InstanceId` and `u64` are
-interchangeable everywhere. A *distinct* type sharing a representation (a newtype) is a
-different feature and isn't here yet; when §13 has visibility, it's worth revisiting
-together.
+interchangeable everywhere. Since it is sugar for `let InstanceId = u64;`, that falls out
+rather than being a rule: the two names are bound to one value. What the keyword still
+buys is the assertion — `type X = …` requires its right-hand side to be a comptime-known
+`Type`, and says so at the declaration instead of wherever `X` is first used as one.
+
+A *distinct* type sharing a representation (a newtype) is a different feature and isn't
+here yet; when §13 has visibility, it's worth revisiting together.
 
 ---
 
@@ -179,6 +224,25 @@ interchangeable, and mutating one changes the other. Every language in this fami
 - **No pointers, and no `sizeof` / `alignof`.** Layout is not user-visible. It still exists
   and still matters at the host boundary — §13 and §16 own the ABI — but it isn't
   something a Glue program can ask about.
+
+### Type identity
+
+**Decided 2026-08-18, with §14.** Nominal typing needs a rule once types are values, since
+`struct { … }` is now an expression that can be evaluated more than once.
+
+**Every evaluation of a `struct { … }` expression produces a fresh type.** Two structs with
+identical fields are different types, exactly as the nominal rule says, and this is the
+same rule reached from the other side: identity comes from the act of construction, not
+from the shape constructed.
+
+That would make `Pair(u64, Str)` a different type from `Pair(u64, Str)` — which it is not,
+because §14 memoizes instantiation on `(declaration, comptime arguments)`. The body runs
+once, so the `struct { … }` inside it is evaluated once, so there is one type. **Nominal
+identity for generic types is a consequence of the instantiation cache**, and it is the
+main thing that cache is load-bearing for beyond termination.
+
+A type produced this way is named for diagnostics by the call that produced it —
+`Pair(u64, Str)`, not `struct { first: u64, second: Str }`.
 
 ### What isn't here yet
 

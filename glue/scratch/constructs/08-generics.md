@@ -9,19 +9,28 @@ for free and pays for it at every call site. Glue's optional annotations (§10) 
 can't dodge the question: as soon as a type can be written down, someone will want to
 write down "a list of these."
 
-The central decision is **monomorphization vs. boxing**, and goal §2.2 makes it awkward,
-because the two execution modes want opposite answers:
+The central decision was **monomorphization vs. boxing**, and it looked awkward under goal
+§2.2, because the two execution modes appeared to want opposite answers: the wasm compiler
+wants a specialized copy per instantiation, unboxed and fast; an interpreter usually wants
+erasure or boxing, one implementation with values carrying their own type. Picking one per
+back end is fine *as long as the semantics are identical*, and erasure versus
+monomorphization is exactly the split that breaks that.
 
-- The **wasm compiler** wants monomorphization — a specialized copy per instantiation,
-  unboxed and fast. The cost is code size, and in an Othismo image, module size is
-  something you carry around and hot-replace, not just something you download once.
-- The **interpreter** wants erasure or boxing — one implementation, values carrying their
-  own type. Instant startup, no specialization pass.
+**It is no longer a choice.** §14 makes types comptime values, so a generic type does not
+exist until it is instantiated and there is nothing left to erase. Both back ends consume
+the same monomorphic core IR — which is goal §2.2's shared front end arriving as a
+consequence rather than as discipline, since two tiers reading one IR cannot disagree
+about which programs they accept.
 
-Both are legitimate; picking one per back end is fine *as long as the semantics are
-identical*, which is exactly what erasure vs. monomorphization tends to break
-(specialization, reified type parameters, and anything reflective). Deciding this early
-is what keeps the two tiers honest.
+What that costs, stated where it is paid: the interpreter no longer starts instantly on
+generic code. It elaborates and instantiates first, memoized on `(declaration, comptime
+arguments)`. For a prompt line that is a handful of instantiations; the claim in goal §2.2
+is instant *startup*, not zero work per line, and this does not threaten it. It would be
+worth revisiting if a REPL session were ever observed paying it repeatedly.
+
+The remaining code-size question is real and unchanged: monomorphization costs module
+size, and in an Othismo image a module is something you carry around and hot-replace, not
+just something you download once.
 
 Second decision: how a generic parameter is **constrained**. Unconstrained parameters can
 only be moved around; useful generics need bounds, which pulls in interfaces/traits from
@@ -30,6 +39,15 @@ only be moved around; useful generics need bounds, which pulls in interfaces/tra
 The Othismo angle: a message handler's parameters arrive as BSON. Whether a handler can be
 generic at all — and what a type parameter would even mean once the value has been
 serialized and routed — is an open question that §13 and §9 both touch.
+
+**Decided elsewhere, 2026-08-18.** [§14](14-metaprogramming-and-tooling.md) settles the
+mechanism: types are comptime values, a generic is a function taking or returning one, and
+monomorphization is memoized function application. §8 therefore has **no syntax of its
+own** — an instantiation is a call, which §2's postfix rung already parses. What remains
+here is everything that isn't a spelling: bounds, variance, inference of type arguments,
+and generic message handlers. The cost §14 accepts on §8's behalf is that a generic body
+is type-checked only when instantiated, so an uninstantiated generic gets parsing and name
+resolution and nothing more.
 
 ## Checklist
 
@@ -47,7 +65,8 @@ serialized and routed — is an open question that §13 and §9 both touch.
 - **Higher-kinded types** — almost certainly not, but it's a spend worth declining on
   purpose
 - **Implementation strategy** **[wasm]**
-  - Monomorphize vs. box/erase, and whether the two back ends may differ
+  - ~~Monomorphize vs. box/erase, and whether the two back ends may differ~~ —
+    **answered by §14:** monomorphize, and they may not differ
   - Code-size cost of monomorphization against image and module size (goal §4.1)
   - Specialization of already-generic code; instantiation across module boundaries (§13)
     and what that means for separate compilation
@@ -59,8 +78,9 @@ serialized and routed — is an open question that §13 and §9 both touch.
   value (§10) meets a generic signature; where the check happens and who's to blame
 - **Generic message handlers** — Othismo-specific: can an operation be generic when its
   arguments are BSON on the wire? (§9, §13)
-- **Monomorphization and the interpreter** — if the interpreter doesn't specialize, does
-  it still reject the same programs? (goal §2.2 conformance suite)
+- ~~**Monomorphization and the interpreter**~~ — **answered by §14:** the interpreter does
+  specialize, over the same core IR, so the question of whether it rejects the same
+  programs cannot arise (goal §2.2 conformance suite)
 
 ## Glue Syntax
 

@@ -94,10 +94,21 @@ compile time and usable wherever a constant is expected. A second keyword would 
 same thing twice.
 
 What that does *not* provide is a way to **require** compile-time evaluation — the thing
-you need if an array length or a type parameter must be a constant. That requirement can't
-be stated until there's a construct that needs it, so §6 introduces it if and when array
-sizes do. Adding a `const` binding form later is additive; retrofitting one that means
-something subtly different from `let` is not, which is the reason not to guess now.
+you need if an array length or a type parameter must be a constant.
+
+**Answered 2026-08-18 by §14, and not with a binding form.** `comptime` is that
+requirement, and it is spelled where the requirement lives rather than on the binding: on
+a parameter whose argument must be known at compile time, and as a prefix on an expression
+that must be evaluated at compile time.
+
+```
+fn List(comptime T: Type) -> Type { … }     // the type parameter must be a constant
+let table = comptime build_table(256);      // this expression must be folded
+```
+
+That leaves this section's rule exactly as it was — a non-`mut` `let` is comptime-known
+when its initializer is, and there is still no `const`. §14 declines a `comptime let` for
+the same reason §3 declines `const`: it would name the same thing twice.
 
 ### Shadowing
 

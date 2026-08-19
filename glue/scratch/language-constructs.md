@@ -46,7 +46,7 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 | 11 | [Objects and abstraction](constructs/11-objects-and-abstraction.md) | Classes/actors, dispatch, inheritance | — | — |
 | 12 | [Scope and name resolution](constructs/12-scope-and-names.md) | Lexical scoping, shadowing, late binding | — | — |
 | 13 | [Modules and program structure](constructs/13-modules-and-program-structure.md) | Imports, visibility, entry point, Othismo namespace | — | — |
-| 14 | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | — | — |
+| 14 | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | ◑ | ◑ |
 | 15 | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | — | — |
 | 16 | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | — | — |
 
