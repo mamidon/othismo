@@ -283,6 +283,10 @@ Goal §2.2 asks for a conformance suite "from the first day there are two back e
 IR is where it attaches: one program, one core IR, two executions, identical observable
 results.
 
+**Specified 2026-08-18 in [`../core-ir.md`](../core-ir.md)**, which owns core IR's shape
+and the decisions behind it — A-normal form, slots, and the choice to make the interpreter
+double as the comptime evaluator, so that comptime and runtime semantics cannot diverge.
+
 ### Open
 
 - Whether an uninstantiated generic can be checked at all, given bounds (§8).

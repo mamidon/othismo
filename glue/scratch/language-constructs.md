@@ -58,6 +58,11 @@ where the answer is written in its section and the implementation deliberately l
 It also indexes the **Open** questions that remain owned by their own sections, so there's
 one place to look for everything unresolved.
 
+[**Core IR**](core-ir.md) is a third companion document, and the only one that is not
+about the surface language: it specifies the typed, monomorphic representation §14's
+elaboration lowers to, and which the interpreter and the wasm back end both consume. It
+sits outside the numbering because it is not a construct.
+
 §15 is expected to stay empty under *Syntax* by construction — if something lands there,
 it probably belongs in another section. §16 is a constraint set rather than a feature
 area, and may end up recording where each decision went rather than a spelling of its own.
