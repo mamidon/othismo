@@ -106,6 +106,13 @@ pub enum Value {
     /// `fn` has an empty environment — one representation, because the
     /// difference between the two forms was spent during elaboration.
     Closure(Rc<Closure>),
+    /// An instance of a `struct` (§6).
+    ///
+    /// Reference semantics: the `Rc` *is* the semantics. Binding one to a
+    /// second name copies the reference, so a mutation through either is
+    /// visible through both, and identity — which §2 defines equality on for
+    /// instances — is pointer identity.
+    Struct(Rc<StructVal>),
     /// A one-word box holding a value, which no Glue program can name.
     ///
     /// Lowering introduces one for a binding that is both captured and
@@ -114,6 +121,33 @@ pub enum Value {
     /// true. An uncaptured binding is a slot and an unassigned capture is a
     /// copy; neither costs this.
     Cell(Rc<RefCell<Value>>),
+}
+
+/// A struct instance: its fields, in declaration order, and the shape they are
+/// read against.
+///
+/// Fields are positional at run time — elaboration resolved every name to a
+/// [`ir::types::FieldIdx`] — so the shape is carried only to echo a value.
+/// It is shared per type rather than per instance.
+pub struct StructVal {
+    pub(crate) shape: Rc<StructShape>,
+    pub(crate) fields: RefCell<Vec<Value>>,
+}
+
+/// What a struct type is called, and what its fields are called.
+#[derive(Debug)]
+pub struct StructShape {
+    pub(crate) name: Rc<str>,
+    pub(crate) fields: Vec<Rc<str>>,
+}
+
+/// Shallow, deliberately: §6 lets a struct hold itself, and a program can build
+/// a cycle by assigning a field, so deriving this would recurse forever the
+/// first time anything printed a value.
+impl fmt::Debug for StructVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {{ … }}", self.shape.name)
+    }
 }
 
 /// A function value: which function, and the environment it closed over.
@@ -166,6 +200,10 @@ impl PartialEq for Value {
             // refuses to compare two of them. This impl still has to answer,
             // and answers identity, which is the only thing that could be
             // meant. A cell is storage rather than a value, so the same holds.
+            // §2: identity on instance references, which under §6's reference
+            // semantics is the only equality a struct could have — two
+            // instances with equal fields are two instances.
+            (Value::Struct(left), Value::Struct(right)) => Rc::ptr_eq(left, right),
             (Value::Closure(left), Value::Closure(right)) => Rc::ptr_eq(left, right),
             (Value::Cell(left), Value::Cell(right)) => Rc::ptr_eq(left, right),
             _ => false,
@@ -214,6 +252,7 @@ impl Value {
             Value::Float { bits, .. } => format!("f{bits}"),
             Value::Char(_) => "char".to_string(),
             Value::Str(_) => "Str".to_string(),
+            Value::Struct(value) => value.shape.name.to_string(),
             Value::Closure(_) => "a function".to_string(),
             Value::Cell(inner) => format!("(cell {})", inner.borrow().type_name()),
         }
@@ -251,11 +290,45 @@ impl fmt::Display for Value {
             // Nothing useful to show: a body is a block of IR, and the
             // environment it closed over is not the reader's business. The
             // name is.
+            Value::Struct(value) => value.write(f, 0),
             Value::Closure(closure) => write!(f, "<fn {}>", closure.name),
             // A program cannot hold one, so echoing it means the executor put
             // a cell somewhere a value belongs. Shown rather than hidden, so
             // that the bug is visible.
             Value::Cell(inner) => write!(f, "(cell {})", inner.borrow()),
         }
+    }
+}
+
+impl StructVal {
+    /// `P { x: 1, y: "b" }`, to a fixed depth.
+    ///
+    /// §6 gives structs reference semantics and lets one hold itself, so a
+    /// program can build a cycle and printing has to stop somewhere. Below the
+    /// budget a struct is written as its name and an ellipsis, which is what
+    /// the reader wants at that depth anyway.
+    fn write(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        const DEPTH: usize = 3;
+        if depth >= DEPTH {
+            return write!(f, "{} {{ … }}", self.shape.name);
+        }
+        write!(f, "{} {{", self.shape.name)?;
+        for (index, (name, value)) in self
+            .shape
+            .fields
+            .iter()
+            .zip(self.fields.borrow().iter())
+            .enumerate()
+        {
+            if index > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, " {name}: ")?;
+            match value {
+                Value::Struct(nested) => nested.write(f, depth + 1)?,
+                value => write!(f, "{value}")?,
+            }
+        }
+        f.write_str(" }")
     }
 }

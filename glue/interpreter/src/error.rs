@@ -1,6 +1,7 @@
 //! What stops a program mid-flight.
 //!
-//! The list is short now, and that is the point of having elaborated first.
+//! The list is short, and complete, and that is the point of having elaborated
+//! first.
 //! Everything this crate used to refuse — an unbound name, a condition that
 //! isn't `bool`, the wrong number of arguments, `1 + 1.5` — is an
 //! [`ir::Diagnostic`] before the program runs. What is left is §2's traps:
@@ -67,15 +68,18 @@ pub enum TrapKind {
         ty: String,
     },
     DividedByZero,
+    /// §2: `as` is explicit and trapping. Truncation and rounding are defined
+    /// behaviour rather than traps, so this is the conversion with no
+    /// representable answer — an integer too wide for its target, or a float
+    /// past the edges of one.
+    CastOutOfRange {
+        value: String,
+        ty: String,
+    },
     /// §5: there is no tail-call guarantee, so deep recursion exhausts the
     /// stack and traps. This is that trap, raised at a depth the host stack
     /// still has room for rather than by falling off it.
     RecursionLimit,
-    /// An IR node this stage of the executor doesn't run yet. Named rather than
-    /// panicked on, because "closures are not implemented yet" is a different
-    /// thing to hear than a crash — and every entry here is scheduled to go
-    /// away.
-    Unsupported(&'static str),
 }
 
 impl fmt::Display for TrapKind {
@@ -84,10 +88,10 @@ impl fmt::Display for TrapKind {
         match self {
             Overflow { operator, ty } => write!(f, "`{operator}` overflowed `{ty}`"),
             DividedByZero => f.write_str("divided by zero"),
+            CastOutOfRange { value, ty } => write!(f, "{value} does not fit in `{ty}`"),
             RecursionLimit => f.write_str(
                 "recursion went too deep — there are no tail calls, so an unbounded recursion needs a loop or a worklist"
             ),
-            Unsupported(what) => write!(f, "{what} is not implemented yet"),
         }
     }
 }

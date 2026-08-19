@@ -20,9 +20,11 @@
 //! capture. A file is a block (§3), so its value is its trailing expression,
 //! and `let x = 2; x * 21` and `42` are both whole programs.
 //!
-//! Structs, field access, and `as` elaborate but do not execute yet: each is an
-//! IR node the executor reports as [`TrapKind::Unsupported`] rather than
-//! running. They are the next step rather than an open question.
+//! §6's structs run too — construction, field access, and assignment through a
+//! field, with the reference semantics that makes a mutation visible to every
+//! holder — along with §2's `as`. There is no core IR node the executor does
+//! not run; what the language is still missing is missing from the IR first,
+//! and `ir`'s documentation is where that list lives.
 //!
 //! # What changed when the IR arrived
 //!

@@ -650,19 +650,132 @@ fn a_program_that_did_not_elaborate_does_not_run() {
     );
 }
 
-// ---- The edges of this stage -----------------------------------------------
+// ---- Structs (§6) ----------------------------------------------------------
 
-/// IR this executor does not run yet. Each one elaborates cleanly — the gap is
-/// here, not in front of it — and each is scheduled.
 #[test]
-fn unrun_constructs_say_so() {
+fn a_struct_is_built_and_read() {
     assert_eq!(
-        trap("struct P { x: u64 } let p = P { x: 1 }; 0u64"),
-        Unsupported("a struct literal")
+        int(r#"struct P { x: u64, y: Str } let p = P { y: "b", x: 1 }; p.x"#),
+        1
     );
     assert_eq!(
-        trap("fn f(n: u64) -> u8 { n as u8 } f(1)"),
-        Unsupported("the `as` operator")
+        value(r#"struct P { x: u64, y: Str } let p = P { y: "b", x: 1 }; p.y"#),
+        Value::string("b")
+    );
+}
+
+/// §6: reference semantics. Binding an instance to a second name copies the
+/// reference, so a mutation through one is visible through the other — which
+/// §3 warns about in as many words: `let` means "you cannot mutate through
+/// *this* name", not "this value will not change".
+#[test]
+fn structs_have_reference_semantics() {
+    assert_eq!(
+        int("struct C { n: u64 }
+             let mut a = C { n: 1 };
+             let b = a;
+             a.n = 2;
+             b.n"),
+        2
+    );
+}
+
+/// §2: equality is on values and identity on instance references. Two
+/// instances with equal fields are two instances.
+#[test]
+fn struct_equality_is_identity() {
+    assert!(!boolean(
+        "struct C { n: u64 } let a = C { n: 1 }; let b = C { n: 1 }; a == b"
+    ));
+    assert!(boolean(
+        "struct C { n: u64 } let a = C { n: 1 }; let b = a; a == b"
+    ));
+}
+
+/// §5's own example, end to end. `mut` on a parameter is permission to mutate
+/// the argument in place; what carries the change back to the caller is §6's
+/// reference semantics, not a write-back at the call.
+#[test]
+fn a_mut_parameter_mutates_the_callers_instance() {
+    assert_eq!(
+        int("struct C { n: u64 }
+             fn advance(c: mut C, by: u64) { c.n = c.n + by; }
+             let mut tally = C { n: 0 };
+             advance(tally, 5);
+             advance(tally, 3);
+             tally.n"),
+        8
+    );
+}
+
+/// §6: field mutability follows the binding, and §5's call-site rule is the
+/// same rule one step out. Both are settled before the program runs.
+#[test]
+fn mutating_needs_a_mut_binding() {
+    assert_eq!(
+        refused("struct C { n: u64 } let c = C { n: 1 }; c.n = 2;"),
+        "`c` is not `mut`, so its fields cannot be assigned — write `let mut c`"
+    );
+    assert_eq!(
+        refused(
+            "struct C { n: u64 }
+             fn advance(c: mut C) { c.n = c.n + 1; }
+             let frozen = C { n: 0 };
+             advance(frozen);"
+        ),
+        "the `c` parameter is `mut`, so `frozen` must be too — declare it `let mut frozen`"
+    );
+}
+
+// ---- Conversions (§2) ------------------------------------------------------
+
+/// §2: `as` is explicit and trapping. Exact, or no answer — there is no
+/// wrapping here any more than there is in `+`.
+#[test]
+fn an_integer_conversion_is_exact_or_a_trap() {
+    assert_eq!(int("fn f(n: u64) -> u8 { n as u8 } f(255)"), 255);
+    assert_eq!(
+        trap("fn f(n: u64) -> u8 { n as u8 } f(300)"),
+        CastOutOfRange {
+            value: "300".to_string(),
+            ty: "u8".to_string(),
+        }
+    );
+}
+
+/// §2: truncation toward zero is defined behaviour rather than a trap, and the
+/// edges — where there is no representable answer at all — are the trap.
+#[test]
+fn a_float_to_integer_conversion_truncates_and_traps_at_the_edges() {
+    assert_eq!(int("fn f(x: f64) -> s64 { x as s64 } f(1.9)"), 1);
+    assert_eq!(int("fn f(x: f64) -> s64 { x as s64 } f(-1.9)"), -1);
+    assert_eq!(
+        trap("fn f(x: f64) -> s64 { x as s64 } f(0.0 / 0.0)"),
+        CastOutOfRange {
+            value: "NaN".to_string(),
+            ty: "s64".to_string(),
+        }
+    );
+    assert_eq!(
+        trap("fn f(x: f64) -> u8 { x as u8 } f(1.0 / 0.0)"),
+        CastOutOfRange {
+            value: "inf".to_string(),
+            ty: "u8".to_string(),
+        }
+    );
+}
+
+#[test]
+fn a_conversion_to_a_float_rounds() {
+    assert_eq!(
+        value("fn f(n: u64) -> f64 { n as f64 } f(3)"),
+        Value::f64(3.0)
+    );
+    // `f32` cannot hold `0.1`, and the answer is the same one wasm's
+    // `f32.demote_f64` gives.
+    assert_eq!(
+        value("fn f(x: f64) -> f32 { x as f32 } f(0.1)"),
+        Value::f32(0.1)
     );
 }
 
@@ -687,5 +800,11 @@ fn values_display_as_they_are_echoed() {
     assert_eq!(
         value("let f: fn(u64) -> u64 = (n) -> n; f").to_string(),
         "<fn <file>.\u{3bb}0>"
+    );
+    // A struct shows its fields in declaration order, whatever order they were
+    // written in (§2, §6).
+    assert_eq!(
+        value(r#"struct P { x: u64, y: Str } P { y: "b", x: 1 }"#).to_string(),
+        r#"P { x: 1, y: "b" }"#
     );
 }

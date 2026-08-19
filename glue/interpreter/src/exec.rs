@@ -19,23 +19,30 @@
 //!
 //! # What this stage runs
 //!
-//! Everything but §6's aggregates: constants, slots, arithmetic, comparison,
-//! `if`, `while`, `break`, `continue`, `return`, calls direct and indirect,
-//! and §5's closures and the cells that back a captured binding. Structs,
-//! field access, and `as` are IR nodes this executor does not reach yet and
-//! reports as [`TrapKind::Unsupported`] — which is a different thing to hear
-//! than a crash, and each is scheduled to go away.
+//! Every node core IR has today. What is missing from the language is missing
+//! from the IR first, and `ir`'s own documentation is where that list lives:
+//! `CallHost` (§13), `Index` and the collections that would give it a meaning
+//! (§6, §8), `match` (§7), and generics (§8, §14).
+//!
+//! # Where an instruction's type comes from
+//!
+//! Invariant 1 says types live in slots, so the two instructions that need one
+//! take it from their *destination*: [`Rvalue::Cast`] converts to the
+//! destination slot's type and [`Rvalue::MakeStruct`] builds an instance of it.
+//! That is why [`Machine::rvalue`] is handed a type, and why there is exactly
+//! one place a type can be wrong.
 
-use ir::consts::{Const, ConstId};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use ir::consts::{Const, ConstId};
 use ir::program::{BlockId, CstId, Func, FuncId, Operand, Place, Program, Rvalue, Stmt};
-use ir::types::TypeDef;
+use ir::types::{TypeDef, TypeId};
 
 use crate::error::{Trap, TrapKind};
 use crate::ops;
-use crate::value::{Closure, IntTy, Value};
+use crate::value::{Closure, IntTy, StructShape, StructVal, Value};
 
 /// How deep a call chain may go.
 ///
@@ -64,6 +71,9 @@ pub(crate) struct Machine<'a> {
     /// The constant pool, decoded once. §1's constants are frozen by the time
     /// they get here, so this is a table rather than an evaluation.
     consts: Vec<Value>,
+    /// What each struct type is called, and what its fields are called — for
+    /// echoing an instance, and for nothing else. Field access is positional.
+    shapes: HashMap<TypeId, Rc<StructShape>>,
     /// How many calls are open, against [`RECURSION_LIMIT`].
     depth: usize,
 }
@@ -73,9 +83,14 @@ impl<'a> Machine<'a> {
         let consts = (0..program.consts.len())
             .map(|index| constant(program, ConstId(index as u32)))
             .collect();
+        let shapes = (0..program.types.len())
+            .map(|index| TypeId(index as u32))
+            .filter_map(|ty| Some((ty, shape_of(program, ty)?)))
+            .collect();
         Machine {
             program,
             consts,
+            shapes,
             depth: 0,
         }
     }
@@ -160,14 +175,18 @@ impl<'a> Machine<'a> {
     ) -> Result<Flow, Trap> {
         match stmt {
             Stmt::Assign { dst, rvalue } => {
-                let value = self.rvalue(rvalue, at, slots)?;
+                // Invariant 1: the destination's type is the instruction's,
+                // for the two rvalues that take one from it.
+                let value = self.rvalue(rvalue, Some(func.slot_ty(*dst)), at, slots)?;
                 slots[dst.index()] = value;
                 Ok(Flow::Normal)
             }
             // §3's expression statement: evaluate, discard. Nothing marks the
             // discard as deliberate, because §3 doesn't.
             Stmt::Drop(rvalue) => {
-                self.rvalue(rvalue, at, slots)?;
+                // No destination, and so no type — sound because elaboration
+                // discards nothing but a call.
+                self.rvalue(rvalue, None, at, slots)?;
                 Ok(Flow::Normal)
             }
             Stmt::If { cond, then_, else_ } => {
@@ -202,8 +221,21 @@ impl<'a> Machine<'a> {
                     }
                     Ok(Flow::Normal)
                 }
-                Place::Field { .. } => {
-                    Err(Trap::new(TrapKind::Unsupported("assigning to a field"), at))
+                // §6: assignment through a reference, which every other holder
+                // of that instance observes. `mut` on the binding is what
+                // permitted it, and elaboration checked that.
+                Place::Field { base, field } => {
+                    let value = self.operand(*value, slots);
+                    match &slots[base.index()] {
+                        Value::Struct(instance) => {
+                            instance.fields.borrow_mut()[field.0 as usize] = value
+                        }
+                        other => unreachable!(
+                            "a field is assigned on a struct, not `{}`",
+                            other.type_name()
+                        ),
+                    }
+                    Ok(Flow::Normal)
                 }
             },
         }
@@ -248,7 +280,13 @@ impl<'a> Machine<'a> {
         }
     }
 
-    fn rvalue(&mut self, rvalue: &Rvalue, at: CstId, slots: &mut [Value]) -> Result<Value, Trap> {
+    fn rvalue(
+        &mut self,
+        rvalue: &Rvalue,
+        ty: Option<TypeId>,
+        at: CstId,
+        slots: &mut [Value],
+    ) -> Result<Value, Trap> {
         match rvalue {
             Rvalue::Use(operand) => Ok(self.operand(*operand, slots)),
             Rvalue::Unary(op, operand) => {
@@ -298,10 +336,91 @@ impl<'a> Machine<'a> {
                 Value::Cell(cell) => Ok(cell.borrow().clone()),
                 other => unreachable!("a cell read holds `{}`", other.type_name()),
             },
-            Rvalue::Cast(_) => unsupported("the `as` operator", at),
-            Rvalue::MakeStruct(_) => unsupported("a struct literal", at),
-            Rvalue::Field { .. } => unsupported("field access", at),
+            // §2: explicit and trapping. The target is the destination slot's
+            // type, which is invariant 1 in the one place it is load-bearing.
+            Rvalue::Cast(operand) => {
+                let value = self.operand(*operand, slots);
+                self.cast(value, self.expect_type(ty))
+                    .map_err(|kind| Trap::new(kind, at))
+            }
+            // §6: fields in declaration order — §2's left-to-right evaluation
+            // of the *written* order already happened in the statements above
+            // this one.
+            Rvalue::MakeStruct(fields) => {
+                let fields = self.operands(fields, slots);
+                Ok(Value::Struct(Rc::new(StructVal {
+                    shape: self.shape(self.expect_type(ty)),
+                    fields: RefCell::new(fields),
+                })))
+            }
+            Rvalue::Field { base, field } => match self.operand(*base, slots) {
+                Value::Struct(value) => Ok(value.fields.borrow()[field.0 as usize].clone()),
+                other => {
+                    unreachable!("a field is read from a struct, not `{}`", other.type_name())
+                }
+            },
         }
+    }
+
+    /// §2's conversion table, which lowering has already folded for constant
+    /// operands (`cast_const`) and hands here for everything else. Truncation
+    /// and rounding are defined behaviour; the conversion with no representable
+    /// answer traps.
+    fn cast(&self, value: Value, target: TypeId) -> Result<Value, TrapKind> {
+        let out_of_range = |shown: String| TrapKind::CastOutOfRange {
+            value: shown,
+            ty: self.program.type_name(target),
+        };
+        match (value, self.program.types.get(target)) {
+            // Integer to integer: exact, or a trap. There is no wrapping here
+            // any more than there is in `+`.
+            (Value::Int { value, .. }, TypeDef::Int { signed, bits }) => {
+                let ty = IntTy::new(*signed, *bits);
+                if ty.holds(value) {
+                    Ok(Value::Int { value, ty })
+                } else {
+                    Err(out_of_range(value.to_string()))
+                }
+            }
+            // Integer to float rounds, which is what `f64` does to an `i128`
+            // it cannot hold exactly.
+            (Value::Int { value, .. }, TypeDef::Float { bits }) => Ok(float(value as f64, *bits)),
+            // Float to integer truncates toward zero, and traps at the edges —
+            // NaN and the infinities have no representable answer at all.
+            (Value::Float { value, .. }, TypeDef::Int { signed, bits }) => {
+                let ty = IntTy::new(*signed, *bits);
+                let truncated = value.trunc();
+                if !truncated.is_finite()
+                    || truncated < ty.min() as f64
+                    || truncated > ty.max() as f64
+                {
+                    return Err(out_of_range(value.to_string()));
+                }
+                Ok(Value::Int {
+                    value: truncated as i128,
+                    ty,
+                })
+            }
+            (Value::Float { value, .. }, TypeDef::Float { bits }) => Ok(float(value, *bits)),
+            (value, _) => unreachable!(
+                "elaboration allows no conversion from `{}` to `{}`",
+                value.type_name(),
+                self.program.type_name(target)
+            ),
+        }
+    }
+
+    fn shape(&self, ty: TypeId) -> Rc<StructShape> {
+        match self.shapes.get(&ty) {
+            Some(shape) => Rc::clone(shape),
+            None => unreachable!("a struct is made at a struct type"),
+        }
+    }
+
+    /// The destination slot's type, for the two instructions that take theirs
+    /// from it (invariant 1).
+    fn expect_type(&self, ty: Option<TypeId>) -> TypeId {
+        ty.expect("this instruction takes its type from its destination slot")
     }
 
     fn operands(&self, operands: &[Operand], slots: &[Value]) -> Vec<Value> {
@@ -337,8 +456,35 @@ impl<'a> Machine<'a> {
     }
 }
 
-fn unsupported(what: &'static str, at: CstId) -> Result<Value, Trap> {
-    Err(Trap::new(TrapKind::Unsupported(what), at))
+/// A float at the width its type says, rounded through `f32` when that is the
+/// width — the same rule [`crate::ops`] applies after every operation.
+fn float(value: f64, bits: u8) -> Value {
+    Value::Float {
+        value: if bits == 32 {
+            value as f32 as f64
+        } else {
+            value
+        },
+        bits,
+    }
+}
+
+/// What to call a struct type and its fields, if it is one.
+fn shape_of(program: &Program, ty: TypeId) -> Option<Rc<StructShape>> {
+    let def = program.types.struct_def(ty)?;
+    Some(Rc::new(StructShape {
+        name: match def.name {
+            Some(name) => Rc::from(program.text(name)),
+            // §14's anonymous `struct { … }`, which lowering cannot produce
+            // yet.
+            None => Rc::from("struct"),
+        },
+        fields: def
+            .fields
+            .iter()
+            .map(|field| Rc::from(program.text(field.name)))
+            .collect(),
+    }))
 }
 
 /// One entry of the constant pool as a value.

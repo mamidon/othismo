@@ -22,6 +22,8 @@
 //!   float division by zero has one.
 //! * **Strings**: `+` concatenates, and comparison is by bytes (§1: strings are
 //!   UTF-8, so byte order is code-point order).
+//! * **Instances compare by identity** (§2), which under §6's reference
+//!   semantics is the only equality they could have.
 //!
 //! What is *not* here any more: the type checks. §1's "no implicit conversion"
 //! and §2's "cross-type comparison does not exist" are elaboration's now, so a
@@ -30,6 +32,7 @@
 //! a program's.
 
 use std::cmp::Ordering;
+use std::rc::Rc;
 
 use ir::program::{BinOp, UnOp};
 
@@ -59,6 +62,15 @@ pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
         (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
         // Unit has one inhabitant, so two of them are equal (§6).
         (Value::Unit, Value::Unit) => Ok(Value::Bool(compare(op, Some(Ordering::Equal)))),
+        // §2: equality on values, identity on instance references. §6's
+        // reference semantics is what makes those different answers, and
+        // ordering is not defined on an instance at all — so elaboration
+        // admits only these two.
+        (Value::Struct(a), Value::Struct(b)) => Ok(Value::Bool(match op {
+            BinOp::Eq => Rc::ptr_eq(&a, &b),
+            BinOp::Ne => !Rc::ptr_eq(&a, &b),
+            _ => unreachable!("`{}` is not defined on an instance", op.name()),
+        })),
         (left, right) => unreachable!(
             "§1 has no implicit conversion, so elaboration refuses `{}` against `{}`",
             left.type_name(),
