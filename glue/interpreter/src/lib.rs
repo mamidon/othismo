@@ -10,10 +10,10 @@
 //!
 //! # What runs today
 //!
-//! Expressions, `let`, assignment, blocks, `if`, and `while`: everything that
-//! needs neither functions nor a type checker. A file is a block (§3), so its
-//! value is its trailing expression, and `let x = 2; x * 21` and `42` are both
-//! whole programs.
+//! Expressions, `let`, assignment, blocks, `if`, `while`, and §5's functions —
+//! declarations, calls, `return`, functions as values, and lambdas with
+//! capture. A file is a block (§3), so its value is its trailing expression,
+//! and `let x = 2; x * 21` and `42` are both whole programs.
 //!
 //! ```
 //! use interpreter::{Value, run};
@@ -22,21 +22,32 @@
 //! ```
 //!
 //! Everything else parses and then says it isn't implemented yet, which is a
-//! different thing to hear than a syntax error: `fn`, `struct`, `type`,
-//! `return`, calls, lambdas, `as`, indexing, and field access.
+//! different thing to hear than a syntax error: `struct`, `type`, `as`,
+//! indexing, field access, and method calls.
 //!
 //! # What is knowingly missing
 //!
 //! **There are no types.** Every integer is an `i64` and every float an `f64`,
 //! so §1's numeric tower is absent, a literal's suffix is read only to tell an
-//! integer from a float, and a `let`'s annotation is ignored. §2's rules that
-//! don't depend on width — trapping overflow, truncating division, no implicit
-//! conversion, no truthiness, no cross-type comparison — all hold. See
-//! [`Value`] for the details of what that costs.
+//! integer from a float, and every annotation — on a `let`, a parameter, or a
+//! return — is read past and dropped. §2's rules that don't depend on width —
+//! trapping overflow, truncating division, no implicit conversion, no
+//! truthiness, no cross-type comparison — all hold. See [`Value`] for the
+//! details of what that costs.
+//!
+//! The one place that absence is visible in a *message* rather than a missing
+//! check is arity: §5 checks it statically, so this checks it at the call and
+//! says so. §10 should make that unreachable.
+//!
+//! **Declarations are hoisted per block.** §5 needs top-level declarations to be
+//! order-independent for mutual recursion, and §12 — which owes the general
+//! rule — is still empty. Hoisting every `fn` to the top of its own block is the
+//! smallest thing that covers it, and it is provisional.
 
 mod env;
 mod error;
 mod eval;
+mod function;
 mod ops;
 mod value;
 

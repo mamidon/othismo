@@ -1,9 +1,9 @@
 //! What a Glue program evaluates to.
 //!
-//! Six variants, because §1 has six kinds of literal and this stage of the
-//! interpreter adds nothing that isn't written down in the source. There is no
-//! `nil`: §1 doesn't have one, so neither does this, and [`Value::Unit`] is a
-//! real value with one inhabitant rather than an absence (§5).
+//! §1's six kinds of literal, plus functions — which §5 makes values, so `let
+//! f = add;` binds one and a lambda produces one. There is no `nil`: §1 doesn't
+//! have one, so neither does this, and [`Value::Unit`] is a real value with one
+//! inhabitant rather than an absence (§5).
 //!
 //! **Integers are `i64` and floats are `f64`, full stop.** §1's numeric tower —
 //! `u8` through `s64`, `f32` and `f64` — is a *typing* distinction, and there is
@@ -17,13 +17,15 @@
 use std::fmt;
 use std::rc::Rc;
 
+use crate::function::Function;
+
 /// A runtime value.
 ///
 /// `Rc<str>` for strings so that binding one to a second name is a refcount
 /// bump rather than a copy. Nothing mutates a string in place — §2's `+`
 /// produces a new one — so shared ownership needs no interior mutability to go
 /// with it.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Bool(bool),
@@ -31,11 +33,43 @@ pub enum Value {
     Float(f64),
     Char(char),
     Str(Rc<str>),
+    /// A `fn` or a lambda (§5). Opaque from outside this crate: what a function
+    /// *is* — a body, its parameters, and the frames it captured — is the
+    /// interpreter's business, and the IL will change all three.
+    Function(Rc<Function>),
+}
+
+/// Structural, as §2 asks, except for functions.
+///
+/// §2 defines equality on values and identity on instance references, and says
+/// nothing about functions, so `==` refuses them — see `ops::equality`. This
+/// impl still has to answer for them, and answers identity, which is the only
+/// thing that could be meant.
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Unit, Value::Unit) => true,
+            (Value::Bool(left), Value::Bool(right)) => left == right,
+            (Value::Int(left), Value::Int(right)) => left == right,
+            // IEEE-754 (§2), so `NaN != NaN`.
+            (Value::Float(left), Value::Float(right)) => left == right,
+            (Value::Char(left), Value::Char(right)) => left == right,
+            (Value::Str(left), Value::Str(right)) => left == right,
+            (Value::Function(left), Value::Function(right)) => Rc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
 }
 
 impl Value {
     pub fn string(text: &str) -> Value {
         Value::Str(Rc::from(text))
+    }
+
+    /// Whether this is a function — which is what a `fn` may see past its
+    /// barrier, since §5 lets it call others without capturing anything.
+    pub(crate) fn is_function(&self) -> bool {
+        matches!(self, Value::Function(_))
     }
 
     /// How to name this value's type in a message.
@@ -51,6 +85,7 @@ impl Value {
             Value::Float(_) => "a float",
             Value::Char(_) => "a character",
             Value::Str(_) => "a string",
+            Value::Function(_) => "a function",
         }
     }
 }
@@ -79,6 +114,12 @@ impl fmt::Display for Value {
             }
             Value::Char(value) => write!(f, "'{}'", value.escape_debug()),
             Value::Str(value) => write!(f, "\"{}\"", value.escape_debug()),
+            // Nothing useful to show: a body is a subtree, and its captured
+            // frames are not the reader's business. The name is.
+            Value::Function(function) => match &function.name {
+                Some(name) => write!(f, "<fn {name}>"),
+                None => f.write_str("<lambda>"),
+            },
         }
     }
 }

@@ -403,18 +403,266 @@ fn a_loop_body_is_a_fresh_scope() {
 
 #[test]
 fn unimplemented_constructs_say_so() {
-    assert_eq!(failure("fn f() { }"), Unsupported("a function declaration"));
     assert_eq!(
         failure("struct P { x: u64, }"),
         Unsupported("a struct declaration")
     );
     assert_eq!(failure("type T = u64;"), Unsupported("a type alias"));
-    assert_eq!(failure("return;"), Unsupported("`return`"));
-    assert_eq!(failure("f()"), Unsupported("a call"));
     assert_eq!(failure("1 as u8"), Unsupported("the `as` operator"));
-    assert_eq!(failure("(x) -> x"), Unsupported("a lambda"));
     assert_eq!(failure("let a = 1; a[0]"), Unsupported("indexing"));
     assert_eq!(failure("let a = 1; a.x"), Unsupported("field access"));
+    assert_eq!(failure("let a = 1; a.next()"), Unsupported("a method call"));
+}
+
+// ---- Functions (§5) --------------------------------------------------------
+
+#[test]
+fn a_function_is_declared_and_called() {
+    assert_eq!(int("fn add(a: u64, b: u64) -> u64 { a + b } add(1, 2)"), 3);
+    assert_eq!(int("fn one() -> u64 { 1 } one()"), 1);
+}
+
+/// §5: the body is a block, so its value is its trailing expression, and
+/// `return` is for *early* exit — a well-shaped function often has none.
+#[test]
+fn a_body_is_a_block_and_return_is_the_early_exit() {
+    let clamp = "fn clamp(n: u64, limit: u64) -> u64 { if n > limit { return limit; } n }";
+    assert_eq!(int(&format!("{clamp} clamp(3, 10)")), 3);
+    assert_eq!(int(&format!("{clamp} clamp(30, 10)")), 10);
+}
+
+/// §5: a function with no `-> T` returns unit, which is a real value rather
+/// than an absence — it can be bound, returned, and stored.
+#[test]
+fn a_function_with_no_return_type_returns_unit() {
+    assert_eq!(value("fn nothing() { } nothing()"), Value::Unit);
+    assert_eq!(value("fn nothing() { return; } nothing()"), Value::Unit);
+    assert_eq!(value("fn nothing() { } let x = nothing(); x"), Value::Unit);
+}
+
+#[test]
+fn return_outside_a_function_is_an_error() {
+    assert_eq!(failure("return;"), ReturnOutsideFunction);
+    assert_eq!(failure("if true { return 1; }"), ReturnOutsideFunction);
+}
+
+/// §4: `break` applies to the innermost enclosing loop, and a call is not
+/// something it reaches across.
+#[test]
+fn break_does_not_cross_a_call() {
+    assert_eq!(
+        failure("fn escape() { break; } while true { escape(); }"),
+        BreakOutsideLoop
+    );
+}
+
+/// §5: recursion is permitted, and mutual recursion needs declarations to be
+/// order-independent. §12 owes the general rule; hoisting per block is the
+/// stand-in.
+#[test]
+fn functions_recurse_and_see_each_other() {
+    assert_eq!(
+        int("fn fact(n: u64) -> u64 { if n == 0 { 1 } else { n * fact(n - 1) } } fact(10)"),
+        3628800
+    );
+    assert_eq!(
+        int(
+            "fn even(n: u64) -> bool { if n == 0 { true } else { odd(n - 1) } }
+             fn odd(n: u64) -> bool { if n == 0 { false } else { even(n - 1) } }
+             if even(10) { 1 } else { 0 }"
+        ),
+        1
+    );
+    assert_eq!(
+        int("let answer = twice(21); fn twice(n: u64) -> u64 { n * 2 } answer"),
+        42,
+        "a declaration is visible above where it is written"
+    );
+}
+
+/// §5: no tail-call guarantee, so deep recursion traps. Raised at a depth the
+/// host stack can still afford, rather than by falling off it.
+#[test]
+fn runaway_recursion_traps() {
+    assert_eq!(
+        failure("fn forever(n: u64) -> u64 { forever(n) } forever(0)"),
+        RecursionLimit
+    );
+}
+
+/// §5 checks arity statically. There is no static anything yet, so it is
+/// checked at the call — a stand-in for a compile error.
+#[test]
+fn arity_is_checked() {
+    assert_eq!(
+        failure("fn add(a: u64, b: u64) -> u64 { a + b } add(1)"),
+        WrongArity {
+            callee: "`add`".to_string(),
+            expected: 2,
+            found: 1,
+        }
+    );
+    assert_eq!(failure("let x = 1; x()"), NotCallable("an integer"));
+}
+
+/// §5: one name, one function — no overloading, by arity or by type.
+#[test]
+fn a_function_is_a_value() {
+    assert_eq!(
+        int("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)"),
+        3
+    );
+    assert_eq!(
+        int("fn twice(n: u64) -> u64 { n * 2 }
+             fn apply(g: fn(u64) -> u64, x: u64) -> u64 { g(x) }
+             apply(twice, 21)"),
+        42
+    );
+    assert_eq!(
+        value("fn add(a: u64) -> u64 { a } add").to_string(),
+        "<fn add>"
+    );
+}
+
+/// §2 says nothing about comparing functions, so `==` refuses rather than
+/// inventing an answer.
+#[test]
+fn functions_do_not_compare() {
+    assert_eq!(
+        failure("fn f() { } f == f"),
+        BinaryTypeMismatch {
+            operator: "==",
+            left: "a function",
+            right: "a function",
+        }
+    );
+}
+
+// ---- What a `fn` can see (§5) ----------------------------------------------
+
+/// §5: a nested `fn` is scoped to its block and **captures nothing** — an
+/// ordinary function that happens to be private. Keeping it capture-free is
+/// what lets every `fn` compile to a plain wasm function with no environment.
+#[test]
+fn a_fn_captures_nothing() {
+    assert_eq!(
+        failure("let outer = 1; fn read() -> u64 { outer } read()"),
+        NotCaptured("outer".to_string())
+    );
+    assert_eq!(
+        failure("let mut outer = 1; fn write() { outer = 2; } write()"),
+        NotCaptured("outer".to_string())
+    );
+}
+
+#[test]
+fn a_nested_fn_is_scoped_to_its_block() {
+    assert_eq!(int("{ fn inner() -> u64 { 1 } inner() }"), 1);
+    assert_eq!(
+        failure("{ fn inner() -> u64 { 1 } }; inner()"),
+        UnknownName("inner".to_string())
+    );
+}
+
+// ---- Lambdas (§5) ----------------------------------------------------------
+
+#[test]
+fn a_lambda_is_a_value_and_calls() {
+    assert_eq!(int("let inc = (x) -> x + 1; inc(41)"), 42);
+    assert_eq!(int("let inc = (x: u64) -> x + 1; inc(41)"), 42);
+    assert_eq!(int("let go = () -> 7; go()"), 7);
+    assert_eq!(
+        int("let f = (x) -> { let y = x * 2; y + 1 }; f(20)"),
+        41,
+        "a lambda body may be a block"
+    );
+    assert_eq!(value("let f = () -> 1; f").to_string(), "<lambda>");
+}
+
+/// §5: lambdas capture by reference, implicitly. Mutation of a captured binding
+/// is visible to everyone holding it, and the binding must be `mut` to be
+/// mutated at all (§3).
+#[test]
+fn a_lambda_captures_by_reference() {
+    assert_eq!(int("let n = 1; let read = () -> n; read()"), 1);
+    assert_eq!(
+        int("let mut n = 1; let read = () -> n; n = 2; read()"),
+        2,
+        "by reference, so the later write is seen"
+    );
+    assert_eq!(
+        int("let mut n = 1; let bump = () -> { n = n + 1; }; bump(); bump(); n"),
+        3
+    );
+}
+
+/// §5: captured bindings outlive the frame that created them.
+#[test]
+fn a_capture_outlives_its_frame() {
+    assert_eq!(
+        int("let make = () -> { let mut n = 0; () -> { n = n + 1; n } };
+             let counter = make();
+             counter();
+             counter()"),
+        2
+    );
+}
+
+/// A lambda inherits its creator's barrier rather than raising a new one, so
+/// one written inside a `fn` cannot reach what the `fn` itself couldn't.
+#[test]
+fn a_lambda_inside_a_fn_sees_no_further_than_the_fn() {
+    assert_eq!(
+        failure("let outer = 1; fn f() -> u64 { let g = () -> outer; g() } f()"),
+        NotCaptured("outer".to_string())
+    );
+    assert_eq!(
+        int("fn f(n: u64) -> u64 { let g = () -> n + 1; g() } f(41)"),
+        42,
+        "a parameter is the function's own, and is captured normally"
+    );
+}
+
+// ---- `mut` parameters (§5) -------------------------------------------------
+
+/// §5: `mut` on a parameter means the function may mutate the caller's value,
+/// and the caller must pass a `mut` binding — so a call that mutates is visible
+/// at the call site rather than only at the declaration.
+#[test]
+fn a_mut_parameter_writes_back_to_the_caller() {
+    assert_eq!(
+        int("fn advance(c: mut u64, by: u64) { c = c + by; }
+             let mut tally = 0;
+             advance(tally, 5);
+             tally"),
+        5
+    );
+}
+
+#[test]
+fn a_mut_parameter_needs_a_mut_binding() {
+    assert_eq!(
+        failure("fn advance(c: mut u64) { c = c + 1; } let frozen = 0; advance(frozen);"),
+        MutArgumentNotMutable {
+            parameter: "c".to_string(),
+            argument: "frozen".to_string(),
+        }
+    );
+    assert_eq!(
+        failure("fn advance(c: mut u64) { c = c + 1; } advance(1 + 1);"),
+        MutArgumentNotAPlace {
+            parameter: "c".to_string(),
+        }
+    );
+}
+
+/// §5: parameters are immutable bindings by default, exactly like a `let`.
+#[test]
+fn a_plain_parameter_is_immutable() {
+    assert_eq!(
+        failure("fn f(n: u64) -> u64 { n = n + 1; n } f(1)"),
+        ImmutableBinding("n".to_string())
+    );
 }
 
 /// A half-parsed tree is what the language server wants and what an interpreter

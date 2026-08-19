@@ -17,19 +17,31 @@
 //!
 //! # What this stage evaluates
 //!
-//! Expressions, `let`, assignment, blocks, `if`, and `while` — everything that
-//! needs neither functions nor a type checker. `fn`, `struct`, `type`,
-//! `return`, calls, lambdas, `as`, indexing, and field access all parse and
-//! then report [`RuntimeErrorKind::Unsupported`], because "not implemented yet"
-//! is a different thing to hear than "syntax error".
+//! Expressions, `let`, assignment, blocks, `if`, `while`, and §5's functions —
+//! declarations, calls, lambdas, and `return`. `struct`, `type`, `as`,
+//! indexing, field access, and method calls all parse and then report
+//! [`RuntimeErrorKind::Unsupported`], because "not implemented yet" is a
+//! different thing to hear than "syntax error".
+
+use std::rc::Rc;
 
 use parser::{Child, NodeId, NodeKind, Tree};
 use tokenizer::{Literal, NumericType, Span, Token, TokenKind, literal_value};
 
-use crate::env::{AssignError, Env};
+use crate::env::{AssignError, Env, LookupError};
 use crate::error::{RuntimeError, RuntimeErrorKind};
+use crate::function::{Function, Param};
 use crate::ops;
 use crate::value::Value;
+
+/// How deep a call chain may go.
+///
+/// §5: there is no tail-call guarantee, so deep recursion exhausts the stack
+/// and traps. A real stack overflow aborts the process without a message, which
+/// is the one outcome worth ruling out — so the trap is raised at a depth the
+/// host stack still has plenty of room for. The number is a budget, not a
+/// language rule; §15 owns resource limits.
+const RECURSION_LIMIT: usize = 256;
 
 /// How evaluation stops early.
 ///
@@ -44,6 +56,9 @@ enum Control {
     Error(RuntimeError),
     Break(Span),
     Continue(Span),
+    /// §4: `return` exits the enclosing *function*, not the block — so it
+    /// travels through blocks and loops alike and is caught at a call.
+    Return(Value, Span),
 }
 
 impl From<RuntimeError> for Control {
@@ -58,6 +73,8 @@ pub(crate) struct Interpreter<'a> {
     tree: &'a Tree,
     source: &'a str,
     env: Env,
+    /// How many calls are open, against [`RECURSION_LIMIT`].
+    depth: usize,
 }
 
 impl<'a> Interpreter<'a> {
@@ -66,6 +83,7 @@ impl<'a> Interpreter<'a> {
             tree,
             source,
             env: Env::new(),
+            depth: 0,
         }
     }
 
@@ -94,6 +112,12 @@ impl<'a> Interpreter<'a> {
                 RuntimeErrorKind::ContinueOutsideLoop,
                 span,
             )),
+            // §4: `return` is for early exit from a function. A file is a
+            // block, not a function — its value is its trailing expression.
+            Err(Control::Return(_, span)) => Err(RuntimeError::new(
+                RuntimeErrorKind::ReturnOutsideFunction,
+                span,
+            )),
         }
     }
 
@@ -115,6 +139,7 @@ impl<'a> Interpreter<'a> {
     /// own body uses this directly; every other block goes through
     /// [`Interpreter::block`].
     fn body(&mut self, node: NodeId) -> Eval<Value> {
+        self.hoist(node)?;
         let mut value = Value::Unit;
         for child in self.child_nodes(node) {
             let kind = self.tree.kind(child);
@@ -130,6 +155,29 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(value)
+    }
+
+    /// Declares every `fn` in a block before any of its statements run.
+    ///
+    /// §5 needs this: "mutual recursion needs top-level declarations to be
+    /// order-independent", and §12 — which owes the general answer — is still
+    /// empty. Hoisting per block rather than per file is the smallest rule that
+    /// covers it, and it costs nothing, because §5 also says a `fn` captures
+    /// nothing: there is no environment whose contents at the point of
+    /// declaration could have differed.
+    fn hoist(&mut self, node: NodeId) -> Eval<()> {
+        for child in self.child_nodes(node) {
+            if self.tree.kind(child) != NodeKind::FnDecl {
+                continue;
+            }
+            let function = self.fn_decl(child)?;
+            let name = function.name.clone().expect("a `fn` declaration is named");
+            // Not mutable: §3's `mut` is for bindings a program assigns to, and
+            // §5 has one name for one function.
+            self.env
+                .declare(&name, Value::Function(Rc::new(function)), false);
+        }
+        Ok(())
     }
 
     // ---- Statements -------------------------------------------------------
@@ -150,8 +198,9 @@ impl<'a> Interpreter<'a> {
             NodeKind::WhileStmt => self.while_stmt(node),
             NodeKind::BreakStmt => Err(Control::Break(self.span(node))),
             NodeKind::ContinueStmt => Err(Control::Continue(self.span(node))),
-            NodeKind::ReturnStmt => self.unsupported(node, "`return`"),
-            NodeKind::FnDecl => self.unsupported(node, "a function declaration"),
+            NodeKind::ReturnStmt => self.return_stmt(node),
+            // Already declared, by `hoist`, before this pass began.
+            NodeKind::FnDecl => Ok(()),
             NodeKind::StructDecl => self.unsupported(node, "a struct declaration"),
             NodeKind::TypeAliasDecl => self.unsupported(node, "a type alias"),
             _ => unreachable!("is_statement admits no other kind"),
@@ -197,12 +246,7 @@ impl<'a> Interpreter<'a> {
         let value = self.expr(value)?;
         match self.env.assign(name, value) {
             Ok(()) => Ok(()),
-            Err(AssignError::Unknown) => {
-                self.fail(place, RuntimeErrorKind::UnknownName(name.to_string()))
-            }
-            Err(AssignError::Immutable) => {
-                self.fail(place, RuntimeErrorKind::ImmutableBinding(name.to_string()))
-            }
+            Err(problem) => self.fail(place, assign_failed(problem, name)),
         }
     }
 
@@ -228,6 +272,18 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// `return ;` or `return expr ;` — for *early* exit (§4). A well-shaped
+    /// function often has none, since a body is a block and ends in its value.
+    fn return_stmt(&mut self, node: NodeId) -> Eval<()> {
+        let value = match self.child_nodes(node).first() {
+            Some(&inner) => self.expr(inner)?,
+            // §5: a function with no `-> T` returns unit — a real value with one
+            // inhabitant, not an absence.
+            None => Value::Unit,
+        };
+        Err(Control::Return(value, self.span(node)))
+    }
+
     // ---- Expressions ------------------------------------------------------
 
     fn expr(&mut self, node: NodeId) -> Eval<Value> {
@@ -236,8 +292,8 @@ impl<'a> Interpreter<'a> {
             NodeKind::NameExpr => {
                 let name = self.binding_name(node)?;
                 match self.env.get(name) {
-                    Some(value) => Ok(value.clone()),
-                    None => self.fail(node, RuntimeErrorKind::UnknownName(name.to_string())),
+                    Ok(value) => Ok(value),
+                    Err(problem) => self.fail(node, lookup_failed(problem, name)),
                 }
             }
             // §2: grouping and nothing else — it does not change a value's
@@ -252,12 +308,15 @@ impl<'a> Interpreter<'a> {
             NodeKind::UnaryExpr => self.unary(node),
             NodeKind::BinaryExpr => self.binary(node),
 
+            NodeKind::CallExpr => self.call(node),
+            NodeKind::LambdaExpr => self.lambda(node),
+
             NodeKind::CastExpr => self.unsupported(node, "the `as` operator"),
-            NodeKind::CallExpr | NodeKind::MethodCallExpr => self.unsupported(node, "a call"),
+            // §11's, along with everything else about receivers.
+            NodeKind::MethodCallExpr => self.unsupported(node, "a method call"),
             NodeKind::IndexExpr => self.unsupported(node, "indexing"),
             NodeKind::FieldExpr => self.unsupported(node, "field access"),
             NodeKind::StructLitExpr => self.unsupported(node, "a struct literal"),
-            NodeKind::LambdaExpr => self.unsupported(node, "a lambda"),
 
             // An `Error` node, or a node no expression position can hold.
             // Reachable only from a tree that didn't parse cleanly.
@@ -387,6 +446,229 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    // ---- Functions (§5) ---------------------------------------------------
+
+    /// `fn name(a: T, b: mut U) -> R { … }`.
+    ///
+    /// The annotations are read past and dropped. §5 requires them so that a
+    /// function's meaning is readable without reading its body and so that §10
+    /// can infer *inside* one — neither of which the interpreter can act on
+    /// while there is no type checker to act with.
+    fn fn_decl(&mut self, node: NodeId) -> Eval<Function> {
+        let Some(name) = self
+            .tokens(node)
+            .find(|token| token.kind == TokenKind::Ident)
+        else {
+            return self.malformed(node);
+        };
+        let nodes = self.child_nodes(node);
+        // The parameter list is always the first child node and the body always
+        // the last; a `-> T` sits between them when it was written.
+        let (Some(&params), Some(&body)) = (nodes.first(), nodes.last()) else {
+            return self.malformed(node);
+        };
+        if nodes.len() < 2
+            || self.tree.kind(params) != NodeKind::ParamList
+            || self.tree.kind(body) != NodeKind::BlockExpr
+        {
+            return self.malformed(node);
+        }
+
+        let params = self.params(params, NodeKind::Param)?;
+        let (captured, _) = self.env.capture();
+        Ok(Function {
+            name: Some(Rc::from(name.span.text(self.source))),
+            params,
+            body,
+            // §5: a `fn` captures nothing — so the barrier covers every frame it
+            // was declared under, leaving other functions reachable and nothing
+            // else. See `crate::env`.
+            barrier: captured.len(),
+            captured,
+        })
+    }
+
+    /// `(x) -> x + 1` (§5). Parameter types are optional and equally ignored: a
+    /// `fn` is a declaration others read, a lambda is an argument read in place.
+    fn lambda(&mut self, node: NodeId) -> Eval<Value> {
+        let nodes = self.child_nodes(node);
+        let (Some(&params), Some(&body)) = (nodes.first(), nodes.last()) else {
+            return self.malformed(node);
+        };
+        if nodes.len() < 2 || self.tree.kind(params) != NodeKind::LambdaParamList {
+            return self.malformed(node);
+        }
+
+        let params = self.params(params, NodeKind::LambdaParam)?;
+        // §5: captures by reference, implicitly, with no capture list — which is
+        // what holding the frames themselves gets. The barrier is inherited
+        // rather than raised, so a lambda written inside a `fn` cannot reach
+        // what the `fn` couldn't.
+        let (captured, barrier) = self.env.capture();
+        Ok(Value::Function(Rc::new(Function {
+            name: None,
+            params,
+            body,
+            captured,
+            barrier,
+        })))
+    }
+
+    fn params(&self, list: NodeId, kind: NodeKind) -> Eval<Vec<Param>> {
+        let mut params = Vec::new();
+        for child in self.child_nodes(list) {
+            if self.tree.kind(child) != kind {
+                return self.malformed(child);
+            }
+            let Some(name) = self
+                .tokens(child)
+                .find(|token| token.kind == TokenKind::Ident)
+            else {
+                return self.malformed(child);
+            };
+            params.push(Param {
+                name: Rc::from(name.span.text(self.source)),
+                // §5: parameters are immutable bindings by default, exactly like
+                // a `let`. `mut` belongs to the parameter rather than its type,
+                // which is why the token is here and not in the type node.
+                mutable: self.tokens(child).any(|token| token.kind == TokenKind::Mut),
+            });
+        }
+        Ok(params)
+    }
+
+    /// `f(a, b)`.
+    ///
+    /// §5 checks arity statically and there is nothing static here yet, so the
+    /// count is checked at the call. That is a stand-in for a compile error and
+    /// should stop being reachable when §10 lands.
+    fn call(&mut self, node: NodeId) -> Eval<Value> {
+        let nodes = self.child_nodes(node);
+        let [callee, arguments] = nodes[..] else {
+            return self.malformed(node);
+        };
+        if self.tree.kind(arguments) != NodeKind::ArgList {
+            return self.malformed(node);
+        }
+
+        let function = match self.expr(callee)? {
+            Value::Function(function) => function,
+            other => {
+                return self.fail(callee, RuntimeErrorKind::NotCallable(other.type_name()));
+            }
+        };
+
+        let arguments = self.child_nodes(arguments);
+        if arguments.len() != function.params.len() {
+            return self.fail(
+                node,
+                RuntimeErrorKind::WrongArity {
+                    callee: function.describe(),
+                    expected: function.params.len(),
+                    found: arguments.len(),
+                },
+            );
+        }
+
+        // §2: arguments evaluate left to right, before the call.
+        let mut values = Vec::with_capacity(arguments.len());
+        let mut writeback = Vec::new();
+        for (param, &argument) in function.params.iter().zip(&arguments) {
+            if param.mutable {
+                writeback.push((self.mut_argument(argument, param)?, Rc::clone(&param.name)));
+            }
+            values.push(self.expr(argument)?);
+        }
+
+        self.invoke(&function, values, writeback, node)
+    }
+
+    /// Checks the argument for a `mut` parameter and names the binding it will
+    /// be written back to.
+    ///
+    /// §5: `mut` means the function may mutate the caller's value, and the
+    /// caller must pass a `mut` binding — so that a call which mutates is
+    /// visible where it happens rather than only where it was declared.
+    fn mut_argument(&mut self, argument: NodeId, param: &Param) -> Eval<&'a str> {
+        let Some(name) = self.place_name(argument) else {
+            return self.fail(
+                argument,
+                RuntimeErrorKind::MutArgumentNotAPlace {
+                    parameter: param.name.to_string(),
+                },
+            );
+        };
+        match self.env.lookup(name) {
+            Ok((_, true)) => Ok(name),
+            Ok((_, false)) => self.fail(
+                argument,
+                RuntimeErrorKind::MutArgumentNotMutable {
+                    parameter: param.name.to_string(),
+                    argument: name.to_string(),
+                },
+            ),
+            Err(problem) => self.fail(argument, lookup_failed(problem, name)),
+        }
+    }
+
+    /// Runs a function body against its own environment.
+    fn invoke(
+        &mut self,
+        function: &Function,
+        arguments: Vec<Value>,
+        writeback: Vec<(&'a str, Rc<str>)>,
+        at: NodeId,
+    ) -> Eval<Value> {
+        if self.depth >= RECURSION_LIMIT {
+            return self.fail(at, RuntimeErrorKind::RecursionLimit);
+        }
+
+        let saved = self.env.enter(&function.captured, function.barrier);
+        for (param, value) in function.params.iter().zip(arguments) {
+            self.env.declare(&param.name, value, param.mutable);
+        }
+
+        self.depth += 1;
+        // §5: the body is a block, so its value is its trailing expression.
+        let result = match self.expr(function.body) {
+            Err(Control::Return(value, _)) => Ok(value),
+            // §4's innermost enclosing loop is one in *this* function, and there
+            // isn't one — a call is not something `break` reaches across.
+            Err(Control::Break(span)) => Err(Control::Error(RuntimeError::new(
+                RuntimeErrorKind::BreakOutsideLoop,
+                span,
+            ))),
+            Err(Control::Continue(span)) => Err(Control::Error(RuntimeError::new(
+                RuntimeErrorKind::ContinueOutsideLoop,
+                span,
+            ))),
+            other => other,
+        };
+        self.depth -= 1;
+
+        // A `mut` parameter's final value, read while its frame is still here.
+        // Copy-in/copy-out rather than by reference — §5 leaves the choice to
+        // §6, and the two are indistinguishable until there is an aggregate to
+        // alias.
+        let mut written = Vec::new();
+        if result.is_ok() {
+            for (place, param) in writeback {
+                if let Ok(value) = self.env.get(&param) {
+                    written.push((place, value));
+                }
+            }
+        }
+        self.env.leave(saved);
+
+        let value = result?;
+        for (place, value) in written {
+            if let Err(problem) = self.env.assign(place, value) {
+                return self.fail(at, assign_failed(problem, place));
+            }
+        }
+        Ok(value)
+    }
+
     // ---- Reading the tree -------------------------------------------------
 
     /// The name a `NamePat` or a `NameExpr` holds.
@@ -399,6 +681,18 @@ impl<'a> Interpreter<'a> {
             Some(token) if token.kind == TokenKind::Ident => Ok(token.span.text(self.source)),
             _ => self.fail(node, RuntimeErrorKind::MalformedProgram),
         }
+    }
+
+    /// The name this expression is a place for, if it is one. §3's places are a
+    /// name, a field, or an index; the other two need §6's types.
+    fn place_name(&self, node: NodeId) -> Option<&'a str> {
+        if self.tree.kind(node) != NodeKind::NameExpr {
+            return None;
+        }
+        self.tokens(node)
+            .next()
+            .filter(|token| token.kind == TokenKind::Ident)
+            .map(|token| token.span.text(self.source))
     }
 
     /// A node's extent, with the trivia in front of it left out.
@@ -464,6 +758,21 @@ impl<'a> Interpreter<'a> {
 
     fn malformed<T>(&self, node: NodeId) -> Eval<T> {
         self.fail(node, RuntimeErrorKind::MalformedProgram)
+    }
+}
+
+fn lookup_failed(problem: LookupError, name: &str) -> RuntimeErrorKind {
+    match problem {
+        LookupError::Unknown => RuntimeErrorKind::UnknownName(name.to_string()),
+        LookupError::NotCaptured => RuntimeErrorKind::NotCaptured(name.to_string()),
+    }
+}
+
+fn assign_failed(problem: AssignError, name: &str) -> RuntimeErrorKind {
+    match problem {
+        AssignError::Unknown => RuntimeErrorKind::UnknownName(name.to_string()),
+        AssignError::NotCaptured => RuntimeErrorKind::NotCaptured(name.to_string()),
+        AssignError::Immutable => RuntimeErrorKind::ImmutableBinding(name.to_string()),
     }
 }
 

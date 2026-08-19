@@ -45,6 +45,9 @@ pub enum RuntimeErrorKind {
     /// §3's left-hand side is a *place*. A name is the only one that exists at
     /// this stage — fields and indexes need §6's types.
     NotAPlace,
+    /// §5: a `fn` captures nothing. The name is in scope where the function was
+    /// written, and a `fn` is not the thing that can reach it.
+    NotCaptured(String),
 
     // ---- Types ------------------------------------------------------------
     /// §2: there is no truthiness. A condition is `bool` or it is nothing.
@@ -59,6 +62,31 @@ pub enum RuntimeErrorKind {
         operand: &'static str,
     },
 
+    // ---- Calls (§5) -------------------------------------------------------
+    NotCallable(&'static str),
+    /// §5 checks arity statically, and there is no type checker yet — so this
+    /// is a runtime stand-in for a compile error, and should stop being
+    /// reachable when §10 lands.
+    WrongArity {
+        callee: String,
+        expected: usize,
+        found: usize,
+    },
+    /// §5: a `mut` parameter writes through to the caller's binding, so the
+    /// argument has to *be* a binding.
+    MutArgumentNotAPlace {
+        parameter: String,
+    },
+    /// §5: and that binding has to be `mut`, so that a call which mutates is
+    /// visible at the call site rather than only at the declaration.
+    MutArgumentNotMutable {
+        parameter: String,
+        argument: String,
+    },
+    /// §4: `return` exits the enclosing function. Getting here means there
+    /// wasn't one.
+    ReturnOutsideFunction,
+
     // ---- Traps ------------------------------------------------------------
     // §2: overflow is an error, not a wrap. wasm's native behaviour is silent
     // wrapping, so this is a check the interpreter pays for deliberately.
@@ -67,6 +95,10 @@ pub enum RuntimeErrorKind {
     /// An integer literal too large for the `i64` every integer is today. Not a
     /// language rule — see the note on [`crate::Value`].
     IntegerTooLarge,
+    /// §5: there is no tail-call guarantee, so deep recursion exhausts the
+    /// stack and traps. This is that trap, raised at a depth the host stack
+    /// still has room for rather than by falling off it.
+    RecursionLimit,
 
     // ---- Not yet ----------------------------------------------------------
     /// A construct that parses and that this stage of the interpreter doesn't
@@ -91,6 +123,35 @@ impl fmt::Display for RuntimeErrorKind {
                 "`{name}` is not mutable — declare it `let mut {name}`, or rebind it with a new `let`"
             ),
             NotAPlace => f.write_str("this cannot be assigned to — the left of a `=` is a name"),
+            NotCaptured(name) => write!(
+                f,
+                "`{name}` is bound outside this `fn`, and a `fn` captures nothing — take it as a parameter, or use a lambda"
+            ),
+            NotCallable(found) => write!(f, "{found} is not a function"),
+            WrongArity {
+                callee,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{callee} takes {expected} {}, and got {found}",
+                if *expected == 1 { "argument" } else { "arguments" }
+            ),
+            MutArgumentNotAPlace { parameter } => write!(
+                f,
+                "the `{parameter}` parameter is `mut`, so the argument must be a binding rather than an expression"
+            ),
+            MutArgumentNotMutable {
+                parameter,
+                argument,
+            } => write!(
+                f,
+                "the `{parameter}` parameter is `mut`, so `{argument}` must be too — declare it `let mut {argument}`"
+            ),
+            ReturnOutsideFunction => f.write_str("`return` outside a function"),
+            RecursionLimit => f.write_str(
+                "recursion went too deep — there are no tail calls, so an unbounded recursion needs a loop or a worklist"
+            ),
             ConditionNotBool(found) => write!(
                 f,
                 "a condition must be a boolean, and this is {found} — there is no truthiness"
