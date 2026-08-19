@@ -59,6 +59,34 @@ fn spans_come_from_tokens() {
     assert_eq!(tree.span(left), Span::new(0, 1));
 }
 
+/// The tree is lossless, so a node's extent starts at whatever trivia was
+/// attached to its first token — a blank line above a declaration belongs to
+/// the declaration. A message with a caret under it wants the first byte
+/// someone wrote instead.
+#[test]
+fn a_significant_span_leaves_the_trivia_out() {
+    let parsed = parse("let x =  1 ;");
+    let tree = &parsed.tree;
+    let Child::Node(let_stmt) = tree.children(tree.root()).next().unwrap() else {
+        panic!("the file's first child is the `let`");
+    };
+    let initializer = tree
+        .children(let_stmt)
+        .filter_map(|child| match child {
+            Child::Node(node) if tree.kind(node) == NodeKind::LiteralExpr => Some(node),
+            _ => None,
+        })
+        .next()
+        .expect("the initializer is a literal");
+
+    // Both spaces before `1` belong to the literal; the caret should not.
+    assert_eq!(tree.span(initializer), Span::new(7, 10));
+    assert_eq!(tree.significant_span(initializer), Span::new(9, 10));
+    // Trailing trivia is left off the same way: `;` is the `let`'s own token,
+    // so the statement ends at it rather than at the space before it.
+    assert_eq!(tree.significant_span(let_stmt), Span::new(0, 12));
+}
+
 /// `a + b + c` — the case `open_before` exists for. The operands are read one
 /// at a time and each `+` has to wrap everything to its left, so the tree must
 /// come out left-associative even though nothing knew that when `a` was read.

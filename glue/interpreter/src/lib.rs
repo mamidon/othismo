@@ -174,6 +174,11 @@ pub fn eval(program: &Program) -> Result<Value, Trap> {
 }
 
 /// Where a piece of IR came from, in the file.
+///
+/// The significant extent rather than the whole node: provenance points at a
+/// CST node, the tree is lossless, and a node begins at the trivia attached to
+/// its first token — so the plain extent of a statement can start a blank line
+/// above the statement.
 fn span(tree: &Tree, at: ir::program::CstId) -> Span {
-    tree.span(at)
+    tree.significant_span(at)
 }

@@ -244,7 +244,10 @@ impl<'a> Lowerer<'a> {
     // ---- Diagnostics -------------------------------------------------------
 
     fn error(&mut self, kind: DiagnosticKind, at: NodeId) {
-        let span = self.tree.span(at);
+        // The node's *significant* extent: the tree is lossless, so a node
+        // begins at whatever trivia was attached to its first token, and a
+        // caret under a blank line names nothing.
+        let span = self.tree.significant_span(at);
         self.diagnostics.push(Diagnostic::new(kind, span));
     }
 

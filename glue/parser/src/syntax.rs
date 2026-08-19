@@ -285,6 +285,35 @@ impl Tree {
         }
     }
 
+    /// The node's extent with trivia left off both ends.
+    ///
+    /// [`Tree::span`] covers every token a node holds, and the tree is lossless
+    /// — a comment or a run of whitespace belongs to the node whose first token
+    /// follows it — so a node's extent can begin a blank line above the thing it
+    /// names. That is what a formatter wants and the opposite of what a message
+    /// with a caret under it wants, which is the first byte a person actually
+    /// wrote.
+    ///
+    /// A node holding nothing but trivia falls back to [`Tree::span`]: there is
+    /// no significant token to point at, and where the trivia is is the best
+    /// answer available.
+    pub fn significant_span(&self, node: NodeId) -> Span {
+        let close = self.close(node);
+        let mut tokens = self.events[node.0 as usize + 1..close]
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(token) if !token.is_trivia() => Some(token.span),
+                _ => None,
+            });
+        match tokens.next() {
+            Some(first) => Span::new(
+                first.start as usize,
+                tokens.next_back().unwrap_or(first).end as usize,
+            ),
+            None => self.span(node),
+        }
+    }
+
     /// Direct children, in source order. A subtree is skipped by its `close`,
     /// so this visits each child once and never descends.
     pub fn children(&self, node: NodeId) -> impl Iterator<Item = Child> + '_ {
