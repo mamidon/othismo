@@ -116,7 +116,10 @@ fn literals_decode() {
 fn an_unpinned_constant_pins_by_sign() {
     assert_eq!(value("1"), Value::u64(1));
     assert_eq!(value("-1"), Value::s64(-1));
-    assert_eq!(value("let x: u8 = 200; x"), Value::int(200, IntTy::new(false, 8)));
+    assert_eq!(
+        value("let x: u8 = 200; x"),
+        Value::int(200, IntTy::new(false, 8))
+    );
 }
 
 #[test]
@@ -222,10 +225,7 @@ fn a_constant_that_would_trap_is_refused_instead() {
 fn unary_operators_apply() {
     assert_eq!(int("fn f(a: s64) -> s64 { -a } f(1)"), -1);
     assert!(!boolean("fn f(a: bool) -> bool { !a } f(true)"));
-    assert_eq!(
-        value("fn f(a: f64) -> f64 { -a } f(1.5)"),
-        Value::f64(-1.5)
-    );
+    assert_eq!(value("fn f(a: f64) -> f64 { -a } f(1.5)"), Value::f64(-1.5));
 }
 
 // ---- Comparison and logic (§2) ---------------------------------------------
@@ -237,7 +237,9 @@ fn comparison_evaluates() {
     assert!(boolean("fn f(a: u64, b: u64) -> bool { a <= b } f(2, 2)"));
     assert!(boolean("fn f(a: u64, b: u64) -> bool { a == b } f(2, 2)"));
     assert!(boolean("fn f(a: u64, b: u64) -> bool { a != b } f(2, 3)"));
-    assert!(boolean("fn f(a: char, b: char) -> bool { a < b } f('a', 'b')"));
+    assert!(boolean(
+        "fn f(a: char, b: char) -> bool { a < b } f('a', 'b')"
+    ));
 }
 
 /// §2: IEEE-754, so every ordering against NaN is false and `NaN != NaN`.
@@ -495,6 +497,123 @@ fn arity_is_checked_before_it_runs() {
     );
 }
 
+// ---- Functions as values, and lambdas (§5) ---------------------------------
+
+/// §5: a function is a value. Every function value is a closure, and a plain
+/// `fn` is one with an empty environment — so a name and a lambda are called
+/// the same way, indirectly.
+#[test]
+fn a_function_is_a_value() {
+    assert_eq!(
+        int("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)"),
+        3
+    );
+    assert_eq!(
+        int("fn twice(g: fn(u64) -> u64, x: u64) -> u64 { g(g(x)) }
+             fn increment(n: u64) -> u64 { n + 1 }
+             twice(increment, 40)"),
+        42
+    );
+}
+
+#[test]
+fn a_lambda_is_a_value_and_calls() {
+    assert_eq!(
+        int("fn apply(g: fn(u64) -> u64, x: u64) -> u64 { g(x) } apply((n) -> n * 2, 21)"),
+        42
+    );
+    assert_eq!(
+        int("let double: fn(u64) -> u64 = (n) -> n * 2; double(21)"),
+        42
+    );
+}
+
+/// §5: a lambda captures by reference, so mutation through one holder is
+/// visible to every other. A binding that is captured *and* assigned is a cell,
+/// which is where that sharing lives.
+#[test]
+fn a_lambda_captures_by_reference() {
+    assert_eq!(
+        int("let mut n = 0u64;
+             let bump = () -> { n = n + 1; n };
+             let read = () -> n;
+             bump();
+             bump();
+             read()"),
+        2
+    );
+}
+
+/// §5: a captured binding outlives the frame that created it. The cell is
+/// heap-allocated and the closure holds it, so returning the lambda keeps the
+/// binding alive after `counter` has returned.
+#[test]
+fn a_capture_outlives_its_frame() {
+    assert_eq!(
+        int("fn counter() -> fn() -> u64 {
+               let mut n = 0;
+               () -> { n = n + 1; n }
+             }
+             let c = counter();
+             c();
+             c();
+             c()"),
+        3
+    );
+}
+
+/// §5's per-iteration promise: a `let` in a loop body is a fresh binding each
+/// time round, captured separately — the classic loop-variable trap, absent by
+/// construction. `snapshot` is never assigned, so each iteration's value is
+/// copied into the closure rather than shared through a cell, and the lambda
+/// made on the second iteration still says `1`.
+#[test]
+fn a_binding_in_a_loop_is_captured_per_iteration() {
+    assert_eq!(
+        int("let mut i = 0u64;
+             let mut f: fn() -> u64 = () -> 0;
+             while i < 3 {
+               let snapshot = i;
+               if i == 1 { f = () -> snapshot; }
+               i = i + 1;
+             }
+             f()"),
+        1
+    );
+}
+
+/// §5: a `fn` captures nothing — it is an ordinary function that happens to be
+/// private to its block, and every one of them compiles to a plain wasm
+/// function with no environment.
+#[test]
+fn a_fn_captures_nothing() {
+    assert_eq!(
+        refused("fn outer(n: u64) -> u64 { fn inner() -> u64 { n } inner() }"),
+        "`n` is a local of an enclosing function, and a `fn` captures nothing — use a lambda"
+    );
+}
+
+/// §5: a lambda's types come from context, unlike a named `fn` — a `fn` is a
+/// declaration others read, a lambda is an argument read in place.
+#[test]
+fn a_lambda_needs_context() {
+    assert_eq!(
+        refused("let f = (x) -> x + 1; f(1)"),
+        "a lambda's types come from context, and there is none here — annotate its parameters, \
+         or give the binding a type"
+    );
+}
+
+/// §2 defines equality on values and identity on instance references, and says
+/// nothing about functions.
+#[test]
+fn functions_do_not_compare() {
+    assert_eq!(
+        refused("fn f() { } fn g() { } let a = f; let b = g; a == b"),
+        "`==` is not defined on `(fn ())`"
+    );
+}
+
 // ---- What is refused before it runs ----------------------------------------
 
 /// A half-parsed tree is what the language server wants and what an interpreter
@@ -538,14 +657,6 @@ fn a_program_that_did_not_elaborate_does_not_run() {
 #[test]
 fn unrun_constructs_say_so() {
     assert_eq!(
-        trap("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)"),
-        Unsupported("a function used as a value")
-    );
-    assert_eq!(
-        trap("fn apply(g: fn(u64) -> u64) -> u64 { g(1) } apply((x) -> x + 1)"),
-        Unsupported("a function used as a value")
-    );
-    assert_eq!(
         trap("struct P { x: u64 } let p = P { x: 1 }; 0u64"),
         Unsupported("a struct literal")
     );
@@ -567,4 +678,14 @@ fn values_display_as_they_are_echoed() {
     assert_eq!(value("'x'").to_string(), "'x'");
     assert_eq!(value(r#""hi""#).to_string(), "\"hi\"");
     assert_eq!(value("()").to_string(), "()");
+    // A function value shows the name elaboration gave it, which for a lambda
+    // is its parent's plus `.λn`.
+    assert_eq!(
+        value("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f").to_string(),
+        "<fn add>"
+    );
+    assert_eq!(
+        value("let f: fn(u64) -> u64 = (n) -> n; f").to_string(),
+        "<fn <file>.\u{3bb}0>"
+    );
 }

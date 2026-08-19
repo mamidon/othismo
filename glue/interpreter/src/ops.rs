@@ -45,7 +45,9 @@ type OpResult = Result<Value, TrapKind>;
 pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
     match (left, right) {
         (Value::Int { value: a, ty }, Value::Int { value: b, .. }) => integer(op, a, b, ty),
-        (Value::Float { value: a, bits }, Value::Float { value: b, .. }) => Ok(float(op, a, b, bits)),
+        (Value::Float { value: a, bits }, Value::Float { value: b, .. }) => {
+            Ok(float(op, a, b, bits))
+        }
         (Value::Str(a), Value::Str(b)) => Ok(match op {
             // §2: `+` concatenates. Nothing else about a string is arithmetic.
             BinOp::Add => Value::string(&format!("{a}{b}")),
@@ -140,7 +142,11 @@ fn float(op: BinOp, a: f64, b: f64, bits: u8) -> Value {
 /// agreeing about a value neither of them can represent exactly.
 fn round(value: f64, bits: u8) -> Value {
     Value::Float {
-        value: if bits == 32 { value as f32 as f64 } else { value },
+        value: if bits == 32 {
+            value as f32 as f64
+        } else {
+            value
+        },
         bits,
     }
 }

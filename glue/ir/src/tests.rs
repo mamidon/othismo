@@ -470,7 +470,10 @@ fn a_mut_parameter_mutates_through_the_reference() {
     assert!(ir.contains("(slot 0 c  C param mut)"), "{ir}");
     assert!(ir.contains("(slot 1 by u64 param)"), "{ir}");
     assert!(ir.contains("(store (field c n) t3)"), "{ir}");
-    assert!(ir.contains("(drop (call advance tally (const 5u64)))"), "{ir}");
+    assert!(
+        ir.contains("(drop (call advance tally (const 5u64)))"),
+        "{ir}"
+    );
 }
 
 /// §3: a plain parameter is an immutable binding, exactly like a `let`, so

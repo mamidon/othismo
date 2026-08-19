@@ -17,8 +17,11 @@
 //! `f64`, with a literal's suffix read and discarded. §10's arrival is what
 //! ends that.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
+
+use ir::program::FuncId;
 
 /// One of §1's integer types: `u8`…`u64` and `s8`…`s64`.
 ///
@@ -99,6 +102,33 @@ pub enum Value {
     },
     Char(char),
     Str(Rc<str>),
+    /// A `fn` or a lambda (§5). Every function value is a closure, and a plain
+    /// `fn` has an empty environment — one representation, because the
+    /// difference between the two forms was spent during elaboration.
+    Closure(Rc<Closure>),
+    /// A one-word box holding a value, which no Glue program can name.
+    ///
+    /// Lowering introduces one for a binding that is both captured and
+    /// assigned, so that §5's promise — a captured binding outlives its frame,
+    /// and everyone holding it sees the same writes — has somewhere to be
+    /// true. An uncaptured binding is a slot and an unassigned capture is a
+    /// copy; neither costs this.
+    Cell(Rc<RefCell<Value>>),
+}
+
+/// A function value: which function, and the environment it closed over.
+///
+/// The captures are positional, filling the slots directly after the
+/// parameters — `[params][captures][locals]` is the calling convention, so
+/// entering a closure is two copies into the front of a frame and no lookup.
+///
+/// `name` is here only so a value can be echoed. It is the name elaboration
+/// gave the function, which for a lambda is its parent's plus `.λn`.
+#[derive(Debug)]
+pub struct Closure {
+    pub(crate) func: FuncId,
+    pub(crate) captures: Vec<Value>,
+    pub(crate) name: Rc<str>,
 }
 
 /// Structural, as §2 asks.
@@ -120,7 +150,10 @@ impl PartialEq for Value {
             ) => a == b && left == right,
             // IEEE-754 (§2), so `NaN != NaN`.
             (
-                Value::Float { value: left, bits: a },
+                Value::Float {
+                    value: left,
+                    bits: a,
+                },
                 Value::Float {
                     value: right,
                     bits: b,
@@ -128,6 +161,13 @@ impl PartialEq for Value {
             ) => a == b && left == right,
             (Value::Char(left), Value::Char(right)) => left == right,
             (Value::Str(left), Value::Str(right)) => left == right,
+            // §2 defines equality on values and identity on instance
+            // references, and says nothing about functions — elaboration
+            // refuses to compare two of them. This impl still has to answer,
+            // and answers identity, which is the only thing that could be
+            // meant. A cell is storage rather than a value, so the same holds.
+            (Value::Closure(left), Value::Closure(right)) => Rc::ptr_eq(left, right),
+            (Value::Cell(left), Value::Cell(right)) => Rc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -174,6 +214,8 @@ impl Value {
             Value::Float { bits, .. } => format!("f{bits}"),
             Value::Char(_) => "char".to_string(),
             Value::Str(_) => "Str".to_string(),
+            Value::Closure(_) => "a function".to_string(),
+            Value::Cell(inner) => format!("(cell {})", inner.borrow().type_name()),
         }
     }
 }
@@ -206,6 +248,14 @@ impl fmt::Display for Value {
             }
             Value::Char(value) => write!(f, "'{}'", value.escape_debug()),
             Value::Str(value) => write!(f, "\"{}\"", value.escape_debug()),
+            // Nothing useful to show: a body is a block of IR, and the
+            // environment it closed over is not the reader's business. The
+            // name is.
+            Value::Closure(closure) => write!(f, "<fn {}>", closure.name),
+            // A program cannot hold one, so echoing it means the executor put
+            // a cell somewhere a value belongs. Shown rather than hidden, so
+            // that the bug is visible.
+            Value::Cell(inner) => write!(f, "(cell {})", inner.borrow()),
         }
     }
 }

@@ -15,15 +15,14 @@
 //!
 //! # What runs today
 //!
-//! The scalar core: expressions, `let`, assignment, blocks, `if`, `while`, and
-//! §5's `fn` declarations, calls, and `return`. A file is a block (§3), so its
-//! value is its trailing expression, and `let x = 2; x * 21` and `42` are both
-//! whole programs.
+//! Expressions, `let`, assignment, blocks, `if`, `while`, and §5's functions —
+//! declarations, calls, `return`, functions as values, and lambdas with
+//! capture. A file is a block (§3), so its value is its trailing expression,
+//! and `let x = 2; x * 21` and `42` are both whole programs.
 //!
-//! Closures, cells, structs, field access, and `as` elaborate but do not
-//! execute yet: each is an IR node the executor reports as
-//! [`TrapKind::Unsupported`] rather than running. They are the next two steps
-//! rather than open questions.
+//! Structs, field access, and `as` elaborate but do not execute yet: each is an
+//! IR node the executor reports as [`TrapKind::Unsupported`] rather than
+//! running. They are the next step rather than an open question.
 //!
 //! # What changed when the IR arrived
 //!

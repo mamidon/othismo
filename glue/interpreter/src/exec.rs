@@ -19,19 +19,23 @@
 //!
 //! # What this stage runs
 //!
-//! The scalar core: constants, slots, arithmetic, comparison, `if`, `while`,
-//! `break`, `continue`, `return`, and a direct call. Closures, cells, structs,
+//! Everything but §6's aggregates: constants, slots, arithmetic, comparison,
+//! `if`, `while`, `break`, `continue`, `return`, calls direct and indirect,
+//! and §5's closures and the cells that back a captured binding. Structs,
 //! field access, and `as` are IR nodes this executor does not reach yet and
 //! reports as [`TrapKind::Unsupported`] — which is a different thing to hear
-//! than a crash, and every one of them is scheduled to go away.
+//! than a crash, and each is scheduled to go away.
 
 use ir::consts::{Const, ConstId};
-use ir::program::{BlockId, CstId, Func, FuncId, Operand, Program, Rvalue, Stmt};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use ir::program::{BlockId, CstId, Func, FuncId, Operand, Place, Program, Rvalue, Stmt};
 use ir::types::TypeDef;
 
 use crate::error::{Trap, TrapKind};
 use crate::ops;
-use crate::value::{IntTy, Value};
+use crate::value::{Closure, IntTy, Value};
 
 /// How deep a call chain may go.
 ///
@@ -86,24 +90,41 @@ impl<'a> Machine<'a> {
             return Ok(Value::Unit);
         };
         let at = self.program.func(entry).origin;
-        self.call(entry, Vec::new(), at)
+        self.call(entry, Vec::new(), &[], at)
     }
 
     /// Runs a function against a frame of its own.
     ///
     /// The frame is `slots` long and laid out `[params][captures][locals]`, so
-    /// filling the parameters is a copy into the front of it. Every other slot
-    /// is written before it is read — §3 requires every binding to have an
-    /// initializer, and A-normal form assigns a temporary at the point it
-    /// creates one — so what they start as is unobservable.
-    fn call(&mut self, id: FuncId, args: Vec<Value>, at: CstId) -> Result<Value, Trap> {
+    /// entering a function is two copies into the front of it and no lookup —
+    /// that layout is the calling convention, and this is the whole of it.
+    /// Every remaining slot is written before it is read — §3 requires every
+    /// binding to have an initializer, and A-normal form assigns a temporary at
+    /// the point it creates one — so what they start as is unobservable.
+    fn call(
+        &mut self,
+        id: FuncId,
+        args: Vec<Value>,
+        captures: &[Value],
+        at: CstId,
+    ) -> Result<Value, Trap> {
         if self.depth >= RECURSION_LIMIT {
             return Err(Trap::new(TrapKind::RecursionLimit, at));
         }
         let func = self.program.func(id);
+        debug_assert_eq!(func.params as usize, args.len(), "arity is checked (§5)");
+        debug_assert_eq!(
+            func.captures as usize,
+            captures.len(),
+            "captures are positional"
+        );
+
         let mut slots = vec![Value::Unit; func.slots.len()];
         for (slot, value) in slots.iter_mut().zip(args) {
             *slot = value;
+        }
+        for (slot, value) in slots[func.params as usize..].iter_mut().zip(captures) {
+            *slot = value.clone();
         }
 
         self.depth += 1;
@@ -169,10 +190,22 @@ impl<'a> Machine<'a> {
                 };
                 Ok(Flow::Return(value))
             }
-            Stmt::Store { .. } => Err(Trap::new(
-                TrapKind::Unsupported("assigning through a cell or a field"),
-                at,
-            )),
+            Stmt::Store { place, value } => match place {
+                // §5: writing through a cell is what makes one holder's
+                // assignment visible to every other. An ordinary `Store`, not
+                // an instruction of its own.
+                Place::Cell(slot) => {
+                    let value = self.operand(*value, slots);
+                    match &slots[slot.index()] {
+                        Value::Cell(cell) => *cell.borrow_mut() = value,
+                        other => unreachable!("a cell slot holds `{}`", other.type_name()),
+                    }
+                    Ok(Flow::Normal)
+                }
+                Place::Field { .. } => {
+                    Err(Trap::new(TrapKind::Unsupported("assigning to a field"), at))
+                }
+            },
         }
     }
 
@@ -231,15 +264,59 @@ impl<'a> Machine<'a> {
                 // §2 and §5: arguments evaluate left to right, before the call —
                 // which by now has already happened, since each is a slot or a
                 // constant. This is the copy into the callee's frame.
-                let args = args.iter().map(|arg| self.operand(*arg, slots)).collect();
-                self.call(*id, args, at)
+                let args = self.operands(args, slots);
+                self.call(*id, args, &[], at)
             }
+            // §5: a call through a function *value*. On wasm this is
+            // `call_indirect`; here it is the same call with an environment.
+            Rvalue::CallIndirect { callee, args } => {
+                let callee = match self.operand(*callee, slots) {
+                    Value::Closure(closure) => closure,
+                    other => unreachable!(
+                        "a callee is a function, and this is `{}`",
+                        other.type_name()
+                    ),
+                };
+                let args = self.operands(args, slots);
+                self.call(callee.func, args, &callee.captures, at)
+            }
+            // §5: every function value is a closure, and a plain `fn` referred
+            // to by name is one with an empty environment.
+            Rvalue::MakeClosure { func, captures } => {
+                let captures = self.operands(captures, slots);
+                Ok(Value::Closure(Rc::new(Closure {
+                    func: *func,
+                    captures,
+                    name: self.name_of(*func),
+                })))
+            }
+            Rvalue::MakeCell(operand) => {
+                let value = self.operand(*operand, slots);
+                Ok(Value::Cell(Rc::new(RefCell::new(value))))
+            }
+            Rvalue::CellGet(operand) => match self.operand(*operand, slots) {
+                Value::Cell(cell) => Ok(cell.borrow().clone()),
+                other => unreachable!("a cell read holds `{}`", other.type_name()),
+            },
             Rvalue::Cast(_) => unsupported("the `as` operator", at),
-            Rvalue::CallIndirect { .. } => unsupported("calling a function value", at),
-            Rvalue::MakeClosure { .. } => unsupported("a function used as a value", at),
-            Rvalue::MakeCell(_) | Rvalue::CellGet(_) => unsupported("a captured binding", at),
             Rvalue::MakeStruct(_) => unsupported("a struct literal", at),
             Rvalue::Field { .. } => unsupported("field access", at),
+        }
+    }
+
+    fn operands(&self, operands: &[Operand], slots: &[Value]) -> Vec<Value> {
+        operands
+            .iter()
+            .map(|operand| self.operand(*operand, slots))
+            .collect()
+    }
+
+    /// What to call a function value when a person looks at one. Elaboration
+    /// names every function, lambdas included — `counter.λ0` is one.
+    fn name_of(&self, func: FuncId) -> Rc<str> {
+        match self.program.func(func).name {
+            Some(name) => Rc::from(self.program.text(name)),
+            None => Rc::from("?"),
         }
     }
 
@@ -274,7 +351,10 @@ fn constant(program: &Program, id: ConstId) -> Value {
         Const::Unit => Value::Unit,
         Const::Bool(value) => Value::Bool(*value),
         Const::Int { ty, bits } => match program.types.get(*ty) {
-            TypeDef::Int { signed, bits: width } => {
+            TypeDef::Int {
+                signed,
+                bits: width,
+            } => {
                 let ty = IntTy::new(*signed, *width);
                 let value = if *signed {
                     // Sign-extend from the type's width.
