@@ -1,5 +1,45 @@
 // §3 and §4 — every statement, and all the control flow.
 
+// ---- What the statements below are written against ------------------------
+// §13 has no answer yet for how a program reaches its host, so a function here
+// that would print or fetch something computes and does nothing else.
+// Declarations are hoisted within their block (§5, §12), so the structs are in
+// scope above where they are written.
+
+fn read() -> u64 { 42 }
+fn parse(raw: u64) -> u64 { raw }
+fn log(message: Str) { }
+fn step() { }
+fn work() { }
+fn observe(value: u64) { }
+fn advance() { }
+fn accepts(p: Point) -> bool { false }
+
+struct Point {
+  x: s64,
+  y: s64,
+}
+
+struct Inner {
+  value: u64,
+}
+
+struct Outer {
+  inner: Inner,
+}
+
+let verbose = true;
+let ready = false;
+let done = true;
+let skip = false;
+let row = 0u64;
+let column = 0u64;
+let items = "abcd";
+let grid = "abcd";
+let target = Point { x: 0, y: 0 };
+let mut point = Point { x: 0, y: 0 };
+let mut outer = Outer { inner: Inner { value: 0 } };
+
 // ---- Bindings -------------------------------------------------------------
 // One keyword: there is no `var` and no `const`. `mut` gates mutation, not
 // rebinding — every binding is rebindable regardless (§3).

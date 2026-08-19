@@ -5,10 +5,28 @@
 // see where one token ends and the next begins. The Glue Syntax Tree panel in
 // the Explorer follows the cursor.
 
+// ---- What the expressions below are written against -----------------------
+// Every expression needs something to name. §13 has no answer yet for how a
+// program reaches its host, so the functions here compute and do nothing else.
+// Declarations are hoisted within their block (§5, §12), so the structs at the
+// bottom of the file are in scope up here.
+
+fn f(a: u64, b: u64) -> u64 { a + b }
+fn nothing_at_all() { }
+fn work() { }
+fn lookup(id: u64) -> Row { Row { result: "first" } }
+
+let ok = true;
+let ready = false;
+let n = 5u64;
+let items = "abcd";
+let counter = 0u64;
+let point = Point { x: 1, y: 2 };
+
 // ---- Primary --------------------------------------------------------------
 
 let literal = 42;
-let name = origin;
+let name = literal;
 // `( … )` groups and nothing else — it does not change a value's type,
 // meaning, or evaluation (§2).
 let grouped = (1 + 2) * 3;
@@ -63,16 +81,32 @@ let to_int = 1.5 as s64;
 
 // ---- Postfix --------------------------------------------------------------
 
-let called = f();
+let called = nothing_at_all();
 let with_args = f(1, 2);
 let trailing_comma = f(1, 2,);
 let indexed = items[0];
 let field = point.x;
 // A method call is `.name(…)`, with the parens (§2).
 let method = counter.next();
-let chained = f(1).result[0].value;
+let chained = lookup(1).result[0].value;
 
 // ---- Struct literals ------------------------------------------------------
+
+struct Point {
+  x: s64,
+  y: s64,
+}
+
+struct Line {
+  from: Point,
+  to: Point,
+}
+
+struct Empty { }
+
+struct Row {
+  result: Str,
+}
 
 let origin = Point { x: 0, y: 0 };
 let nested = Line { from: Point { x: 0, y: 0 }, to: Point { x: 1, y: 1 } };
@@ -83,11 +117,11 @@ let no_fields = Empty { };
 // discards (§2).
 
 let from_block = {
-  let t = f();
+  let t = f(1, 2);
   t * 2
 };
 // Yields unit: the `;` discarded the 42.
-let discarded = { f(); 42; };
+let discarded = { f(1, 2); 42; };
 
 // ---- Conditionals ---------------------------------------------------------
 // `if` is an expression (§2). Braces are mandatory and the condition is
@@ -95,7 +129,7 @@ let discarded = { f(); 42; };
 
 let branch = if ok { 42 } else { 0 };
 // `else if` is `else` followed by another `if`, not a keyword of its own.
-let chain = if a { 1 } else if b { 2 } else { 3 };
+let chain = if ok { 1 } else if ready { 2 } else { 3 };
 
 // ---- Lambdas --------------------------------------------------------------
 // `(params) -> body`. Parameter and return types come from context, unlike a
@@ -106,28 +140,34 @@ let chain = if a { 1 } else if b { 2 } else { 3 };
 // the one place the grammar needs to look past a closing bracket to decide.
 
 let typed = (x: u64) -> x + 1;
-let inferred = (x) -> x + 1;
+let inferred: fn(u64) -> u64 = (x) -> x + 1;
 let several = (x: u64, y: u64) -> x + y;
 let nullary = () -> work();
-let with_block = (x) -> {
+let with_block: fn(u64) -> u64 = (x) -> {
   let y = x * 2;
   y + 1
 };
 
 // ---- Precedence -----------------------------------------------------------
 // Tightest to loosest, each line pinned against the one below it. The comment
-// beside each is the grouping §2's table gives it.
+// beside each is the grouping §2's table gives it. §1 has no promotion, so the
+// operands are chosen to have one type each rather than to read prettily.
 
-let l1 = -a.b;          // (-(a.b))          postfix over unary
-let l2 = -a as u8;      // ((-a) as u8)      unary over `as`
-let l3 = a as u8 * b;   // ((a as u8) * b)   `as` over `*`
-let l4 = a + b * c;     // (a + (b * c))     `*` over `+`
-let l5 = a + b == c;    // ((a + b) == c)    `+` over comparison
-let l6 = a && b == c;   // (a && (b == c))   comparison over `&&`
-let l7 = a || b && c;   // (a || (b && c))   `&&` over `||`
+let a = 9u64;
+let b = 3u64;
+let c = 2u64;
+let narrow = 3u8;
+
+let l1 = -point.x;             // (-(point.x))           postfix over unary
+let l2 = -point.x as s8;       // ((-point.x) as s8)     unary over `as`
+let l3 = a as u8 * narrow;     // ((a as u8) * narrow)   `as` over `*`
+let l4 = a + b * c;            // (a + (b * c))          `*` over `+`
+let l5 = a + b == c;           // ((a + b) == c)         `+` over comparison
+let l6 = ok && b == c;         // (ok && (b == c))       comparison over `&&`
+let l7 = ok || ready && ok;    // (ok || (ready && ok))  `&&` over `||`
 
 // Every binary operator is left-associative.
-let leans_left = a - b - c; // ((a - b) - c)
+let leans_left = a - b - c;    // ((a - b) - c)
 
 // A file may end in an expression with no `;` (§3).
 sum + difference

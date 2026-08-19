@@ -5,7 +5,7 @@
 //! checks a whole dump is checking the *shape* of the IR; one that checks a
 //! diagnostic is checking a rule.
 
-use crate::{Program, dump, lower};
+use crate::{DiagnosticKind, Program, dump, lower};
 
 fn lowered(source: &str) -> (Program, Vec<String>) {
     let parse = parser::parse(source);
@@ -545,6 +545,54 @@ fn an_alias_is_the_same_type() {
 fn a_struct_may_name_itself() {
     let ir = ir("struct Node { next: Node, value: u64 } fn f(n: Node) -> u64 { n.value } 0u64");
     assert!(ir.contains("(field next Node)"), "{ir}");
+}
+
+// ---- The examples ----------------------------------------------------------
+
+/// Every file in `examples/`, which `parser` already asserts lexes, parses,
+/// and round-trips.
+const EXAMPLES: [(&str, &str); 5] = [
+    ("hello.glue", include_str!("../../examples/hello.glue")),
+    (
+        "literals.glue",
+        include_str!("../../examples/literals.glue"),
+    ),
+    (
+        "expressions.glue",
+        include_str!("../../examples/expressions.glue"),
+    ),
+    (
+        "statements.glue",
+        include_str!("../../examples/statements.glue"),
+    ),
+    (
+        "declarations.glue",
+        include_str!("../../examples/declarations.glue"),
+    ),
+];
+
+/// The examples elaborate, and the only thing elaboration is allowed to say
+/// about one is that the *language* is missing something.
+///
+/// They were written when nothing checked them, and they named functions and
+/// types that had never existed. That is a worse kind of documentation than a
+/// gap: `Unsupported` says "this construct is coming", where an unbound name
+/// says "this is how Glue is written" and is wrong. So an example may exercise
+/// syntax that has no meaning yet — the parser's suite needs it to — and may
+/// not exercise a symbol that does not exist.
+#[test]
+fn the_examples_elaborate() {
+    for (name, source) in EXAMPLES {
+        let parse = parser::parse(source);
+        let lowered = lower(&parse.tree, source);
+        for diagnostic in &lowered.diagnostics {
+            assert!(
+                matches!(diagnostic.kind, DiagnosticKind::Unsupported(_)),
+                "{name} does not elaborate: {}",
+                diagnostic.message()
+            );
+        }
+    }
 }
 
 // ---- Not yet ---------------------------------------------------------------
