@@ -100,7 +100,12 @@ pub struct Func {
     pub origin:   Origin,
 }
 
-pub struct SlotDef { pub ty: TypeId, pub name: Option<Sym> }
+pub struct SlotDef {
+    pub ty:      TypeId,
+    pub name:    Option<Sym>,   // None for an ANF temporary
+    pub kind:    SlotKind,      // param | capture | local | temp
+    pub mutable: bool,          // §3: in-place mutation permitted through this binding
+}
 
 pub struct Block {
     pub stmts: Vec<Stmt>,

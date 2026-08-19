@@ -197,6 +197,20 @@ binding, so the criterion has to be assignment. **Decided 2026-08-18: assignment
 turns out to mean that assigning a captured binding requires `mut`, this tightens and
 fewer cells are allocated; nothing else moves.
 
+**A `mut` parameter is a permission, not a representation. Decided 2026-08-19.** §5 leaves
+open whether a `mut` parameter is by reference or copy-in/copy-out, and §3 answers the
+question it was really asking: `mut` gates *in-place mutation*, so a `mut` parameter is the
+callee's permission to mutate the argument through that binding, and §3's consuming rule is
+that the call site must pass a `mut` binding. What the caller observes afterwards is
+whatever §6 makes observable through the value it passed — for a struct, the mutation
+itself; for a scalar, nothing, because there is nothing to alias.
+
+So the IR needs no write-back node and no second calling convention. `SlotDef::mutable`
+records the permission, elaboration checks it, and nothing at run time consults it. The
+check travels with the *declaration* rather than the type, because §5 gives a `fn` type no
+`mut` — so a call through a function value is unchecked, and stays so until §5 grows the
+syntax to say otherwise.
+
 Both halves are syntactic, which is deliberate — §1 asks for exactly that, since "a rule
 needing type inference or dataflow to answer is a rule the two back ends will eventually
 disagree about." The scan over-approximates by ignoring shadowing, so the cost of

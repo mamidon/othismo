@@ -13,6 +13,8 @@
 //!   is a use.
 //! * **The integer after `slot`, `block`, `header`, `body`, `then`, and `else`
 //!   is the arena index**, so a dump can be read against the data.
+//! * **A slot that permits in-place mutation says `mut`** after its kind (§3).
+//!   A slot that does not says nothing, since that is the default.
 //!
 //! Blocks nest here rather than being listed flat and referenced by id. That is
 //! a property of the *rendering*, not of the data — [`Func`] holds a flat
@@ -97,8 +99,11 @@ fn func_sexp(program: &Program, func: &Func) -> Sexp {
         .unwrap_or(0);
     for (index, slot) in func.slots.iter().enumerate() {
         let display = names.of(Slot(index as u32));
+        // §3's `mut` trails the kind, so a slot that permits in-place mutation
+        // reads as `param mut` and one that does not is unchanged.
+        let mutable = if slot.mutable { " mut" } else { "" };
         children.push(Sexp::leaf(format!(
-            "(slot {index} {display:width$} {} {})",
+            "(slot {index} {display:width$} {} {}{mutable})",
             program.type_name(slot.ty),
             slot.kind.name(),
         )));

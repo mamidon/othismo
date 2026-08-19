@@ -100,6 +100,19 @@ pub enum DiagnosticKind {
     /// §6: field mutability follows the binding, so a non-`mut` binding permits
     /// assigning no field.
     AssignToNonMut(String),
+    /// §5: a `mut` parameter permits the callee to mutate the argument in
+    /// place, so the argument has to *be* a place rather than a value computed
+    /// at the call.
+    MutArgumentNotAPlace {
+        parameter: String,
+    },
+    /// §5's rule, which §3 names as the one that consumes `mut`: a call that
+    /// mutates requires a `mut` binding at the call site, so the mutation is
+    /// visible where it happens rather than only where it was declared.
+    MutArgumentNotMutable {
+        parameter: String,
+        argument: String,
+    },
     /// §4: unlabelled, and applying to the innermost enclosing loop — of which
     /// there is none here.
     JumpOutsideLoop(&'static str),
@@ -160,6 +173,17 @@ impl DiagnosticKind {
             NotAPlace => "only a name, a field, or an index can be assigned to".to_string(),
             AssignToNonMut(name) => format!(
                 "`{name}` is not `mut`, so its fields cannot be assigned — write `let mut {name}`"
+            ),
+            MutArgumentNotAPlace { parameter } => format!(
+                "the `{parameter}` parameter is `mut`, so the argument must be a binding rather \
+                 than an expression"
+            ),
+            MutArgumentNotMutable {
+                parameter,
+                argument,
+            } => format!(
+                "the `{parameter}` parameter is `mut`, so `{argument}` must be too — declare it \
+                 `let mut {argument}`"
             ),
             JumpOutsideLoop(word) => format!("`{word}` is only meaningful inside a loop"),
             Unsupported(what) => format!("{what} is not supported yet"),

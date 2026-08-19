@@ -128,6 +128,16 @@ pub struct SlotDef {
     /// `None` for a compiler-introduced temporary.
     pub name: Option<Sym>,
     pub kind: SlotKind,
+    /// §3: whether the value in this slot may be mutated *in place* through
+    /// this binding — `let mut`, or §5's `mut` parameter. Not about
+    /// assignment: §3 leaves rebinding unrestricted on every binding, so
+    /// `x = v` needs no permission and [`Stmt::Assign`] carries none.
+    ///
+    /// Nothing at run time consults this. It is the record of a rule checked
+    /// during lowering, kept because it is a property of the slot and because
+    /// a dump that did not show it would be missing the only difference
+    /// between two otherwise identical parameters.
+    pub mutable: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

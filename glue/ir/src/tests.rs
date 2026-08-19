@@ -80,7 +80,7 @@ fn count_to(n: u64) -> u64 {
         "\
 (func count_to (u64) -> u64
   (slot 0 n  u64 param)
-  (slot 1 i  u64 local)
+  (slot 1 i  u64 local mut)
   (slot 2 t2 u64 temp)
   (slot 3 t3 bool temp)
   (block 0
@@ -109,7 +109,7 @@ fn counter() -> fn() -> u64 {
     assert!(ir.contains(
         "\
 (func counter () -> (fn () -> u64)
-  (slot 0 n  (cell u64) local)
+  (slot 0 n  (cell u64) local mut)
   (slot 1 t1 (fn () -> u64) temp)
   (block 0
     (assign n (makecell (const 0u64)))
@@ -119,7 +119,7 @@ fn counter() -> fn() -> u64 {
     assert!(ir.contains(
         "\
 (func counter.λ0 () -> u64
-  (slot 0 n  (cell u64) capture)"
+  (slot 0 n  (cell u64) capture mut)"
     ));
     assert!(ir.contains("(store (cell n) t2)"));
 }
@@ -413,6 +413,70 @@ fn a_function_used_as_a_value_is_a_closure() {
     let ir = ir("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)");
     assert!(ir.contains("(closure add)"), "{ir}");
     assert!(ir.contains("(call-indirect f"), "{ir}");
+}
+
+/// §5: `mut` on a parameter is permission to mutate the argument in place, and
+/// §3 is the rule that consumes it — the call site must pass a `mut` binding,
+/// so a call that mutates is visible where it happens.
+#[test]
+fn a_mut_argument_needs_a_mut_binding() {
+    assert_eq!(
+        only_error(
+            "struct C { n: u64 }
+             fn advance(c: mut C) { c.n = c.n + 1; }
+             let frozen = C { n: 0 };
+             advance(frozen);"
+        ),
+        "the `c` parameter is `mut`, so `frozen` must be too — declare it `let mut frozen`"
+    );
+}
+
+/// §5: and the argument has to *be* a place, since there is nothing to mutate
+/// in a value the call itself computed.
+#[test]
+fn a_mut_argument_must_be_a_place() {
+    assert_eq!(
+        only_error(
+            "struct C { n: u64 }
+             fn advance(c: mut C) { c.n = c.n + 1; }
+             advance(C { n: 0 });"
+        ),
+        "the `c` parameter is `mut`, so the argument must be a binding rather than an expression"
+    );
+}
+
+/// §5's own example, end to end: a `mut` binding passed to a `mut` parameter,
+/// mutated through a field. §6's reference semantics is what carries the
+/// change back — nothing is written back at the call, and the IR grows no node
+/// for it.
+#[test]
+fn a_mut_parameter_mutates_through_the_reference() {
+    let ir = ir("struct C { n: u64 }
+                 fn advance(c: mut C, by: u64) { c.n = c.n + by; }
+                 let mut tally = C { n: 0 };
+                 advance(tally, 5);");
+    assert!(ir.contains("(slot 0 c  C param mut)"), "{ir}");
+    assert!(ir.contains("(slot 1 by u64 param)"), "{ir}");
+    assert!(ir.contains("(store (field c n) t3)"), "{ir}");
+    assert!(ir.contains("(drop (call advance tally (const 5u64)))"), "{ir}");
+}
+
+/// §3: a plain parameter is an immutable binding, exactly like a `let`, so
+/// nothing may be mutated through it.
+#[test]
+fn a_plain_parameter_permits_no_mutation() {
+    assert_eq!(
+        only_error("struct C { n: u64 } fn f(c: C) { c.n = 1; }"),
+        "`c` is not `mut`, so its fields cannot be assigned — write `let mut c`"
+    );
+}
+
+/// §3: `mut` gates in-place mutation and nothing else. Rebinding is
+/// unrestricted on every binding, parameters included.
+#[test]
+fn assignment_needs_no_mut() {
+    let ir = ir("fn f(n: u64) -> u64 { n = n + 1; n } let x = 1u64; f(x)");
+    assert!(ir.contains("(slot 0 n u64 param)"), "{ir}");
 }
 
 // ---- §6 Data and types -----------------------------------------------------

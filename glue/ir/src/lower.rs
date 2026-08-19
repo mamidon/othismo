@@ -121,6 +121,15 @@ struct Lowerer<'a> {
     /// Signatures, resolved once at hoist time and read again when the body is
     /// lowered — otherwise every problem in a signature is reported twice.
     signatures: HashMap<NodeId, (Vec<ParamInfo>, TypeId)>,
+    /// Each `fn`'s parameter names and their `mut` flags, so a call site can
+    /// check §5's rule. Kept here rather than read back off the callee's
+    /// [`SlotDef`]s, because a call may be lowered before the callee's body is
+    /// — that is what hoisting is for — and a slot does not exist until then.
+    ///
+    /// Nothing records the same for a function *value*: §5 gives a `fn` type no
+    /// `mut`, so an indirect call has nothing to check against. See
+    /// [`Lowerer::call`].
+    mut_params: HashMap<FuncId, Vec<(String, bool)>>,
 
     t_unit: TypeId,
     t_bool: TypeId,
@@ -168,6 +177,7 @@ impl<'a> Lowerer<'a> {
             scopes: Vec::new(),
             funcs: Vec::new(),
             signatures: HashMap::new(),
+            mut_params: HashMap::new(),
             t_unit,
             t_bool,
             t_char,
@@ -334,15 +344,21 @@ impl<'a> Lowerer<'a> {
         self.emit(blk, Stmt::Return(Some(operand)), at);
     }
 
-    fn slot(&mut self, ty: TypeId, name: Option<Sym>, kind: SlotKind) -> Slot {
+    fn slot(&mut self, ty: TypeId, name: Option<Sym>, kind: SlotKind, mutable: bool) -> Slot {
         let ctx = self.cur_mut();
         let slot = Slot(ctx.slots.len() as u32);
-        ctx.slots.push(SlotDef { ty, name, kind });
+        ctx.slots.push(SlotDef {
+            ty,
+            name,
+            kind,
+            mutable,
+        });
         slot
     }
 
     fn temp(&mut self, ty: TypeId) -> Slot {
-        self.slot(ty, None, SlotKind::Temp)
+        // §3's `mut` is about a binding, and a temporary is not one.
+        self.slot(ty, None, SlotKind::Temp, false)
     }
 
     /// Assigns an operand into a slot, folding away the copy when the operand
@@ -691,6 +707,13 @@ impl Lowerer<'_> {
             blocks: Vec::new(),
             origin: node,
         });
+        self.mut_params.insert(
+            id,
+            params
+                .iter()
+                .map(|param| (param.name.clone(), param.mutable))
+                .collect(),
+        );
         self.bind(name, Binding::Func { id, ty });
     }
 
@@ -778,7 +801,7 @@ impl Lowerer<'_> {
 
         let slot = if cell {
             let cell_ty = self.program.types.intern(TypeDef::Cell(ty));
-            let slot = self.slot(cell_ty, Some(sym), SlotKind::Local);
+            let slot = self.slot(cell_ty, Some(sym), SlotKind::Local, mutable);
             self.emit(
                 blk,
                 Stmt::Assign {
@@ -789,7 +812,7 @@ impl Lowerer<'_> {
             );
             slot
         } else {
-            let slot = self.slot(ty, Some(sym), SlotKind::Local);
+            let slot = self.slot(ty, Some(sym), SlotKind::Local, mutable);
             self.assign_into(blk, slot, operand, node);
             slot
         };
@@ -2058,9 +2081,21 @@ impl Lowerer<'_> {
             );
         }
 
+        // §5's `mut` rule is checked only where the callee is known by name.
+        // A `fn` type carries no `mut` (§5 gives one no syntax), so a call
+        // through a function *value* has nothing to check against — the check
+        // travels with the declaration rather than with the type.
+        let mut_params = sig
+            .and_then(|(id, _)| self.mut_params.get(&id).cloned())
+            .unwrap_or_default();
+
         // §2 and §5: arguments evaluate left to right, before the call.
         let mut operands = Vec::with_capacity(args.len());
         for (index, arg) in args.iter().enumerate() {
+            if let Some((name, true)) = mut_params.get(index) {
+                let name = name.clone();
+                self.check_mut_argument(*arg, &name);
+            }
             let expect = params.get(index).copied();
             let checked = self.expr(blk, *arg, expect);
             let (operand, _) = self.pin(checked, expect, *arg);
@@ -2082,6 +2117,38 @@ impl Lowerer<'_> {
             _ => return None,
         };
         Some((rvalue, ret))
+    }
+
+    /// §5: a `mut` parameter permits the callee to mutate the argument in
+    /// place, and §3 is the rule that consumes it — mutating through a binding
+    /// requires that binding to be `mut`, at the call site as everywhere else.
+    ///
+    /// Nothing is written *back*: §3's `mut` gates in-place mutation, so what
+    /// the caller observes is whatever §6's semantics make observable through
+    /// the value it passed. For a struct that is the mutation itself; for a
+    /// scalar there is nothing to alias, and the callee mutates its own slot.
+    fn check_mut_argument(&mut self, arg: NodeId, parameter: &str) {
+        let Some((root, span)) = self.place_root(arg) else {
+            self.error(
+                DiagnosticKind::MutArgumentNotAPlace {
+                    parameter: parameter.to_string(),
+                },
+                arg,
+            );
+            return;
+        };
+        match self.resolve(&root) {
+            Some((_, Binding::Value { mutable: true, .. })) => {}
+            // An unknown name is reported once, when the argument is lowered.
+            None => {}
+            _ => self.error_at(
+                DiagnosticKind::MutArgumentNotMutable {
+                    parameter: parameter.to_string(),
+                    argument: root,
+                },
+                span,
+            ),
+        }
     }
 
     fn field_access(&mut self, blk: BlockId, node: NodeId) -> Option<(Operand, FieldIdx, TypeId)> {
@@ -2238,7 +2305,7 @@ impl Lowerer<'_> {
     fn bind_params(&mut self, params: &[ParamInfo]) {
         for param in params {
             let sym = self.program.syms.intern(&param.name);
-            let slot = self.slot(param.ty, Some(sym), SlotKind::Param);
+            let slot = self.slot(param.ty, Some(sym), SlotKind::Param, param.mutable);
             self.bind(
                 param.name.clone(),
                 Binding::Value {
@@ -2323,7 +2390,12 @@ impl Lowerer<'_> {
         // convention can fill them from the closure environment by position.
         for capture in &captures {
             let sym = self.program.syms.intern(&capture.name);
-            let slot = self.slot(capture.storage_ty, Some(sym), SlotKind::Capture);
+            let slot = self.slot(
+                capture.storage_ty,
+                Some(sym),
+                SlotKind::Capture,
+                capture.mutable,
+            );
             self.bind(
                 capture.name.clone(),
                 Binding::Value {
