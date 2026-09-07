@@ -31,12 +31,13 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Initialization | · | ✓ | ✓ |
 | Mutation — what `mut` gates | · | ✓ | ✓ |
 | Destructuring patterns in `let` | — | — | — |
-| Top-level order-independence and mutual recursion | · | ◑ | ◑ |
+| Top-level bindings as globals; hoisting; initialization order | ✓ | ✓ | ✓ |
 
 Assignment is ◑ only because an index is a place the spec admits and elaboration does not
-(§types). Order-independence is ◑ in both columns: `fn` declarations are hoisted and
-mutually recursive, `let` statements run in order, and the rule that reconciles them is
-still owned by §scope and §modules.
+(§types). The top-level row was ◑ across the board until 2026-09-07, when *Top-level
+bindings are globals* settled it: a `fn` may read any binding in its file, declarations
+hoist, initializers run in order, and reading one too early is refused before the program
+starts.
 
 ---
 
@@ -206,13 +207,83 @@ That is the whole of goal §one-language's "a bare expression is a valid program
 REPL special case, just the block rule applied to the outermost block. A prompt and a file
 accept the same input because they *are* the same construct.
 
+### Top-level bindings are globals
+
+**Decided 2026-09-07.** A top-level `let` is not a local of the file's block the way a
+`let` inside `{ … }` is. It is a **global**: storage that outlives every frame, which is
+§scope's locals-versus-globals distinction and, on wasm, a `global.get` rather than a
+frame slot.
+
+That is what lets a function read one:
+
+```
+let x = foo();
+
+fn foo() -> u64 { 42 }
+fn bar() -> u64 { 3 + x }
+
+bar()                        // 45
+```
+
+Three rules, and a reader already has all three from elsewhere:
+
+- **A file executes top down.** Statements run in written order, initializers included.
+- **Declarations hoist; invocations do not.** `fn`, `struct`, and `type` are visible
+  throughout the file and may be mutually recursive. A `fn` *body* is elaborated after the
+  rest of its block, which is why it sees every top-level binding rather than only the
+  ones written above it.
+- **Reading a binding before its `let` has run is a compile error**, below.
+
+**Reading a global is not a capture**, and that is the whole reason this costs §functions
+nothing. A capture is a frame reached from another frame; a global is a location. So a
+`fn` naming one still compiles to a plain function with no environment, and §functions'
+rule stands exactly as written. A binding inside a block is still a local, and a nested
+`fn` still cannot see one.
+
+`mut` needs no new rule either. Rebinding a global is unrestricted, exactly as for a
+local, and assigning a *field* of one requires the binding to be `mut`, exactly as §types
+says:
+
+```
+let mut hits = 0u64;
+fn record() { hits = hits + 1u64; }     // rebinding — no permission needed
+```
+
+That is the first side effect Glue can express without a host, and the closest thing it
+has to module state until §modules arrives.
+
+#### Reading before initialization
+
+Hoisting declarations while running initializers in order leaves exactly one shape open: a
+top-level statement that *invokes* something which reads a binding declared below it.
+
+```
+let x = foo();
+fn foo() -> u64 { y }
+let y = 1u64;
+// `foo` reads `y`, which is not initialized until later in this file
+```
+
+This is JavaScript's temporal dead zone, and JavaScript answers it at run time with a
+`ReferenceError` — the loudest answer available to a language with `eval` and no static
+call graph, and itself a correction of `var`, which returned `undefined` and said nothing.
+Glue has the call graph, so it answers before the program starts: elaboration computes,
+per function, the globals it may read — following direct calls to a fixed point, and
+answering a call through a function *value* with the union over every function whose value
+is taken — and refuses a top-level call that could reach one that has not been initialized
+yet.
+
+Same decision as JavaScript's, in other words, taken as far as the target allows.
+
+It leaves *Initialization* below true as written: there is still no uninitialized state to
+observe and no default-value rule to write. It is also not the definite-assignment
+analysis this section declines — an initializer is still always required, and this pass
+asks only which top-level statement runs first.
+
 There is no `print` statement. Output is a host import (§modules); the interactive front
 end displays the top-level trailing expression, which is a property of the language rather
 than a feature of the REPL. What a *deployed* module does with a top-level value — and
 whether it has one — is §modules', along with the entry point.
-
-Module-level bindings, `mut` included, are permitted; when they initialize and in what
-order is §scope's and §modules'.
 
 ---
 
@@ -227,10 +298,15 @@ order is §scope's and §modules'.
   error rather than a runtime surprise.
 - Shadowing introduces a new binding. The shadowed one is not destroyed, merely
   unreachable by name; a closure that captured it (§functions) still sees it.
-- **Open:** whether a `let` at module scope is visible to declarations above it. Functions
-  need to be mutually recursive, so *some* top-level forms must be order-independent while
-  statements are order-dependent. §scope and §modules own the rule; §statements records
-  that the two cases cannot both be "in order."
+- **A top-level binding is visible to every function in the file**, whichever order the
+  two are written in, because it is a global rather than a local of the file's block (*The
+  top level*, above). Statements still run in order; what hoists is the declaration, not
+  the initializer. This replaces an Open item that framed the question as ordering — it is
+  not ordering, since a `fn` could not see a module-level binding declared *above* it
+  either.
+- **Open:** what a top-level binding means once there are modules. Whether it is private
+  to its file, whether it can be exported, and when it initializes relative to an import
+  are §modules', and none of them changes the rule above.
 
 ### Initialization
 

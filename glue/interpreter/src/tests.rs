@@ -590,6 +590,48 @@ fn a_binding_in_a_loop_is_captured_per_iteration() {
 /// §functions: a `fn` captures nothing — it is an ordinary function that
 /// happens to be private to its block, and every one of them compiles to a
 /// plain wasm function with no environment.
+/// §statements' top-level bindings, end to end — the shape that used to be
+/// unwriteable, since a `fn` could not see a module-level binding at all.
+#[test]
+fn a_fn_reads_a_top_level_binding() {
+    assert_eq!(
+        int("let x = foo();
+             fn foo() -> u64 { 42 }
+             fn bar() -> u64 { 3 + x }
+             bar()"),
+        45
+    );
+    // Order does not matter: declarations hoist.
+    assert_eq!(int("fn f() -> u64 { n } let n = 7u64; f()"), 7);
+    assert_eq!(
+        value("let s = \"hi\"; fn f() -> Str { s } f()"),
+        Value::string("hi")
+    );
+}
+
+/// A `mut` global is module state, and the first side effect the language can
+/// express without a host (§modules owes the rest).
+#[test]
+fn a_mut_global_is_module_state() {
+    assert_eq!(
+        int("let mut c = 0u64;
+             fn tick() { c = c + 1u64; }
+             tick(); tick(); tick();
+             c"),
+        3
+    );
+}
+
+/// Initializers run in order, so reading one too early is refused before the
+/// program runs rather than observed as a wrong value.
+#[test]
+fn reading_a_global_before_it_is_initialized_is_refused() {
+    assert_eq!(
+        refused("let x = foo(); fn foo() -> u64 { y } let y = 1u64; x"),
+        "`foo` reads `y`, which is not initialized until later in this file"
+    );
+}
+
 #[test]
 fn a_fn_captures_nothing() {
     assert_eq!(

@@ -43,6 +43,16 @@ pub struct BlockId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Slot(pub u32);
 
+/// A module-level binding (§statements).
+///
+/// §scope's locals-versus-globals distinction, which it notes matters on wasm
+/// because locals become wasm locals and these become wasm globals. A global
+/// is storage that outlives every frame, so reading one is **not a capture** —
+/// which is what lets a `fn` see a top-level binding while §functions' promise
+/// that a `fn` carries no environment stays literally true.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct GlobalId(pub u32);
+
 impl FuncId {
     pub fn index(self) -> usize {
         self.0 as usize
@@ -61,10 +71,32 @@ impl Slot {
     }
 }
 
+impl GlobalId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A top-level binding. Unlike a [`SlotDef`] it has no frame to live in, and
+/// unlike a [`crate::consts::Const`] it is written at run time, in the order
+/// [`Program::entry`] runs.
+pub struct GlobalDef {
+    pub name: Sym,
+    pub ty: TypeId,
+    /// §statements: whether the value may be mutated *in place* through this
+    /// binding. Assignment needs no permission, exactly as for a slot.
+    pub mutable: bool,
+    pub origin: CstId,
+}
+
 /// A whole program: every monomorphic function, one type table, one constant
 /// pool.
 pub struct Program {
     pub funcs: Vec<Func>,
+    /// §statements' top-level bindings, in declaration order. Their
+    /// initializers are statements of [`Program::entry`], so the order here is
+    /// also the order they are written.
+    pub globals: Vec<GlobalDef>,
     pub types: Types,
     pub consts: ConstPool,
     pub syms: Interner,
@@ -79,6 +111,10 @@ pub struct Program {
 impl Program {
     pub fn func(&self, id: FuncId) -> &Func {
         &self.funcs[id.index()]
+    }
+
+    pub fn global(&self, id: GlobalId) -> &GlobalDef {
+        &self.globals[id.index()]
     }
 
     pub fn text(&self, sym: Sym) -> &str {
@@ -251,6 +287,10 @@ pub enum Rvalue {
     },
     MakeCell(Operand),
     CellGet(Operand),
+    /// Read a top-level binding (§statements). On wasm this is `global.get`,
+    /// one instruction and no environment — which is the whole reason a `fn`
+    /// may do it while capturing nothing (§functions).
+    GlobalGet(GlobalId),
     /// Every function value is one of these. A plain `fn` referred to by name
     /// has an empty capture list.
     MakeClosure {
@@ -260,8 +300,15 @@ pub enum Rvalue {
 }
 
 pub enum Place {
-    Field { base: Slot, field: FieldIdx },
+    Field {
+        base: Slot,
+        field: FieldIdx,
+    },
     Cell(Slot),
+    /// Assigning a top-level binding — `global.set` on wasm. This is also how
+    /// a global is *initialized*: its `let` lowers to one of these, at the
+    /// position the `let` was written.
+    Global(GlobalId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

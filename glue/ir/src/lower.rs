@@ -22,7 +22,7 @@
 //! halves of `while` get blocks, because control flow needs somewhere to branch
 //! to.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use parser::{NodeId, NodeKind, Tree};
@@ -32,8 +32,8 @@ use crate::consts::{Const, ConstId};
 use crate::cst;
 use crate::diagnostic::{Diagnostic, DiagnosticKind};
 use crate::program::{
-    BinOp, Block, BlockId, CstId, Func, FuncId, Operand, Place, Program, Rvalue, Slot, SlotDef,
-    SlotKind, Stmt, UnOp,
+    BinOp, Block, BlockId, CstId, Func, FuncId, GlobalDef, GlobalId, Operand, Place, Program,
+    Rvalue, Slot, SlotDef, SlotKind, Stmt, UnOp,
 };
 use crate::scan::{self, BlockFacts};
 use crate::sym::{Interner, Sym};
@@ -80,6 +80,14 @@ enum Binding {
     /// A binding whose initializer was an unpinned constant and which is never
     /// assigned (§lexical). It has no slot and no type until it is used.
     Const(Checked),
+    /// §statements' top-level binding. Storage that outlives every frame, so
+    /// reading one from inside a `fn` is not a capture and needs no
+    /// permission — see [`GlobalId`].
+    Global {
+        global: GlobalId,
+        ty: TypeId,
+        mutable: bool,
+    },
     Func {
         id: FuncId,
         ty: TypeId,
@@ -169,6 +177,7 @@ impl<'a> Lowerer<'a> {
             source,
             program: Program {
                 funcs: Vec::new(),
+                globals: Vec::new(),
                 types,
                 consts,
                 syms: Interner::new(),
@@ -213,6 +222,19 @@ impl<'a> Lowerer<'a> {
         self.pop_scope();
         self.end_func();
         self.program.entry = Some(id);
+
+        for (global, via, at) in init_problems(&self.program, id) {
+            let kind = DiagnosticKind::UninitializedGlobal {
+                global: self
+                    .program
+                    .text(self.program.global(global).name)
+                    .to_string(),
+                via: via
+                    .and_then(|func| self.program.func(func).name)
+                    .map(|name| self.program.text(name).to_string()),
+            };
+            self.error(kind, at);
+        }
 
         Lowered {
             program: self.program,
@@ -359,6 +381,24 @@ impl<'a> Lowerer<'a> {
             mutable,
         });
         slot
+    }
+
+    /// Whether a binding declared here is one of §statements' top-level
+    /// bindings: the outermost block of the file, and so of the entry
+    /// function. Two scopes are open there — the prelude's and the file's.
+    fn at_file_scope(&self) -> bool {
+        self.funcs.len() == 1 && self.scopes.len() == 2
+    }
+
+    fn new_global(&mut self, name: Sym, ty: TypeId, mutable: bool, origin: NodeId) -> GlobalId {
+        let id = GlobalId(self.program.globals.len() as u32);
+        self.program.globals.push(GlobalDef {
+            name,
+            ty,
+            mutable,
+            origin,
+        });
+        id
     }
 
     fn temp(&mut self, ty: TypeId) -> Slot {
@@ -599,12 +639,27 @@ impl Lowerer<'_> {
         let mut value = Checked::Val(Operand::Const(self.c_unit), self.t_unit);
         for child in &children {
             let kind = self.tree.kind(*child);
+            if kind == NodeKind::FnDecl {
+                continue;
+            }
             if cst::is_expr(kind) {
                 // The trailing expression, and so the block's value
                 // (§expressions, §statements).
                 value = self.expr(blk, *child, expect);
             } else {
                 self.stmt(blk, *child);
+            }
+        }
+
+        // §statements: a `fn` body is walked after the rest of its block, so
+        // it sees every binding the block declares rather than only the ones
+        // written above it. That is the whole of "declarations hoist while
+        // initializers still run in order" — a body emits nothing into the
+        // enclosing block, so moving *when* it is walked changes name
+        // resolution and no code order whatsoever.
+        for child in &children {
+            if self.tree.kind(*child) == NodeKind::FnDecl {
+                self.fn_body(*child);
             }
         }
 
@@ -766,7 +821,9 @@ impl Lowerer<'_> {
             NodeKind::WhileStmt => self.while_stmt(blk, node),
             NodeKind::BreakStmt | NodeKind::ContinueStmt => self.jump_stmt(blk, node),
             NodeKind::ReturnStmt => self.return_stmt(blk, node),
-            NodeKind::FnDecl => self.fn_body(node),
+            // Signature hoisted, body walked at the end of the block by
+            // `block_into`. Nothing runs at its position either way.
+            NodeKind::FnDecl => {}
             // Hoisted, and nothing runs at their position.
             NodeKind::StructDecl | NodeKind::TypeAliasDecl => {}
             // The parser already reported it and kept every byte in its tree.
@@ -807,6 +864,33 @@ impl Lowerer<'_> {
         let sym = self.program.syms.intern(&name);
         let mutable = cst::has_token(self.tree, node, TokenKind::Mut);
         let cell = self.facts_needs_cell(&name);
+
+        // §statements: a top-level binding is a global, not a local of the
+        // entry function. That is what lets a `fn` read it — a global is
+        // storage rather than a frame, so reaching one is not a capture and
+        // §functions' "a `fn` carries no environment" survives untouched. It
+        // also needs no cell: a cell exists to give a captured binding a home
+        // that outlives its frame, and a global already has one.
+        if self.at_file_scope() {
+            let global = self.new_global(sym, ty, mutable, node);
+            self.emit(
+                blk,
+                Stmt::Store {
+                    place: Place::Global(global),
+                    value: operand,
+                },
+                node,
+            );
+            self.bind(
+                name,
+                Binding::Global {
+                    global,
+                    ty,
+                    mutable,
+                },
+            );
+            return;
+        }
 
         let slot = if cell {
             let cell_ty = self.program.types.intern(TypeDef::Cell(ty));
@@ -855,6 +939,21 @@ impl Lowerer<'_> {
                     self.error_at(DiagnosticKind::UnknownName(name), span);
                     return;
                 };
+                // §statements: assigning a global is the same statement as
+                // initializing one, and rebinding needs no permission.
+                if let Binding::Global { global, ty, .. } = binding {
+                    let checked = self.expr(blk, value, Some(ty));
+                    let (operand, _) = self.pin(checked, Some(ty), value);
+                    self.emit(
+                        blk,
+                        Stmt::Store {
+                            place: Place::Global(global),
+                            value: operand,
+                        },
+                        node,
+                    );
+                    return;
+                }
                 let Binding::Value { slot, ty, cell, .. } = binding else {
                     self.error(DiagnosticKind::NotAPlace, place);
                     return;
@@ -882,7 +981,12 @@ impl Lowerer<'_> {
                 // binding permits assigning any field; a non-`mut` one permits
                 // none.
                 if let Some((root, span)) = self.place_root(place)
-                    && let Some((_, Binding::Value { mutable: false, .. })) = self.resolve(&root)
+                    && let Some((_, binding)) = self.resolve(&root)
+                    && matches!(
+                        binding,
+                        Binding::Value { mutable: false, .. }
+                            | Binding::Global { mutable: false, .. }
+                    )
                 {
                     self.error_at(DiagnosticKind::AssignToNonMut(root), span);
                 }
@@ -1108,6 +1212,150 @@ fn compact_slots(ctx: &mut FuncCtx) {
     }
 }
 
+/// The rvalues a statement carries. Only two kinds hold one — everything else
+/// takes operands, which are atomic by core IR's second invariant.
+fn each_rvalue(stmt: &Stmt, f: &mut impl FnMut(&Rvalue)) {
+    match stmt {
+        Stmt::Assign { rvalue, .. } | Stmt::Drop(rvalue) => f(rvalue),
+        _ => {}
+    }
+}
+
+/// Which globals each function may read, following direct calls to a fixed
+/// point.
+///
+/// A call through a function *value* is answered with the union over every
+/// function whose value is taken anywhere — the smallest sound answer
+/// available without a points-to analysis, and one that costs nothing in a
+/// program that never stores a function.
+fn global_reads(program: &Program) -> (Vec<BTreeSet<GlobalId>>, BTreeSet<GlobalId>) {
+    let count = program.funcs.len();
+    let mut reads = vec![BTreeSet::new(); count];
+    let mut calls: Vec<HashSet<usize>> = vec![HashSet::new(); count];
+    let mut indirect = vec![false; count];
+    let mut escaping: HashSet<usize> = HashSet::new();
+
+    for (index, func) in program.funcs.iter().enumerate() {
+        for block in &func.blocks {
+            for stmt in &block.stmts {
+                each_rvalue(stmt, &mut |rvalue| match rvalue {
+                    Rvalue::GlobalGet(id) => {
+                        reads[index].insert(*id);
+                    }
+                    Rvalue::Call { func, .. } => {
+                        calls[index].insert(func.index());
+                    }
+                    Rvalue::CallIndirect { .. } => indirect[index] = true,
+                    Rvalue::MakeClosure { func, .. } => {
+                        escaping.insert(func.index());
+                    }
+                    _ => {}
+                });
+            }
+        }
+    }
+
+    loop {
+        let union: BTreeSet<GlobalId> = escaping
+            .iter()
+            .flat_map(|func| reads[*func].iter().copied())
+            .collect();
+        let mut changed = false;
+        for index in 0..count {
+            let mut extra: BTreeSet<GlobalId> = BTreeSet::new();
+            for callee in &calls[index] {
+                extra.extend(reads[*callee].iter().copied());
+            }
+            if indirect[index] {
+                extra.extend(union.iter().copied());
+            }
+            for id in extra {
+                changed |= reads[index].insert(id);
+            }
+        }
+        if !changed {
+            let union = escaping
+                .iter()
+                .flat_map(|func| reads[*func].iter().copied())
+                .collect();
+            return (reads, union);
+        }
+    }
+}
+
+/// Every read of a top-level binding the entry function reaches before that
+/// binding's `let` has run.
+///
+/// Walking the entry function in execution order is enough because a global is
+/// initialized by a *top-level* statement, and those are all in its body
+/// block; nested blocks are descended for the calls they contain.
+fn init_problems(program: &Program, entry: FuncId) -> Vec<(GlobalId, Option<FuncId>, CstId)> {
+    let (reads, indirect) = global_reads(program);
+    let func = program.func(entry);
+    let mut initialized = BTreeSet::new();
+    let mut out = Vec::new();
+    walk_init(
+        func,
+        func.body(),
+        &reads,
+        &indirect,
+        &mut initialized,
+        &mut out,
+    );
+    out
+}
+
+fn walk_init(
+    func: &Func,
+    block: BlockId,
+    reads: &[BTreeSet<GlobalId>],
+    indirect: &BTreeSet<GlobalId>,
+    initialized: &mut BTreeSet<GlobalId>,
+    out: &mut Vec<(GlobalId, Option<FuncId>, CstId)>,
+) {
+    let body = func.block(block);
+    for (stmt, at) in body.stmts.iter().zip(&body.spans) {
+        // Rvalues first: a `let`'s initializer is computed by the statements
+        // above the store that binds it, so the store is what marks the
+        // binding live and it cannot help the call that preceded it.
+        each_rvalue(stmt, &mut |rvalue| {
+            let missing = match rvalue {
+                Rvalue::GlobalGet(id) if !initialized.contains(id) => Some((*id, None)),
+                Rvalue::Call { func: callee, .. } => reads[callee.index()]
+                    .iter()
+                    .find(|id| !initialized.contains(id))
+                    .map(|id| (*id, Some(*callee))),
+                Rvalue::CallIndirect { .. } => indirect
+                    .iter()
+                    .find(|id| !initialized.contains(id))
+                    .map(|id| (*id, None)),
+                _ => None,
+            };
+            if let Some((global, via)) = missing {
+                out.push((global, via, *at));
+            }
+        });
+
+        match stmt {
+            Stmt::Store {
+                place: Place::Global(id),
+                ..
+            } => {
+                initialized.insert(*id);
+            }
+            Stmt::If { then_, else_, .. } => {
+                walk_init(func, *then_, reads, indirect, initialized, out);
+                walk_init(func, *else_, reads, indirect, initialized, out);
+            }
+            Stmt::While { header, body, .. } => {
+                walk_init(func, *header, reads, indirect, initialized, out);
+                walk_init(func, *body, reads, indirect, initialized, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn visit_slots(stmt: &Stmt, f: &mut impl FnMut(Slot)) {
     let operand = |operand: &Operand, f: &mut dyn FnMut(Slot)| {
         if let Operand::Slot(slot) = operand {
@@ -1123,6 +1371,7 @@ fn visit_slots(stmt: &Stmt, f: &mut impl FnMut(Slot)) {
             match place {
                 Place::Cell(slot) => f(*slot),
                 Place::Field { base, .. } => f(*base),
+                Place::Global(_) => {}
             }
             operand(value, f);
         }
@@ -1157,6 +1406,8 @@ fn visit_rvalue(rvalue: &Rvalue, f: &mut impl FnMut(Slot)) {
             args.iter().for_each(operand);
         }
         Rvalue::MakeClosure { captures, .. } => captures.iter().for_each(operand),
+        // Storage, not a slot.
+        Rvalue::GlobalGet(_) => {}
     }
 }
 
@@ -1175,6 +1426,7 @@ fn visit_slots_mut(stmt: &mut Stmt, f: &mut impl FnMut(&mut Slot)) {
             match place {
                 Place::Cell(slot) => f(slot),
                 Place::Field { base, .. } => f(base),
+                Place::Global(_) => {}
             }
             operand(value, f);
         }
@@ -1211,6 +1463,7 @@ fn visit_rvalue_mut(rvalue: &mut Rvalue, f: &mut impl FnMut(&mut Slot)) {
             args.iter_mut().for_each(|arg| operand(arg, f));
         }
         Rvalue::MakeClosure { captures, .. } => captures.iter_mut().for_each(|arg| operand(arg, f)),
+        Rvalue::GlobalGet(_) => {}
     }
 }
 
@@ -1405,6 +1658,11 @@ impl Lowerer<'_> {
                 } else {
                     Checked::Val(Operand::Slot(slot), ty)
                 }
+            }
+            // §statements: a global outlives every frame, so reading one is
+            // not a capture and the owner check above does not apply to it.
+            Binding::Global { global, ty, .. } => {
+                self.emit_temp(blk, Rvalue::GlobalGet(global), ty, node)
             }
             // A constant needs no capture: it is not storage, it is a value
             // known before either function runs.
@@ -2175,7 +2433,12 @@ impl Lowerer<'_> {
             return;
         };
         match self.resolve(&root) {
-            Some((_, Binding::Value { mutable: true, .. })) => {}
+            // §statements' rule reads the binding, not its storage — a global
+            // is `mut` or not exactly as a local is.
+            Some((
+                _,
+                Binding::Value { mutable: true, .. } | Binding::Global { mutable: true, .. },
+            )) => {}
             // An unknown name is reported once, when the argument is lowered.
             None => {}
             _ => self.error_at(

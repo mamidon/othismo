@@ -233,6 +233,34 @@ way.
 
 ---
 
+## Globals are not slots either
+
+**Added 2026-09-07, for §statements' top-level bindings.** Decision 5 makes every local a
+function-scoped slot, and a slot cannot outlive its frame. A top-level binding has to, so
+`Program` carries a `globals` table beside `funcs`, and the IR gains `Rvalue::GlobalGet`
+and `Place::Global` — a read and a write, and no third instruction, exactly as cells did.
+
+**They are the reason a `fn` can read a top-level binding at all.** §functions promises a
+`fn` carries no environment, and reaching a *slot* of an enclosing frame would break it.
+Reaching a global does not: it is a location, so the read is one `global.get` on wasm and
+one index into a table in the interpreter. Slots map onto wasm locals, globals onto wasm
+globals; §scope predicted that distinction would matter here and this is where it lands.
+
+A global needs no cell. A cell exists to give a captured binding a home outliving its
+frame, and a global already has one — so the capture analysis above simply never sees one.
+
+**Initialization is checked, not defaulted.** A global's `let` lowers to a `Store` at the
+position it was written, so between the start of the entry function and that statement the
+global holds nothing meaningful. Rather than invent a default — §types has no `nil` and
+§statements promises no uninitialized state is observable — elaboration computes the
+globals each function may read, following direct calls to a fixed point and answering an
+indirect call with the union over every function whose value is taken, and refuses a
+top-level call that could reach one that has not been stored yet. The IR therefore carries
+no initialization flag and neither back end emits a check: the guarantee is discharged
+before it gets here.
+
+---
+
 ## Shape
 
 **The crate is the normative statement.** `ir/src/program.rs` holds the instruction set and

@@ -26,6 +26,12 @@
 //! the executor does not run; what the language is still missing is missing
 //! from the IR first, and `ir`'s documentation is where that list lives.
 //!
+//! §statements' top-level bindings are **globals** — storage outside every
+//! frame, which is what lets a `fn` read one without capturing it.
+//! Declarations hoist, initializers run in order, and elaboration refuses a
+//! program that could read a binding before its `let` has run, so nothing here
+//! checks for one.
+//!
 //! # What changed when the IR arrived
 //!
 //! **There are types.** §lexical's numeric tower is real: a literal is pinned

@@ -117,6 +117,16 @@ pub enum DiagnosticKind {
         parameter: String,
         argument: String,
     },
+    /// §statements: declarations hoist and initializers run in order, so a
+    /// call in a top-level statement can reach a `fn` that reads a binding
+    /// whose `let` has not run yet. JavaScript answers this shape at run time
+    /// with a ReferenceError; Glue has a static call graph, so it answers
+    /// before the program runs.
+    UninitializedGlobal {
+        global: String,
+        /// The function the call reaches, when a call is what reached it.
+        via: Option<String>,
+    },
     /// §control: unlabelled, and applying to the innermost enclosing loop — of
     /// which there is none here.
     JumpOutsideLoop(&'static str),
@@ -189,6 +199,13 @@ impl DiagnosticKind {
                 "the `{parameter}` parameter is `mut`, so `{argument}` must be too — declare it \
                  `let mut {argument}`"
             ),
+            UninitializedGlobal { global, via } => match via {
+                Some(callee) => format!(
+                    "`{callee}` reads `{global}`, which is not initialized until later in \
+                     this file"
+                ),
+                None => format!("`{global}` is not initialized until later in this file"),
+            },
             JumpOutsideLoop(word) => format!("`{word}` is only meaningful inside a loop"),
             Unsupported(what) => format!("{what} is not supported yet"),
         }

@@ -30,8 +30,8 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Use before declaration is a static error | · | ✓ | ✓ |
 | Closure capture as a separate static pass | · | ✓ | ✓ |
 | Name resolution order — locals, enclosing, prelude | — | ◑ | ◑ |
-| Top-level order-independence and mutual recursion | — | — | ◑ |
-| Globals versus locals | — | — | — |
+| Top-level order-independence and mutual recursion | ✓ | ✓ | ✓ |
+| Globals versus locals | ✓ | ✓ | ✓ |
 | Late binding as a liveness mechanism | — | — | — |
 | Namespacing of member names | — | — | — |
 | Bindings introduced by patterns | — | — | — |
@@ -39,9 +39,10 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 
 This section has more implementation than spec. Scopes, shadowing, capture analysis, and
 the prelude all work — they were decided in §statements, §functions, and `core-ir.md` and
-built in `ir::lower`. The rows that stay empty are the ones that need modules or an image
-to mean anything, and the mutual-recursion row is the one where working code (`fn`
-hoisting) is ahead of any written rule.
+built in `ir::lower`. The two top rows that changed on 2026-09-07 are this section's own
+distinction, decided in §statements because that is where the declaration form lives; see
+*Glue Semantics* below. The rows that stay empty are the ones that need modules or an
+image to mean anything.
 
 ---
 
@@ -67,3 +68,21 @@ hoisting) is ahead of any written rule.
 ## Glue Syntax
 
 ## Glue Semantics
+
+> Decided elsewhere. This section still owes its own rules; what is settled lives where it
+> was decided, and is indexed here so there is one place to look.
+
+- **Block scope, shadowing, and use-before-declaration** — §statements.
+- **Capture as a separate static pass**, and what it does to a binding — §functions and
+  [`../core-ir.md`](../core-ir.md).
+- **Locals versus globals. Decided 2026-09-07, in §statements.** A top-level binding is a
+  **global**, and every function in the file may read one whichever order the two are
+  written in; a binding inside a block is a **local**, and a nested `fn` still cannot see
+  one. That is this section's own distinction — Lox's ch. 21 globals against ch. 22 locals
+  — arriving from §statements because that is where the declaration form lives, and it
+  lands the way this section predicted it would matter: a local becomes a wasm local, a
+  global becomes a wasm global.
+
+  **Late binding is untouched by it.** A global is resolved statically to an index, not
+  looked up by name at each use, so none of goal §liveness' redefinition story is bought
+  or spent here. That question is still open and still this section's.

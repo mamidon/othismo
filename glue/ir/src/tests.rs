@@ -187,8 +187,8 @@ fn an_unassigned_constant_binding_stays_unpinned() {
 #[test]
 fn an_assigned_binding_pins_at_its_declaration() {
     let ir = ir("let n = 3; n = 4; n - 5");
-    assert!(ir.contains("(slot 0 n  u64 local)"), "{ir}");
-    assert!(ir.contains("(sub n (const 5u64))"), "{ir}");
+    assert!(ir.contains("(global @n u64)"), "{ir}");
+    assert!(ir.contains("(sub t0 (const 5u64))"), "{ir}");
 }
 
 /// §lexical: context wins over sign.
@@ -316,17 +316,84 @@ fn constant_casts_follow_the_conversion_table() {
 /// scope. Two bindings means two slots, and the dump disambiguates them.
 #[test]
 fn shadowing_makes_a_second_binding() {
-    let ir = ir("let x = 1u64; let x = x + 1u64; x");
-    assert!(ir.contains("(slot 0 x.0"), "{ir}");
-    assert!(ir.contains("(slot 1 x.1"), "{ir}");
+    // At the top level that is a second *global* (§statements).
+    let top = ir("let x = 1u64; let x = x + 1u64; x");
+    assert!(top.contains("(global @x.0 u64)"), "{top}");
+    assert!(top.contains("(global @x.1 u64)"), "{top}");
+
+    // Inside a block it is a second slot, which is the same rule against
+    // different storage.
+    let scoped = ir("{ let x = 1u64; let x = x + 1u64; x }");
+    assert!(scoped.contains("(slot 0 x.0"), "{scoped}");
+    assert!(scoped.contains("(slot 1 x.1"), "{scoped}");
 }
 
 /// §statements: the initializer is evaluated before the binding exists, so
 /// `let x = x;` names the outer one.
+/// §statements: a top-level binding is a global, so a `fn` can read one
+/// without capturing anything — which is what keeps §functions' "a `fn`
+/// carries no environment" true while the wall between the two comes down.
+#[test]
+fn a_top_level_binding_is_a_global() {
+    let ir = ir("let n = 1u64; fn f() -> u64 { n } f()");
+    assert!(ir.contains("(global @n u64)"), "{ir}");
+    assert!(ir.contains("(globalget @n)"), "{ir}");
+    // Not a capture, and so not a slot of `f`.
+    assert!(!ir.contains("capture"), "{ir}");
+}
+
+/// Declarations hoist: a body is walked after the rest of its block, so the
+/// order the two are written in does not matter.
+#[test]
+fn a_fn_reads_a_top_level_binding_declared_below_it() {
+    assert!(
+        lowered("fn f() -> u64 { n } let n = 1u64; f()")
+            .1
+            .is_empty()
+    );
+    assert!(
+        lowered("let n = 1u64; fn f() -> u64 { n } f()")
+            .1
+            .is_empty()
+    );
+}
+
+/// A binding inside a block is still a local, so §functions' rule still bites
+/// there — a global is the top level's storage, not every block's.
+#[test]
+fn a_block_binding_is_still_a_local() {
+    assert_eq!(
+        only_error("fn outer() -> u64 { let a = 1u64; fn inner() -> u64 { a } inner() }"),
+        "`a` is a local of an enclosing function, and a `fn` captures nothing — use a lambda"
+    );
+}
+
+/// Initializers still run in order, so a call can reach a binding whose `let`
+/// has not run. JavaScript answers this at run time; a static call graph lets
+/// this one answer before the program starts.
+#[test]
+fn a_call_reaching_an_uninitialized_global_is_refused() {
+    assert_eq!(
+        only_error("let x = foo(); fn foo() -> u64 { y } let y = 1u64; x"),
+        "`foo` reads `y`, which is not initialized until later in this file"
+    );
+    // Through one more call, which is why the reads are a fixed point.
+    assert_eq!(
+        only_error("let x = a(); fn a() -> u64 { b() } fn b() -> u64 { y } let y = 1u64; x"),
+        "`a` reads `y`, which is not initialized until later in this file"
+    );
+    // The same call below the `let` it reads is fine.
+    assert!(
+        lowered("fn foo() -> u64 { y } let y = 1u64; foo()")
+            .1
+            .is_empty()
+    );
+}
+
 #[test]
 fn an_initializer_names_the_outer_binding() {
     let ir = ir("let x = 1u64; { let x = x; x }");
-    assert!(ir.contains("(assign x.1 x.0)"), "{ir}");
+    assert!(ir.contains("(assign x (globalget @x))"), "{ir}");
 }
 
 /// §statements: assignment must match the binding's type. To give a name a
@@ -433,7 +500,10 @@ fn arity_is_checked() {
 fn a_function_used_as_a_value_is_a_closure() {
     let ir = ir("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)");
     assert!(ir.contains("(closure add)"), "{ir}");
-    assert!(ir.contains("(call-indirect f"), "{ir}");
+    assert!(
+        ir.contains("(call-indirect t1 (const 1u64) (const 2u64))"),
+        "{ir}"
+    );
 }
 
 /// §functions: `mut` on a parameter is permission to mutate the argument in
@@ -479,10 +549,8 @@ fn a_mut_parameter_mutates_through_the_reference() {
     assert!(ir.contains("(slot 0 c  C param mut)"), "{ir}");
     assert!(ir.contains("(slot 1 by u64 param)"), "{ir}");
     assert!(ir.contains("(store (field c n) t3)"), "{ir}");
-    assert!(
-        ir.contains("(drop (call advance tally (const 5u64)))"),
-        "{ir}"
-    );
+    assert!(ir.contains("(global @tally C mut)"), "{ir}");
+    assert!(ir.contains("(drop (call advance t1 (const 5u64)))"), "{ir}");
 }
 
 /// §statements: a plain parameter is an immutable binding, exactly like a

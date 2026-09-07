@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 
 use crate::consts::Const;
-use crate::program::{Block, BlockId, Func, Operand, Place, Program, Rvalue, Slot, Stmt};
+use crate::program::{Block, BlockId, Func, GlobalId, Operand, Place, Program, Rvalue, Slot, Stmt};
 use crate::types::{FieldIdx, TypeDef, TypeId};
 
 /// The whole program: its struct types, then its functions.
@@ -51,6 +51,20 @@ pub fn dump(program: &Program) -> String {
             out.push_str(&Sexp::list(format!("struct {name}"), fields).render(0));
             out.push_str("\n\n");
         }
+    }
+
+    // §statements' top-level bindings. Listed ahead of the functions because
+    // every one of them may read one.
+    for (index, global) in program.globals.iter().enumerate() {
+        out.push_str(&format!(
+            "(global {} {}{})\n",
+            global_text(program, GlobalId(index as u32)),
+            program.type_name(global.ty),
+            if global.mutable { " mut" } else { "" },
+        ));
+    }
+    if !program.globals.is_empty() {
+        out.push('\n');
     }
 
     for (index, func) in program.funcs.iter().enumerate() {
@@ -231,6 +245,7 @@ fn rvalue_text(cx: &Cx, rvalue: &Rvalue) -> String {
             operand_text(cx, *base),
             field_text(cx, *base, *field)
         ),
+        Rvalue::GlobalGet(id) => format!("(globalget {})", global_text(cx.program, *id)),
         Rvalue::MakeCell(operand) => format!("(makecell {})", operand_text(cx, *operand)),
         Rvalue::CellGet(operand) => format!("(cellget {})", operand_text(cx, *operand)),
         Rvalue::MakeClosure { func, captures } => {
@@ -258,6 +273,7 @@ fn arg_text(cx: &Cx, args: &[Operand]) -> String {
 fn place_text(cx: &Cx, place: &Place) -> String {
     match place {
         Place::Cell(slot) => format!("(cell {})", cx.names.of(*slot)),
+        Place::Global(id) => global_text(cx.program, *id),
         Place::Field { base, field } => format!(
             "(field {} {})",
             cx.names.of(*base),
@@ -282,6 +298,24 @@ fn field_text(cx: &Cx, base: Operand, field: FieldIdx) -> String {
             None => field.0.to_string(),
         },
         None => field.0.to_string(),
+    }
+}
+
+/// A global reads as `@name`, so a dump never confuses one with a slot — and
+/// gains its index where §statements' shadowing bound the same name twice,
+/// which is the rule [`SlotNames`] follows for slots.
+fn global_text(program: &Program, id: GlobalId) -> String {
+    let name = program.text(program.global(id).name);
+    let shadowed = program
+        .globals
+        .iter()
+        .filter(|other| program.text(other.name) == name)
+        .count()
+        > 1;
+    if shadowed {
+        format!("@{name}.{}", id.index())
+    } else {
+        format!("@{name}")
     }
 }
 

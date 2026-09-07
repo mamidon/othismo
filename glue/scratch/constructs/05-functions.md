@@ -199,6 +199,12 @@ Keeping `fn` capture-free means every `fn` compiles to a plain wasm function wit
 environment, and it makes the distinction visible in the source rather than inferred from
 whether a name happens to be in scope.
 
+**Reading a top-level binding is not capturing. Added 2026-09-07.** §statements makes
+those **globals**, and a global is a location rather than a frame, so a `fn` body may name
+one freely and still compile to a plain function with no environment. What "captures
+nothing" forbids is reaching another function's *frame* — which is where a block-scoped
+`let` lives, and why a nested `fn` still cannot see one.
+
 ---
 
 ## Glue Semantics

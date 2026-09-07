@@ -75,6 +75,14 @@ pub(crate) struct Machine<'a> {
     /// What each struct type is called, and what its fields are called — for
     /// echoing an instance, and for nothing else. Field access is positional.
     shapes: HashMap<TypeId, Rc<StructShape>>,
+    /// §statements' top-level bindings. One store per global, outside every
+    /// frame — which is what a `fn` reads when it names one, and why reading
+    /// it needs no environment (§functions).
+    ///
+    /// They start as unit and are unobservable until written: a global's `let`
+    /// is a statement of the entry function, and elaboration refuses any
+    /// program that could read one before that statement runs.
+    globals: Vec<Value>,
     /// How many calls are open, against [`RECURSION_LIMIT`].
     depth: usize,
 }
@@ -92,6 +100,7 @@ impl<'a> Machine<'a> {
             program,
             consts,
             shapes,
+            globals: vec![Value::Unit; program.globals.len()],
             depth: 0,
         }
     }
@@ -227,6 +236,13 @@ impl<'a> Machine<'a> {
                     }
                     Ok(Flow::Normal)
                 }
+                // §statements: initializing a top-level binding, and
+                // assigning one, are the same store.
+                Place::Global(id) => {
+                    let value = self.operand(*value, slots);
+                    self.globals[id.index()] = value;
+                    Ok(Flow::Normal)
+                }
                 // §types: assignment through a reference, which every other
                 // holder of that instance observes. `mut` on the binding is
                 // what permitted it, and elaboration checked that.
@@ -337,6 +353,9 @@ impl<'a> Machine<'a> {
                     name: self.name_of(*func),
                 })))
             }
+            // §statements: one load from storage that outlives every frame.
+            // `global.get` on wasm.
+            Rvalue::GlobalGet(id) => Ok(self.globals[id.index()].clone()),
             Rvalue::MakeCell(operand) => {
                 let value = self.operand(*operand, slots);
                 Ok(Value::Cell(Rc::new(RefCell::new(value))))
