@@ -18,37 +18,45 @@ Legend used throughout the section files:
 - **[Lox-omits]** — Bob Nystrom explicitly leaves this out
 - **[wasm]** — the wasm target forces a decision here that a tree-walking interpreter could defer
 
-**Decided is not the same as implemented.** The status columns below track what has been
-*decided*. Several decided constructs are deliberately absent from `glue/`, so that the
-implemented language stays small enough to think about while the parts that make Glue
-*Glue* are still being found. Their spec text stays where it is, marked **Cut from the
-core**, and [Deferred decisions](constructs/deferred.md#cut-from-the-core) lists them with
-what each costs and what comes back with it.
+**Decided is not the same as implemented**, so the table tracks both. *Syntax* and
+*Semantics* record what has been **decided**; *Implementation* records what is **built** in
+`glue/`. The two move independently, and the table is worth reading for where they
+disagree: §scope has working scoping and no written spec, §comptime is specified in detail
+and implemented nowhere.
+
+Several decided constructs are deliberately absent from `glue/`, so that the implemented
+language stays small enough to think about while the parts that make Glue *Glue* are still
+being found. Their spec text stays where it is, marked **✂**, and
+[Deferred decisions](constructs/deferred.md#cut-from-the-core) lists them with what each
+costs and what comes back with it.
+
+Each section file opens with the same table for its own sub-areas, so this one is a
+summary of sixteen others rather than the only place progress is recorded.
 
 ---
 
 ## Sections
 
-Status: **—** not started · **◑** partially defined · **✓** defined
+Status: **✓** done · **◑** partial · **—** none · **·** not applicable · **✂** cut from the core
 
-| § | Section | Covers | Syntax | Semantics |
-| --- | --- | --- | --- | --- |
-| §lexical | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
-| §expressions | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ |
-| §statements | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | ◑ | ◑ |
-| §control | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | ◑ | ◑ |
-| §functions | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | ◑ | ◑ |
-| §types | [Data and types](constructs/06-data-and-types.md) | Primitives, aggregates, memory, representation | ◑ | ◑ |
-| §unions | [Unions and pattern matching](constructs/07-unions-and-pattern-matching.md) | Sum types, patterns, exhaustiveness | — | — |
-| §generics | [Generics and polymorphism](constructs/08-generics.md) | Type parameters, bounds, monomorphize vs. box | — | — |
-| §errors | [Error handling](constructs/09-error-handling.md) | Exceptions vs. results, traps, failure across messages | — | — |
-| §inference | [Type inference and gradual typing](constructs/10-type-inference.md) | Optional annotations, inference scope, dynamic values | — | — |
-| §objects | [Objects and abstraction](constructs/11-objects-and-abstraction.md) | Classes/actors, dispatch, inheritance | — | — |
-| §scope | [Scope and name resolution](constructs/12-scope-and-names.md) | Lexical scoping, shadowing, late binding | — | — |
-| §modules | [Modules and program structure](constructs/13-modules-and-program-structure.md) | Imports, visibility, entry point, Othismo namespace | — | — |
-| §comptime | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | ◑ | ◑ |
-| §semantics | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | — | — |
-| §wasm | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | — | — |
+| § | Section | Covers | Syntax | Semantics | Impl |
+| --- | --- | --- | --- | --- | --- |
+| §lexical | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ | ✓ |
+| §expressions | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ | ◑ |
+| §statements | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | ◑ | ◑ | ◑ |
+| §control | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | ◑ | ◑ | ✓ |
+| §functions | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | ◑ | ◑ | ✓ |
+| §types | [Data and types](constructs/06-data-and-types.md) | Primitives, aggregates, memory, representation | ◑ | ◑ | ◑ |
+| §unions | [Unions and pattern matching](constructs/07-unions-and-pattern-matching.md) | Sum types, patterns, exhaustiveness | — | — | — |
+| §generics | [Generics and polymorphism](constructs/08-generics.md) | Type parameters, bounds, monomorphize vs. box | ◑ | ◑ | — |
+| §errors | [Error handling](constructs/09-error-handling.md) | Exceptions vs. results, traps, failure across messages | — | ◑ | ◑ |
+| §inference | [Type inference and gradual typing](constructs/10-type-inference.md) | Optional annotations, inference scope, dynamic values | ◑ | ◑ | ◑ |
+| §objects | [Objects and abstraction](constructs/11-objects-and-abstraction.md) | Classes/actors, dispatch, inheritance | ◑ | — | — |
+| §scope | [Scope and name resolution](constructs/12-scope-and-names.md) | Lexical scoping, shadowing, late binding | ◑ | ◑ | ◑ |
+| §modules | [Modules and program structure](constructs/13-modules-and-program-structure.md) | Imports, visibility, entry point, Othismo namespace | ◑ | ◑ | ◑ |
+| §comptime | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | ◑ | ◑ | ◑ |
+| §semantics | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | · | ◑ | ◑ |
+| §wasm | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | · | ◑ | — |
 
 Alongside the numbered sections, [**Deferred decisions**](constructs/deferred.md) is a
 companion register of things consciously postponed — what was deferred, why, and what it

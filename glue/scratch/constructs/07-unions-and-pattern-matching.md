@@ -28,6 +28,31 @@ Three things to watch:
   matching a statically-known union. Whether that's the same construct, or pattern
   matching plus a runtime type test, is a real decision.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Union declaration and payload forms | — | — | — |
+| Construction; constructors as values | — | — | — |
+| Patterns — literal, wildcard, binding, destructuring | — | — | — |
+| Or-patterns, guards, range and nested patterns | — | — | — |
+| Exhaustiveness and redundancy checking | — | — | — |
+| `match` as an expression | — | — | — |
+| Irrefutable patterns in `let` and parameters | — | — | — |
+| Refutable sugar — `if let` / `while let` | — | — | — |
+| Openness and versioning across a boundary | — | — | — |
+| Representation — tag and payload layout | — | — | — |
+| Matching dynamic and host data | — | — | — |
+
+Nothing here is decided. `match` is a reserved word the parser rejects, and a `let`
+pattern is a plain name — `NamePat` is the whole of patterns today, shaped so the rest
+can land inside it without the tree changing.
+
+---
+
 ## Checklist
 
 - **Union declaration**

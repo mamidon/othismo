@@ -17,6 +17,30 @@ Two of the constructs on that list — iteration and async — need things Glue 
 yet, and are left out rather than sketched. What remains is the branching and looping a
 language needs to work at all.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Conditionals — `if` / `else if` / `else` | ✓ | ✓ | ✓ |
+| `while` | ✓ | ✓ | ✓ |
+| `break` and `continue` | ✓ | ✓ | ✓ |
+| `return` | ✓ | ✓ | ✓ |
+| Conditions must be `bool` | · | ✓ | ✓ |
+| Loop values and non-termination | · | ✓ | ✓ |
+| Structured control flow; `goto` declined | · | ✓ | ✓ |
+| Labelled `break` / `continue` | — | — | — |
+| Iteration — `for … in` | — | — | — |
+| Async and suspension | — | — | — |
+
+Everything §control has decided is implemented. The three open rows all wait on
+prerequisites in other sections — an iterable (§types) and ranges for iteration, something
+to await (§objects, §modules) for async.
+
+---
+
 ## Checklist
 
 - **`if` / `else`** — `"if" "(" expression ")" statement ( "else" statement )?` **[Lox]**

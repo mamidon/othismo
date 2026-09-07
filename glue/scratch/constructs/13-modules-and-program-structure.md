@@ -43,6 +43,36 @@ may resolve against the image rather than the filesystem — and the question of
 source text or image state is authoritative stops being philosophical and becomes a
 resolution algorithm.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Entry point — a file is a block with a trailing value | ◑ | ◑ | ◑ |
+| Unit of modularity | — | — | — |
+| Import forms | — | — | — |
+| Export and visibility | — | — | — |
+| Resolution — paths, search order, ambiguity | — | — | — |
+| Cycles | — | — | — |
+| Separate compilation and interfaces | — | — | — |
+| Initialization order | — | — | — |
+| Host imports — how a module declares what it needs | — | — | — |
+| The Othismo mapping — module, wasm module, or instance | — | — | — |
+| Late binding and module replacement | — | — | — |
+| Capability scoping | — | — | — |
+| Standard library and prelude | — | — | ◑ |
+| Source of truth — files or the image | — | — | — |
+
+The entry-point row is ◑ across the board because §statements decided half of it — a file
+is a block and its trailing expression is its value, which is what `glue file.glue` runs —
+and what a *deployed* module exports is untouched. The prelude row is ◑ in implementation
+only: `ir::lower` predeclares the type names and nothing else, so there are no functions
+in scope at all. `import` and `export` are reserved words the parser rejects.
+
+---
+
 ## Checklist
 
 - **Unit of modularity** — file, directory, or an explicit `module` declaration; nesting;

@@ -16,6 +16,38 @@ not implementation details.
 Precedence and associativity deserve to be written down as a full table before any of
 it is implemented; it is the part most often gotten wrong.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Blocks and `if` as expressions; the semicolon rule | ✓ | ✓ | ✓ |
+| Precedence and associativity | ✓ | ✓ | ✓ |
+| Bitwise and shift operators; unary `~` (levels 6–9) | ✓ | ✓ | ✂ |
+| Arithmetic operators | ✓ | ✓ | ✓ |
+| Comparison; non-associativity; no truthiness | ✓ | ✓ | ✓ |
+| Logical operators and short-circuiting | ✓ | ✓ | ✓ |
+| String `+` and byte-wise comparison | ✓ | ✓ | ✓ |
+| Conversions — `as`, explicit and trapping | ✓ | ✓ | ✓ |
+| Named lossy conversions — `wrapping_as_*`, `saturating_as_*` | ✓ | ✓ | — |
+| Grouping | ✓ | ✓ | ✓ |
+| Evaluation order | · | ✓ | ✓ |
+| Constant folding and compile-time trap checks | · | ✓ | ✓ |
+| Equality and ordering | ✓ | ✓ | ◑ |
+| Field access | ✓ | ✓ | ✓ |
+| Method calls — `a.b(…)` | ✓ | — | — |
+| Indexing — `a[i]` | ✓ | — | — |
+| Range syntax; pipeline `\|>` | — | — | — |
+
+Equality is ◑ because the interpreter compares two structs by identity where §types
+specifies structural equality — see §types' table. Method calls and indexing parse and
+reach elaboration, which reports them as unsupported; their meaning is §objects' and
+§types'.
+
+---
+
 ## Lox's precedence ladder **[Lox]**
 
 Lowest to highest binding:

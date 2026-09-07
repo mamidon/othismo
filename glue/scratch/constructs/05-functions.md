@@ -14,6 +14,34 @@ The item that matters most for Glue is the last one: **foreign / host functions*
 source-level declaration becomes a wasm import from the Othismo host, and how an exported
 handler becomes something Othismo can call, is the seam the whole language sits on.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Declaration — `fn`, annotated signature | ✓ | ✓ | ✓ |
+| Parameters; `mut` parameters and the call-site rule | ✓ | ✓ | ✓ |
+| Default, named, and variadic arguments — declined for now | ✓ | · | · |
+| Functions as values; the `fn(T, …) -> R` type | ✓ | ✓ | ✓ |
+| Lambdas — `(x) -> …`, types from context | ✓ | ✓ | ✓ |
+| Nested `fn`, which captures nothing | ✓ | ✓ | ✓ |
+| Closures — capture by reference, per-iteration bindings | · | ✓ | ✓ |
+| Calls — arity and type checking, recursion | · | ✓ | ✓ |
+| No tail-call guarantee; deep recursion traps | · | ✓ | ✓ |
+| Parameter passing — by value, `mut` by reference | · | ✓ | ✓ |
+| Unit as a real value | · | ✓ | ✓ |
+| Methods and receivers | — | — | — |
+| Host and foreign functions | — | — | — |
+| Generics | — | — | — |
+
+Everything §functions has decided is implemented, closures and cells included. Host
+functions are this section's biggest absence and are §modules' to design: until they
+exist a Glue program can compute but cannot observably *do* anything.
+
+---
+
 ## Lox's grammar **[Lox]**
 
 ```

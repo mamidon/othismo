@@ -49,6 +49,29 @@ of type arguments, and generic message handlers. The cost §comptime accepts on 
 behalf is that a generic body is type-checked only when instantiated, so an uninstantiated
 generic gets parsing and name resolution and nothing more.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Type parameters — a generic is a function over `Type` | ✓ | ✓ | — |
+| Instantiation — an instantiation is a call | ✓ | ✓ | — |
+| Monomorphization, memoized on `(declaration, arguments)` | · | ✓ | — |
+| Bounds and constraints | — | — | — |
+| Variance | — | — | — |
+| Inference of type arguments at a call site | — | — | — |
+| Generic collections | — | — | — |
+| Generic message handlers | — | — | — |
+| Checking an uninstantiated generic | — | — | — |
+
+The first three rows were decided in §comptime rather than here, which is why this
+section has no syntax of its own. None of it is implemented: `comptime` has no token, so
+there is no `Type`, no instantiation, and no cache.
+
+---
+
 ## Checklist
 
 - **Generic functions** — declaration syntax, parameter list placement, and how they read

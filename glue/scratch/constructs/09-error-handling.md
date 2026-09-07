@@ -36,6 +36,32 @@ Goal §scale is the live tension. Silent failure and terse errors make one-liner
 and ten-thousand-line programs untrustworthy; this is one of the features where "choose
 per-feature, repeatedly" has to produce an actual rule.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Traps — overflow, division by zero, stack exhaustion | · | ✓ | ✓ |
+| Error taxonomy — compile error, trap, recoverable failure | — | ◑ | ◑ |
+| Whether a trap is recoverable | — | — | — |
+| `Result` and `Option` as library types | — | — | — |
+| Propagation operator (`?`) | — | — | — |
+| Error type unification and added context | — | — | — |
+| Cleanup — `defer`, scope guards | — | — | — |
+| Failure at the message boundary | — | — | — |
+| Supervision and recovery | — | — | — |
+| Interactive behaviour at a prompt | — | — | — |
+| Diagnostics — provenance, traces, telemetry | — | — | ◑ |
+
+The trap row is decided in §expressions and §functions and implemented; the taxonomy
+around it is not written down here yet, which is why the second row is ◑ rather than ✓.
+Diagnostics are ◑ because every IR node carries provenance back to a CST node, which is
+the machinery a trace would use, with nothing yet reading it.
+
+---
+
 ## Checklist
 
 - **Error taxonomy** — what is a compile error, a recoverable runtime error, a trap, a

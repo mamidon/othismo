@@ -18,6 +18,36 @@ Note that this file's **Glue Semantics** section is the substantive one; **Glue 
 will mostly stay empty by construction, and where it doesn't, that's a sign the decision
 actually belongs in another section.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Evaluation order — left to right, specified | · | ✓ | ✓ |
+| Short-circuiting | · | ✓ | ✓ |
+| Coercion — none, and no truthiness | · | ✓ | ✓ |
+| Integer overflow and division by zero | · | ✓ | ✓ |
+| NaN, ±0, and float determinism | · | ✓ | ✓ |
+| Mutability and aliasing | · | ✓ | ✓ |
+| Identity versus equality | · | ◑ | ◑ |
+| String encoding and indexing | · | ◑ | ◑ |
+| Trap taxonomy — what belongs in each bucket | · | ◑ | ◑ |
+| A total-order companion to IEEE `==` | · | — | — |
+| Resource limits — stack depth, memory growth | · | ◑ | ◑ |
+| Initialization order of globals and modules | · | — | — |
+| Reentrancy and the message model | · | — | — |
+
+The **Syntax** column is `·` throughout by construction — that is what this section is.
+Most of what it owns was in fact decided in §expressions, §types, and §functions and is
+implemented; this table is the first place they are collected. Identity-versus-equality is
+◑ because §types and the interpreter currently disagree; string indexing is ◑ because the
+encoding is decided and indexing is not implemented; resource limits are ◑ because the
+recursion limit exists and memory growth has no answer.
+
+---
+
 ## Checklist
 
 - **Evaluation order** of operands and arguments (left-to-right, or unspecified)

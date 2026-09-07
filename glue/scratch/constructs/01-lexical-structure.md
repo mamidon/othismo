@@ -18,6 +18,35 @@ Two goals pull hardest here. §one-language of the goals (one language from one-
 module) wants terse, low-ceremony surface syntax; §boring (boring syntax) wants
 conventional spellings for everything, since the novelty budget is committed elsewhere.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Source text — UTF-8, BOM, line endings | ✓ | ✓ | ✓ |
+| Identifiers and keywords | ✓ | ✓ | ✓ |
+| Line and block comments | ✓ | ✓ | ✓ |
+| Doc comments (`///`) | ✓ | ✓ | ✂ |
+| Terminators and blocks | ✓ | ✓ | ✓ |
+| Number literals — radix, separators, exponent, suffixes | ✓ | ✓ | ✓ |
+| Integer literal typing — unpinned constants, pinning by context | ✓ | ✓ | ✓ |
+| Float literal typing | ✓ | ✓ | ✓ |
+| String and character literals, escapes | ✓ | ✓ | ✓ |
+| Raw and multi-line strings | ✓ | ✓ | ✂ |
+| String interpolation | — | — | — |
+| Collection literals | — | — | — |
+| Boolean literals; no `nil` | ✓ | ✓ | ✓ |
+| Placeholder punctuation (`::`, `..`, `...`) | ✓ | · | ✂ |
+| Lexing and left context | ✓ | ✓ | ✓ |
+
+Collection literals and interpolation wait on §generics and §objects respectively; both
+are deferrals rather than omissions. `## Implementation` below covers what
+`glue/tokenizer` guarantees beyond the spelling.
+
+---
+
 ## Checklist
 
 - **Identifiers** — `ALPHA ( ALPHA | DIGIT )*`, `ALPHA` includes `_` **[Lox]**

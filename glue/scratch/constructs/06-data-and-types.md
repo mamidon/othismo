@@ -19,6 +19,38 @@ namespace rather than in linear memory, that changes what the data model should 
 And memory is the part wasm will not let you defer — GC, allocation, layout, and string
 representation all leak into the host ABI whether or not you intend them to.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Primitive types | ✓ | ✓ | ✓ |
+| Structs — declaration, literals, field access | ✓ | ✓ | ✓ |
+| Field mutability follows the binding | ✓ | ✓ | ✓ |
+| Anonymous `struct { … }` as an expression | ✓ | ✓ | — |
+| Type aliases | ✓ | ✓ | ✓ |
+| Reference semantics | · | ✓ | ✓ |
+| Equality | · | ✓ | ◑ |
+| Type identity — every `struct { … }` is fresh | · | ✓ | ✓ |
+| Memory — garbage collection, cycles collected | · | ✓ | ◑ |
+| Field visibility | — | — | — |
+| Opt-in value semantics (Rust's `Copy`) | — | — | — |
+| Collections — lists, maps, arrays, sets | — | — | — |
+| Indexing and slicing | — | — | — |
+| Tuples | — | — | — |
+| Traits and operator overloading | — | — | — |
+
+**Two rows where the implementation and this section disagree, and the section is
+authoritative.** *Equality* above says two structs are `==` when their fields are;
+`interpreter/src/ops.rs` compares them with `Rc::ptr_eq`, so structurally equal structs
+compare unequal. *Memory* says cycles are collected; the interpreter holds values in `Rc`,
+so a cycle leaks. Neither is a decision that was revisited — both are the implementation
+running ahead of a collector and behind a rule.
+
+---
+
 ## Checklist
 
 - **Primitives** — bool, number (f64), string, nil **[Lox]**

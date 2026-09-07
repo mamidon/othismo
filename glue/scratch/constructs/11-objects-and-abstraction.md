@@ -19,6 +19,33 @@ probably far too slow, which implies two kinds of object — cheap in-instance o
 addressable instance-level ones — and a language that makes that distinction visible
 without making it miserable.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Method call syntax — `a.b(…)` | ✓ | — | — |
+| Class or actor declaration | — | — | — |
+| Methods and receivers; `self` | — | — | — |
+| Constructors | — | — | — |
+| Inheritance, composition, or neither | — | — | — |
+| Traits, interfaces, and operator overloading | — | — | — |
+| Visibility | — | — | — |
+| An operator for reference identity | — | — | — |
+| A conversion interface | — | — | — |
+| Bound methods — is `obj.method` a value? | — | — | — |
+| Actors as instances in the Othismo namespace | — | — | — |
+
+Only the spelling exists: the parser has a `MethodCallExpr` node, deliberately not a call
+wrapping a field access, so that this section can still decide whether `x.f()` is a method
+call or a message send. Elaboration reports it as unsupported. Several other sections are
+waiting on rows here — string interpolation on the conversion interface, `==` on identity,
+operator overloading on traits.
+
+---
+
 ## Lox's grammar **[Lox]**
 
 ```

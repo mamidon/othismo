@@ -16,6 +16,39 @@ name. And the same goal makes test declarations more than good hygiene: an inter
 a compiler must be held to a shared conformance suite from the day there are two back
 ends.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| `comptime` — a parameter position and an expression prefix | ✓ | ✓ | — |
+| `Type` as a value with no runtime representation | ✓ | ✓ | — |
+| Generics as functions over `Type` | ✓ | ✓ | — |
+| Instantiation memoized on `(declaration, arguments)` | · | ✓ | — |
+| Declaration forms as sugar — `struct`, `type` | ✓ | ✓ | ◑ |
+| Comptime is hermetic | · | ✓ | · |
+| Comptime evaluation is bounded by fuel | · | ✓ | — |
+| Macros — declined | · | ✓ | · |
+| What reaches the back ends — core IR | · | ✓ | ✓ |
+| Attributes | — | — | — |
+| Conditional compilation | — | — | — |
+| Reflection | — | — | — |
+| Doc generation | — | — | — |
+| Debug info | — | — | — |
+| Test declarations | — | — | — |
+
+**The widest gap between decided and built in the whole checklist.** The compile-time
+evaluation rows are settled in detail and implemented nowhere: `comptime` has no token, so
+there is no `Type`, no instantiation cache, and no second configuration of the evaluator.
+What *is* built is the thing those decisions were made for — core IR, specified in
+[`../core-ir.md`](../core-ir.md) and implemented in `glue/ir`. The sugar row is ◑ because
+`struct Point { … }` and `type X = …` both work while the anonymous `struct { … }`
+expression they desugar to does not.
+
+---
+
 ## Checklist
 
 - **Macros** — textual, syntactic, or hygienic; or none

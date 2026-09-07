@@ -18,6 +18,33 @@ checkable, and it's also the mechanism that makes redefining something in a live
 possible at all (goal §liveness, §image). Which names are late-bound is therefore a
 liveness decision wearing a scoping decision's clothes.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Lexical block scope | ✓ | ✓ | ✓ |
+| Shadowing | ✓ | ✓ | ✓ |
+| Use before declaration is a static error | · | ✓ | ✓ |
+| Closure capture as a separate static pass | · | ✓ | ✓ |
+| Name resolution order — locals, enclosing, prelude | — | ◑ | ◑ |
+| Top-level order-independence and mutual recursion | — | — | ◑ |
+| Globals versus locals | — | — | — |
+| Late binding as a liveness mechanism | — | — | — |
+| Namespacing of member names | — | — | — |
+| Bindings introduced by patterns | — | — | — |
+| Redefinition in a live session | — | — | — |
+
+This section has more implementation than spec. Scopes, shadowing, capture analysis, and
+the prelude all work — they were decided in §statements, §functions, and `core-ir.md` and
+built in `ir::lower`. The rows that stay empty are the ones that need modules or an image
+to mean anything, and the mutual-recursion row is the one where working code (`fn`
+hoisting) is ahead of any written rule.
+
+---
+
 ## Checklist
 
 - **Lexical scoping** **[Lox]**, ch. 11 — resolving and binding

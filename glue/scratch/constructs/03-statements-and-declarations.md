@@ -12,6 +12,34 @@ This section is where goal §one-language bites hardest: "a bare expression is a
 program" and "no required `main`, no module preamble" are both claims about what the top
 level of `program` accepts.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| The statement/expression split | ✓ | ✓ | ✓ |
+| Bindings — `let`, `mut`, annotations | ✓ | ✓ | ✓ |
+| Constants — an unassigned constant binding stays unpinned | ✓ | ✓ | ✓ |
+| Shadowing, including in the same scope | ✓ | ✓ | ✓ |
+| Assignment (`=`) and places | ✓ | ✓ | ◑ |
+| Compound assignment (`+=` …) | ✓ | ✓ | ✂ |
+| Expression statements | ✓ | ✓ | ✓ |
+| The top level — a file is a block | ✓ | ✓ | ✓ |
+| Scope and lifetime | · | ✓ | ✓ |
+| Initialization | · | ✓ | ✓ |
+| Mutation — what `mut` gates | · | ✓ | ✓ |
+| Destructuring patterns in `let` | — | — | — |
+| Top-level order-independence and mutual recursion | · | ◑ | ◑ |
+
+Assignment is ◑ only because an index is a place the spec admits and elaboration does not
+(§types). Order-independence is ◑ in both columns: `fn` declarations are hoisted and
+mutually recursive, `let` statements run in order, and the rule that reconciles them is
+still owned by §scope and §modules.
+
+---
+
 ## Lox's grammar **[Lox]**
 
 ```

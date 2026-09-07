@@ -15,6 +15,39 @@ memory, module replacement with state migration, an interpreter tier inside a ru
 instance, or some combination — will reach back into the memory model, the module system,
 and what "an object" even means.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| **A wasm back end** | · | · | — |
+| Number types — `i32/i64/f32/f64` and the width question | · | ✓ | ✓ |
+| Structured control flow | · | ✓ | ✓ |
+| Closures — environment objects and function tables | · | ✓ | ◑ |
+| Tail calls — no guarantee | · | ✓ | ✓ |
+| Strings — representation you own | · | ✓ | ◑ |
+| Memory management | · | ◑ | ◑ |
+| Monomorphization | · | ✓ | — |
+| Dynamic dispatch | · | — | — |
+| Exceptions | · | — | — |
+| Host interop — imports and exports | · | — | — |
+| ABI — struct layout, calling convention | · | — | — |
+| Multi-value returns | · | — | — |
+| Union representation | · | — | — |
+| Boxing for unannotated values | · | — | — |
+| Module linking, static or late | · | — | — |
+| Component model / WIT | · | — | — |
+
+The first row is the honest headline: **there is no wasm back end**, so every decision
+below it is validated by one consumer rather than two. Core IR was built as the shared
+artifact two back ends consume, and goal §both-modes asks for a conformance suite from the
+first day there are two of them — that day has not come. Rows marked ◑ in implementation
+are ones the interpreter satisfies by a different route than wasm will.
+
+---
+
 ## Checklist
 
 | Decision | Why it's forced | Lands in |

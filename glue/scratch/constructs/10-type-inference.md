@@ -31,6 +31,32 @@ usually means boxed, dynamically dispatched values, so there's a **performance c
 the annotation boundary**, plus a soundness question about whether annotations are trusted
 or checked. Neither is fatal. Both are much cheaper to decide now.
 
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| Local inference — signatures annotated, bodies inferred | ✓ | ✓ | ✓ |
+| Literal defaulting and pinning by context | ✓ | ✓ | ✓ |
+| Lambda parameter and return types from context | ✓ | ✓ | ✓ |
+| Where annotations are required | ◑ | ◑ | ◑ |
+| `dynamic` / gradual typing, and host data | — | — | — |
+| Soundness and blame at the boundary | — | — | — |
+| Representation and the performance cliff | — | — | — |
+| Inference of generic type arguments | — | — | — |
+| Interactive and incremental typing | — | — | — |
+| Separate compilation and module interfaces | — | — | — |
+| Runtime type information | — | — | — |
+
+The first three rows were decided in §functions and §lexical and are implemented in
+`ir::lower` — this section has working inference without having written its own spec.
+What stays undecided is everything gradual: the moment a value can be dynamic, the
+soundness and cliff rows stop being hypothetical.
+
+---
+
 ## Checklist
 
 - **Inference scope**
