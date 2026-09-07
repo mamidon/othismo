@@ -2,8 +2,11 @@
 //!
 //! Deliberately thin: it owns the protocol, the document store, and the
 //! mapping between byte offsets and LSP positions. Everything about the
-//! *language* lives in `parser` and `tokenizer`, so the same front end can
-//! serve the compiler and the interpreter (design goal §both-modes).
+//! *language* lives in `tokenizer`, `parser`, and `ir`, so the same front end
+//! serves the editor, the interpreter, and the wasm back end when it arrives
+//! (design goal §both-modes). A squiggle in the editor is therefore the same
+//! diagnostic the compiler gives, produced by the same code rather than by a
+//! second opinion that can drift from it.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -49,47 +52,9 @@ impl Backend {
             .await;
     }
 
-    /// Everything wrong with `text`, lexical and grammatical.
-    ///
-    /// Both lists, always: the tokenizer and the parser are each total, so a
-    /// file that lexes badly still parses and a file that parses badly still
-    /// produces a tree. Reporting only the first failure would hide the rest
-    /// for no gain.
+    /// Everything wrong with `text`. See [`diagnostics_for`].
     fn diagnose(&self, text: &str) -> Vec<Diagnostic> {
-        let index = LineIndex::new(text);
-        let lexed = tokenizer::tokenize(text);
-        let parsed = parser::parse(text);
-
-        let lexical = lexed.diagnostics.iter().map(|diagnostic| {
-            (
-                diagnostic.span,
-                diagnostic.message(),
-                diagnostic.severity(),
-                "glue (lex)",
-            )
-        });
-        let grammatical = parsed.diagnostics.iter().map(|diagnostic| {
-            (
-                diagnostic.span,
-                diagnostic.message(),
-                diagnostic.severity(),
-                "glue",
-            )
-        });
-
-        lexical
-            .chain(grammatical)
-            .map(|(span, message, severity, source)| Diagnostic {
-                range: range_of(span, &index),
-                severity: Some(match severity {
-                    tokenizer::Severity::Error => DiagnosticSeverity::ERROR,
-                    tokenizer::Severity::Warning => DiagnosticSeverity::WARNING,
-                }),
-                source: Some(source.to_string()),
-                message: message.to_string(),
-                ..Diagnostic::default()
-            })
-            .collect()
+        diagnostics_for(text)
     }
 }
 
@@ -108,6 +73,71 @@ impl Backend {
     fn text_of(&self, uri: &Url) -> Option<String> {
         self.documents.lock().unwrap().get(uri).cloned()
     }
+}
+
+/// Everything wrong with `text` — lexical, grammatical, and, once those
+/// are clean, everything elaboration has to say.
+///
+/// The first two lists come out together, always: the tokenizer and the
+/// parser are each total, so a file that lexes badly still parses and a
+/// file that parses badly still produces a tree. Reporting only the first
+/// failure would hide the rest for no gain.
+///
+/// **Elaboration is different, and waits.** Its diagnostics are about a
+/// program, and a half-typed one is not yet a program: an unfinished `let`
+/// leaves a name unbound, and reporting that on every keystroke would bury
+/// the syntax error that actually explains it. So type errors appear once
+/// the file parses, which is the rule every other language server in this
+/// shape follows.
+fn diagnostics_for(text: &str) -> Vec<Diagnostic> {
+    let index = LineIndex::new(text);
+    let lexed = tokenizer::tokenize(text);
+    let parsed = parser::parse(text);
+
+    let lexical = lexed.diagnostics.iter().map(|diagnostic| {
+        (
+            diagnostic.span,
+            diagnostic.message().to_string(),
+            diagnostic.severity(),
+            "glue (lex)",
+        )
+    });
+    let grammatical = parsed.diagnostics.iter().map(|diagnostic| {
+        (
+            diagnostic.span,
+            diagnostic.message().to_string(),
+            diagnostic.severity(),
+            "glue",
+        )
+    });
+
+    let syntax_is_clean = lexed.diagnostics.is_empty() && parsed.diagnostics.is_empty();
+    let elaborated = syntax_is_clean
+        .then(|| ir::lower(&parsed.tree, text).diagnostics)
+        .unwrap_or_default();
+    let semantic = elaborated.iter().map(|diagnostic| {
+        (
+            diagnostic.span,
+            diagnostic.message(),
+            diagnostic.severity(),
+            "glue (type)",
+        )
+    });
+
+    lexical
+        .chain(grammatical)
+        .chain(semantic)
+        .map(|(span, message, severity, source)| Diagnostic {
+            range: range_of(span, &index),
+            severity: Some(match severity {
+                tokenizer::Severity::Error => DiagnosticSeverity::ERROR,
+                tokenizer::Severity::Warning => DiagnosticSeverity::WARNING,
+            }),
+            source: Some(source.to_string()),
+            message,
+            ..Diagnostic::default()
+        })
+        .collect()
 }
 
 fn range_of(span: tokenizer::Span, index: &LineIndex) -> Range {
@@ -208,7 +238,7 @@ impl LanguageServer for Backend {
         let parsed = parser::parse(&text);
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
-            data: semantic::tokens(&parsed.tree, &index),
+            data: semantic::tokens(&parsed.tree, &text, &index),
         })))
     }
 
@@ -225,4 +255,77 @@ async fn main() {
         .custom_method("glue/syntaxTree", Backend::syntax_tree)
         .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn of(source: &str) -> Vec<(String, String)> {
+        diagnostics_for(source)
+            .into_iter()
+            .map(|diagnostic| (diagnostic.source.unwrap_or_default(), diagnostic.message))
+            .collect()
+    }
+
+    #[test]
+    fn a_clean_file_says_nothing() {
+        assert!(of("let x = 2u64; x * 21u64").is_empty());
+    }
+
+    /// The point of the exercise: a type error is an editor squiggle, not a
+    /// surprise at run time.
+    #[test]
+    fn a_type_error_is_reported() {
+        let reported = of("let x: Str = 42u64;");
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].0, "glue (type)");
+        assert!(reported[0].1.contains("expected `Str`, found `u64`"));
+    }
+
+    #[test]
+    fn every_elaboration_error_is_reported_not_just_the_first() {
+        let reported = of("let a: Str = 1u64; let b: u64 = \"two\";");
+        assert_eq!(reported.len(), 2, "{reported:#?}");
+        assert!(reported.iter().all(|(source, _)| source == "glue (type)"));
+    }
+
+    /// Elaboration waits for a parse. A half-typed line leaves names unbound,
+    /// and "no binding named `x`" on top of "expected an expression" explains
+    /// nothing that the syntax error did not already say.
+    #[test]
+    fn type_errors_wait_until_the_file_parses() {
+        let reported = of("let x: Str = 42u64; let y = ;");
+        assert!(
+            reported.iter().all(|(source, _)| source != "glue (type)"),
+            "{reported:#?}"
+        );
+        assert!(reported.iter().any(|(source, _)| source == "glue"));
+    }
+
+    /// Lexical and grammatical problems still come out together.
+    #[test]
+    fn a_lexical_error_does_not_hide_a_grammatical_one() {
+        let reported = of("let x = \"unterminated");
+        assert!(reported.iter().any(|(source, _)| source == "glue (lex)"));
+        assert!(reported.iter().any(|(source, _)| source == "glue"));
+    }
+
+    /// A construct the parser accepts and elaboration cannot run reaches the
+    /// editor as an ordinary diagnostic rather than silence.
+    #[test]
+    fn an_unsupported_construct_is_reported() {
+        let reported = of("let s = \"hi\"; s[0]");
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].0, "glue (type)");
+        assert!(reported[0].1.contains("indexing is not supported yet"));
+    }
+
+    /// Today's rule, and the one most likely to be typed by accident.
+    #[test]
+    fn reading_a_global_too_early_is_reported() {
+        let reported = of("let x = foo(); fn foo() -> u64 { y } let y = 1u64; x");
+        assert_eq!(reported.len(), 1, "{reported:#?}");
+        assert!(reported[0].1.contains("not initialized until later"));
+    }
 }

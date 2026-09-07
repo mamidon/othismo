@@ -1,0 +1,45 @@
+// A whole program, rather than a catalogue of one construct.
+//
+// The other examples exist to cover the grammar, and several of them name
+// syntax the language cannot run yet. This one is the opposite: every line of
+// it elaborates and executes, so it is the honest answer to "what can Glue do
+// today". Running it prints 313, which is the value of its trailing
+// expression (§statements — a file is a block).
+
+struct Counter { hits: u64, label: Str }
+
+// §statements: a top-level binding is a global, so the functions below may
+// read and mutate it whichever order the two are written in.
+let mut shared = Counter { hits: 0, label: "requests" };
+
+// §functions: `mut` on a parameter is permission to mutate the caller's
+// instance, and §types' reference semantics is what carries the change back.
+fn bump(c: mut Counter, by: u64) { c.hits = c.hits + by; }
+
+// Checked whether or not anything calls it.
+fn describe(c: Counter) -> Str { c.label }
+
+fn collatz(n: u64) -> u64 {
+  let mut steps = 0u64;
+  let mut cur = n;
+  while cur != 1u64 {
+    cur = if cur % 2u64 == 0u64 { cur / 2u64 } else { 3u64 * cur + 1u64 };
+    steps = steps + 1u64;
+  }
+  steps
+}
+
+// §functions: neither parameter is annotated. Both types and both return
+// types come from the annotation on the binding.
+let adder: fn(u64) -> fn(u64) -> u64 = (a) -> (b) -> a + b;
+let add10 = adder(10u64);
+
+// The `7` is an unpinned constant (§lexical), pinned to `u64` by the
+// parameter it lands in rather than by a suffix.
+bump(shared, 7);
+bump(shared, collatz(27u64));
+
+// §expressions: `as` is explicit and trapping, in both directions.
+let scaled = (shared.hits as f64) * 1.5;
+
+add10(shared.hits) + (scaled as u64) + collatz(6u64)

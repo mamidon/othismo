@@ -8,7 +8,7 @@ import {
   TransportKind,
 } from 'vscode-languageclient/node';
 
-import { DepthTint, SyntaxNode, SyntaxTreeProvider, fetchTree, toRange } from './syntaxTree';
+import { SyntaxNode, SyntaxTreeProvider, fetchTree, toRange } from './syntaxTree';
 
 let client: LanguageClient | undefined;
 
@@ -49,20 +49,21 @@ export async function activate(context: ExtensionContext): Promise<void> {
 }
 
 /**
- * The two views of the tree: the tint over the source, and the panel beside it.
+ * The syntax tree panel, fed by one `glue/syntaxTree` request per refresh.
  *
- * Both are fed by one `glue/syntaxTree` request per refresh, so they can never
- * disagree about what the parse is.
+ * Colour over the source is the language server's job now — it sends semantic
+ * tokens with the standard roles, so the user's theme paints Glue the way it
+ * paints everything else. This panel is what remains of the bring-up tooling,
+ * and it earns its keep: it is the only view of what the parser actually built.
  */
 function registerTreeViews(context: ExtensionContext, client: LanguageClient): void {
-  const tint = new DepthTint();
   const provider = new SyntaxTreeProvider();
   const view = window.createTreeView('glueSyntaxTree', {
     treeDataProvider: provider,
     showCollapseAll: true,
   });
 
-  context.subscriptions.push(tint, view);
+  context.subscriptions.push(view);
 
   const isGlue = (document?: vscode.TextDocument): boolean => document?.languageId === 'glue';
 
@@ -84,7 +85,6 @@ function registerTreeViews(context: ExtensionContext, client: LanguageClient): v
     // The editor may have moved on while the request was in flight.
     if (window.activeTextEditor !== editor) return;
     provider.setTree(tree);
-    tint.apply(editor, tree);
   };
 
   // Coalesce: a burst of keystrokes should cost one request, not one each.
@@ -121,12 +121,6 @@ function registerTreeViews(context: ExtensionContext, client: LanguageClient): v
       const range = toRange(node);
       editor.selection = new vscode.Selection(range.start, range.end);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-    }),
-
-    commands.registerCommand('glue.toggleDepthTint', () => {
-      const enabled = tint.toggle();
-      window.setStatusBarMessage(`Glue: depth tint ${enabled ? 'on' : 'off'}`, 2000);
-      refreshing = refresh();
     })
   );
 

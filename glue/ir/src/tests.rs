@@ -629,7 +629,7 @@ fn a_struct_may_name_itself() {
 
 /// Every file in `examples/`, which `parser` already asserts lexes, parses,
 /// and round-trips.
-const EXAMPLES: [(&str, &str); 5] = [
+const EXAMPLES: [(&str, &str); 6] = [
     ("hello.glue", include_str!("../../examples/hello.glue")),
     (
         "literals.glue",
@@ -647,6 +647,7 @@ const EXAMPLES: [(&str, &str); 5] = [
         "declarations.glue",
         include_str!("../../examples/declarations.glue"),
     ),
+    ("tour.glue", include_str!("../../examples/tour.glue")),
 ];
 
 /// The examples elaborate, and the only thing elaboration is allowed to say

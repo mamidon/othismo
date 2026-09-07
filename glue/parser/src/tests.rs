@@ -548,7 +548,7 @@ fn a_paren_is_not_a_lambda_without_an_arrow() {
 
 /// Every file in `examples/`, so they can serve as a regression suite rather
 /// than as documentation nobody runs.
-const EXAMPLES: [(&str, &str); 5] = [
+const EXAMPLES: [(&str, &str); 6] = [
     ("hello.glue", include_str!("../../examples/hello.glue")),
     (
         "literals.glue",
@@ -566,6 +566,7 @@ const EXAMPLES: [(&str, &str); 5] = [
         "declarations.glue",
         include_str!("../../examples/declarations.glue"),
     ),
+    ("tour.glue", include_str!("../../examples/tour.glue")),
 ];
 
 /// Every example lexes clean, parses clean, and comes back out byte for byte.

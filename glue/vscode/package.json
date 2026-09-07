@@ -28,29 +28,9 @@
         "configuration": "./language-configuration.json"
       }
     ],
-    "semanticTokenTypes": [
-      { "id": "glueTok0", "description": "Token colour 0 of 8; the palette cycles per token" },
-      { "id": "glueTok1", "description": "Token colour 1 of 8; the palette cycles per token" },
-      { "id": "glueTok2", "description": "Token colour 2 of 8; the palette cycles per token" },
-      { "id": "glueTok3", "description": "Token colour 3 of 8; the palette cycles per token" },
-      { "id": "glueTok4", "description": "Token colour 4 of 8; the palette cycles per token" },
-      { "id": "glueTok5", "description": "Token colour 5 of 8; the palette cycles per token" },
-      { "id": "glueTok6", "description": "Token colour 6 of 8; the palette cycles per token" },
-      { "id": "glueTok7", "description": "Token colour 7 of 8; the palette cycles per token" }
-    ],
     "configurationDefaults": {
       "editor.semanticTokenColorCustomizations": {
-        "enabled": true,
-        "rules": {
-          "glueTok0": "#d13b6e",
-          "glueTok1": "#cc6a00",
-          "glueTok2": "#7a8c1a",
-          "glueTok3": "#2f9a5c",
-          "glueTok4": "#1f8fa3",
-          "glueTok5": "#4a6fd4",
-          "glueTok6": "#8a5cd6",
-          "glueTok7": "#b8479b"
-        }
+        "enabled": true
       }
     },
     "views": {
@@ -68,11 +48,6 @@
       }
     ],
     "commands": [
-      {
-        "command": "glue.toggleDepthTint",
-        "title": "Toggle Depth Tint",
-        "category": "Glue"
-      },
       {
         "command": "glue.revealNode",
         "title": "Reveal Node in Editor",
