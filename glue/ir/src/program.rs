@@ -9,16 +9,16 @@
 //! destination slot's type. There is exactly one place a type can be wrong.
 //!
 //! **2. Every operand is atomic** — a slot or a constant, never a nested
-//! computation. That is A-normal form, and it is why §15's "operands evaluate
-//! left to right" stops being a rule two back ends must each remember and
-//! becomes the order of a statement list. `&&` and `||` are absent from
+//! computation. That is A-normal form, and it is why §semantics' "operands
+//! evaluate left to right" stops being a rule two back ends must each remember
+//! and becomes the order of a statement list. `&&` and `||` are absent from
 //! [`BinOp`] for the same reason: they short-circuit, so they lower to
 //! [`Stmt::If`] and neither back end implements laziness.
 //!
 //! **3. Blocks nest; nothing jumps.** [`Stmt::Break`] and [`Stmt::Continue`]
 //! name the innermost enclosing [`Stmt::While`]. There are no labels, no block
-//! arguments, and no phi nodes — §4 declined `goto` and wasm has none, so
-//! there is no unstructured control flow to reconstruct.
+//! arguments, and no phi nodes — §control declined `goto` and wasm has none,
+//! so there is no unstructured control flow to reconstruct.
 //!
 //! A [`Func`] owns its blocks, so a [`BlockId`] is function-local. Blocks live
 //! in a flat `Vec`; the tree is in the [`Stmt`]s that name them.
@@ -29,9 +29,9 @@ use crate::types::{FieldIdx, TypeDef, TypeId, Types};
 
 /// Provenance: the CST node a piece of IR came from.
 ///
-/// §14 will widen this to a chain, so a diagnostic about an instantiation can
-/// name both the generic body and the call that instantiated it. Until
-/// `comptime` exists there is only ever one link.
+/// §comptime will widen this to a chain, so a diagnostic about an
+/// instantiation can name both the generic body and the call that instantiated
+/// it. Until `comptime` exists there is only ever one link.
 pub type CstId = parser::NodeId;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -68,10 +68,11 @@ pub struct Program {
     pub types: Types,
     pub consts: ConstPool,
     pub syms: Interner,
-    /// The synthetic function holding the file's top-level statements. §3 makes
-    /// a file a block, so its trailing expression is this function's return
-    /// value — which is the whole of goal §2.1's "a bare expression is a valid
-    /// program", rather than a special case anywhere.
+    /// The synthetic function holding the file's top-level statements.
+    /// §statements makes a file a block, so its trailing expression is this
+    /// function's return value — which is the whole of goal §one-language's "a
+    /// bare expression is a valid program", rather than a special case
+    /// anywhere.
     pub entry: Option<FuncId>,
 }
 
@@ -128,10 +129,11 @@ pub struct SlotDef {
     /// `None` for a compiler-introduced temporary.
     pub name: Option<Sym>,
     pub kind: SlotKind,
-    /// §3: whether the value in this slot may be mutated *in place* through
-    /// this binding — `let mut`, or §5's `mut` parameter. Not about
-    /// assignment: §3 leaves rebinding unrestricted on every binding, so
-    /// `x = v` needs no permission and [`Stmt::Assign`] carries none.
+    /// §statements: whether the value in this slot may be mutated *in place*
+    /// through this binding — `let mut`, or §functions' `mut` parameter. Not
+    /// about assignment: §statements leaves rebinding unrestricted on every
+    /// binding, so `x = v` needs no permission and [`Stmt::Assign`] carries
+    /// none.
     ///
     /// Nothing at run time consults this. It is the record of a rule checked
     /// during lowering, kept because it is a property of the slot and because
@@ -210,8 +212,8 @@ pub enum Stmt {
     Break,
     Continue,
     Return(Option<Operand>),
-    /// §3's expression statement: evaluate, discard. Nothing marks the discard
-    /// as deliberate, because §3 doesn't.
+    /// §statements' expression statement: evaluate, discard. Nothing marks
+    /// the discard as deliberate, because §statements doesn't.
     Drop(Rvalue),
 }
 
@@ -226,22 +228,22 @@ pub enum Rvalue {
     Use(Operand),
     Unary(UnOp, Operand),
     Binary(BinOp, Operand, Operand),
-    /// `x as T`, explicit and trapping (§2). The target is the destination
-    /// slot's type — invariant 1.
+    /// `x as T`, explicit and trapping (§expressions). The target is the
+    /// destination slot's type — invariant 1.
     Cast(Operand),
     Call {
         func: FuncId,
         args: Vec<Operand>,
     },
-    /// A call through a function *value* — a lambda, or a `fn` bound to a name.
-    /// On wasm this is `call_indirect` (§5, §16); when §11 brings dynamic
-    /// dispatch it will be the same node.
+    /// A call through a function *value* — a lambda, or a `fn` bound to a
+    /// name. On wasm this is `call_indirect` (§functions, §wasm); when
+    /// §objects brings dynamic dispatch it will be the same node.
     CallIndirect {
         callee: Operand,
         args: Vec<Operand>,
     },
-    /// Fields in declaration order. §2's left-to-right evaluation of the
-    /// *written* order already happened in the statements above this one.
+    /// Fields in declaration order. §expressions' left-to-right evaluation of
+    /// the *written* order already happened in the statements above this one.
     MakeStruct(Vec<Operand>),
     Field {
         base: Operand,
@@ -264,8 +266,8 @@ pub enum Place {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UnOp {
-    /// Signed and float only (§2) — negating an unsigned value is a type
-    /// error, not a trap.
+    /// Signed and float only (§expressions) — negating an unsigned value is a
+    /// type error, not a trap.
     Neg,
     Not,
 }

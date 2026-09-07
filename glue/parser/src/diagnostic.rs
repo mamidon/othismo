@@ -42,10 +42,11 @@ pub enum DiagnosticKind {
     ExpectedName,
     ExpectedSemicolon,
     ExpectedColon,
-    /// `let x;` — §3 requires an initializer, so there is no declare-then-assign
-    /// and no definite-assignment analysis to specify.
+    /// `let x;` — §statements requires an initializer, so there is no
+    /// declare-then-assign and no definite-assignment analysis to specify.
     ExpectedInitializer,
-    /// §5 requires parameter types: signatures are annotated, bodies inferred.
+    /// §functions requires parameter types: signatures are annotated, bodies
+    /// inferred.
     ExpectedParameterType,
 
     // ---- Unclosed things --------------------------------------------------
@@ -58,11 +59,12 @@ pub enum DiagnosticKind {
     ExpectedLambdaBody,
 
     // ---- Misuse -----------------------------------------------------------
-    /// `a < b < c`. §2 makes comparison non-associative so that the error
-    /// names the actual mistake, rather than letting it fail later as a
+    /// `a < b < c`. §expressions makes comparison non-associative so that the
+    /// error names the actual mistake, rather than letting it fail later as a
     /// `bool` compared against a number.
     ChainedComparison,
-    /// A `;` where no statement preceded it. §3 has no empty statement.
+    /// A `;` where no statement preceded it. §statements has no empty
+    /// statement.
     StraySemicolon,
 
     // ---- Leftovers --------------------------------------------------------

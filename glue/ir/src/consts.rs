@@ -1,15 +1,16 @@
 //! The constant pool: where comptime results land.
 //!
-//! Today this holds literals, because §14's `comptime` has no token yet. The
-//! shape is chosen for what it has to hold once it does.
+//! Today this holds literals, because §comptime's `comptime` has no token yet.
+//! The shape is chosen for what it has to hold once it does.
 //!
-//! A [`Const::Struct`] holds `ConstId`s rather than nested values, so **sharing
-//! is the same id appearing twice, and a cycle is an id that transitively
-//! reaches itself**. That matters because §6 gives structs reference semantics,
-//! which makes sharing observable, and because core IR imposes no restriction
-//! on what a comptime value may be. An index arena represents graphs Rust
-//! ownership cannot, with no `Rc<RefCell<…>>` and no unsafe — the pool is the
-//! *frozen* result of evaluation, not the evaluator's working heap.
+//! A [`Const::Struct`] holds `ConstId`s rather than nested values, so
+//! **sharing is the same id appearing twice, and a cycle is an id that
+//! transitively reaches itself**. That matters because §types gives structs
+//! reference semantics, which makes sharing observable, and because core IR
+//! imposes no restriction on what a comptime value may be. An index arena
+//! represents graphs Rust ownership cannot, with no `Rc<RefCell<…>>` and no
+//! unsafe — the pool is the *frozen* result of evaluation, not the evaluator's
+//! working heap.
 //!
 //! Floats are stored as bits so that a `Const` can be `Eq` and `Hash`, which is
 //! what lets two identical constants share an id. `0.0` and `-0.0` therefore
@@ -33,8 +34,8 @@ impl ConstId {
 pub enum Const {
     Unit,
     Bool(bool),
-    /// Already pinned to a concrete width (§1). The bits are the value as
-    /// stored: sign-extended for a signed type, zero-extended otherwise.
+    /// Already pinned to a concrete width (§lexical). The bits are the value
+    /// as stored: sign-extended for a signed type, zero-extended otherwise.
     Int {
         ty: TypeId,
         bits: u64,

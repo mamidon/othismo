@@ -1,4 +1,4 @@
-// §1 — every literal the lexer produces, and every form of comment.
+// §lexical — every literal the lexer produces, and every form of comment.
 //
 // The files in this directory are a regression suite: the parser's
 // `the_examples_parse_cleanly` test asserts that each one lexes and parses
@@ -29,8 +29,8 @@ let widened = 1f64;
 // ---- Floats ---------------------------------------------------------------
 
 let simple = 1.5;
-// §1: a leading `.` begins a float when the preceding significant token could
-// not end an expression. Here that token is `=`.
+// §lexical: a leading `.` begins a float when the preceding significant token
+// could not end an expression. Here that token is `=`.
 let leading_dot = .5;
 let exponent = 1e10;
 let float_suffix = 1.0f32;
@@ -48,14 +48,14 @@ let char_escape = '\n';
 let char_unicode = '\u{263A}';
 
 // ---- Booleans -------------------------------------------------------------
-// §1 has no `nil`, so these are the only two, and §2 has no truthiness — a
-// condition may be nothing else.
+// §lexical has no `nil`, so these are the only two, and §expressions has no
+// truthiness — a condition may be nothing else.
 
 let yes = true;
 let no = false;
 
 // ---- Unit -----------------------------------------------------------------
-// One value, one inhabitant. A real value, not an absence (§5).
+// One value, one inhabitant. A real value, not an absence (§functions).
 
 let nothing = ();
 
@@ -67,11 +67,12 @@ let nothing = ();
 
 /// Three slashes, and still only a comment.
 
-//// -------------------------------------------------------------------------
+/// / -------------------------------------------------------------------------
 
 /* A block comment. /* They nest. */ Still inside the outer one. */
 
 type Marker = u64;
 
-// A file may end in an expression with no `;`, which is the file's value (§3).
+// A file may end in an expression with no `;`, which is the file's value
+// (§statements).
 decimal

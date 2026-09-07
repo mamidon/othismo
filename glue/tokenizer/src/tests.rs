@@ -129,8 +129,8 @@ fn identifiers_and_keywords() {
 
 #[test]
 fn primitive_type_names_are_identifiers_not_keywords() {
-    // §6 makes `u64` and `Str` types, resolved by name. Reserving them would
-    // be a language decision nobody has made.
+    // §types makes `u64` and `Str` types, resolved by name. Reserving them
+    // would be a language decision nobody has made.
     assert_eq!(kinds("u64 s32 f64 bool Str char"), [TokenKind::Ident; 6]);
 }
 
@@ -287,7 +287,7 @@ fn float_literals() {
 
 #[test]
 fn a_trailing_dot_is_not_part_of_a_literal() {
-    // §1: `1.` is not a float, which is what keeps `1.method()` free of
+    // §lexical: `1.` is not a float, which is what keeps `1.method()` free of
     // lookahead.
     use TokenKind::*;
     assert_eq!(kinds("1."), [Int, Dot]);
@@ -361,7 +361,7 @@ fn an_e_that_is_not_an_exponent_becomes_a_suffix() {
 #[test]
 fn leading_dot_floats_follow_left_context() {
     use TokenKind::*;
-    // The table from §1, verbatim.
+    // The table from §lexical, verbatim.
     assert_eq!(kinds(".5"), [Float]);
     assert_eq!(kinds("f(.5)"), [Ident, ParenLeft, Float, ParenRight]);
     assert_eq!(kinds("a + .5"), [Ident, Plus, Float]);
@@ -374,7 +374,7 @@ fn leading_dot_floats_follow_left_context() {
 
 #[test]
 fn whitespace_does_not_rescue_the_ambiguity() {
-    // §1: decided by the preceding *token*, not by adjacency.
+    // §lexical: decided by the preceding *token*, not by adjacency.
     use TokenKind::*;
     assert_eq!(kinds("pair. 0"), [Ident, Dot, Int]);
     assert_eq!(kinds("pair .0"), [Ident, Dot, Int]);

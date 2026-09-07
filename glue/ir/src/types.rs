@@ -1,19 +1,19 @@
 //! The type table.
 //!
-//! Two kinds of entry, because §6 is nominal:
+//! Two kinds of entry, because §types is nominal:
 //!
 //! * **Structural** — primitives, unit, `fn(T, …) -> R`, and the internal
 //!   [`TypeDef::Cell`]. These have no identity beyond their shape, so they are
 //!   interned and two spellings of `fn(u64) -> u64` are one [`TypeId`].
-//! * **Nominal** — a struct. §6 says every evaluation of a `struct { … }`
+//! * **Nominal** — a struct. §types says every evaluation of a `struct { … }`
 //!   expression produces a *fresh* type, so [`Types::fresh_struct`] never
 //!   interns. Two structs with identical fields are different types, which is
 //!   the nominal rule reached from the representation side: identity comes
 //!   from the act of construction rather than from the shape constructed.
 //!
-//! When §14 lands, `Pair(u64, Str)` will be one type not because two identical
-//! structs get merged but because the instantiation cache runs the body once.
-//! Nothing here changes to accommodate that.
+//! When §comptime lands, `Pair(u64, Str)` will be one type not because two
+//! identical structs get merged but because the instantiation cache runs the
+//! body once. Nothing here changes to accommodate that.
 
 use std::collections::HashMap;
 
@@ -36,14 +36,14 @@ pub struct FieldIdx(pub u32);
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TypeDef {
-    /// One value, one inhabitant (§6). Not an absence.
+    /// One value, one inhabitant (§types). Not an absence.
     Unit,
     Bool,
     Char,
-    /// UTF-8 bytes (§1).
+    /// UTF-8 bytes (§lexical).
     Str,
     /// `u8`…`u64`, `s8`…`s64`. `s` rather than `i`, matching wasm's own
-    /// instruction suffixes (§1).
+    /// instruction suffixes (§lexical).
     Int {
         signed: bool,
         bits: u8,
@@ -51,8 +51,8 @@ pub enum TypeDef {
     Float {
         bits: u8,
     },
-    /// `fn(T, …) -> R` (§5). One representation covers both a `fn` and a
-    /// lambda: every function value is a code reference plus an environment,
+    /// `fn(T, …) -> R` (§functions). One representation covers both a `fn` and
+    /// a lambda: every function value is a code reference plus an environment,
     /// and a plain `fn` has an empty one.
     Fn {
         params: Vec<TypeId>,
@@ -61,8 +61,8 @@ pub enum TypeDef {
     Struct(StructDef),
     /// A one-word heap box holding a `T`. **IR-internal** — no Glue program
     /// can name one. Lowering introduces cells for bindings that are both
-    /// captured by a lambda and assigned, so that §5's promise that captured
-    /// bindings outlive their frame has somewhere to be true.
+    /// captured by a lambda and assigned, so that §functions' promise that
+    /// captured bindings outlive their frame has somewhere to be true.
     Cell(TypeId),
     /// Poison. Produced where a diagnostic has already been reported, and
     /// compatible with everything, so one mistake yields one message.
@@ -72,10 +72,10 @@ pub enum TypeDef {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct StructDef {
     /// For diagnostics and dumps. `None` for the anonymous `struct { … }` that
-    /// §14 adds and lowering cannot produce yet.
+    /// §comptime adds and lowering cannot produce yet.
     pub name: Option<Sym>,
     pub fields: Vec<FieldDef>,
-    /// §6: identity is the site that constructed it.
+    /// §types: identity is the site that constructed it.
     pub origin: NodeId,
 }
 
@@ -99,8 +99,8 @@ impl Types {
         }
     }
 
-    /// Interns a structural type. Passing a [`TypeDef::Struct`] would merge two
-    /// types §6 says are distinct, so it is refused.
+    /// Interns a structural type. Passing a [`TypeDef::Struct`] would merge
+    /// two types §types says are distinct, so it is refused.
     pub fn intern(&mut self, def: TypeDef) -> TypeId {
         debug_assert!(
             !matches!(def, TypeDef::Struct(_)),
@@ -118,8 +118,8 @@ impl Types {
     /// Allocates a struct type with no fields yet.
     ///
     /// Fields are filled in afterwards by [`Types::set_fields`], because a
-    /// struct may mention itself or one declared later in the same block —
-    /// and under §6's reference semantics that is an ordinary thing to write
+    /// struct may mention itself or one declared later in the same block — and
+    /// under §types' reference semantics that is an ordinary thing to write
     /// rather than an infinite size.
     pub fn fresh_struct(&mut self, name: Option<Sym>, origin: NodeId) -> TypeId {
         let id = TypeId(self.defs.len() as u32);
@@ -180,7 +180,7 @@ impl Types {
         matches!(self.get(id), TypeDef::Float { .. })
     }
 
-    /// §2: unary `-` is defined on signed and float types only.
+    /// §expressions: unary `-` is defined on signed and float types only.
     pub fn is_signed_or_float(&self, id: TypeId) -> bool {
         matches!(
             self.get(id),

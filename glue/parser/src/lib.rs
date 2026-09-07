@@ -34,11 +34,11 @@ pub use crate::syntax::{Child, Event, NodeId, NodeKind, Tree};
 
 /// Parses `source` as a file.
 ///
-/// A file is a block (§3): statements, optionally ending in an expression with
-/// no `;` that is the file's value. So `let x = 2; x * 21` and `42` are both
-/// whole programs, which is the entirety of goal §2.1's "a bare expression is
-/// a valid program" — the block rule applied to the outermost block, rather
-/// than a special case anywhere.
+/// A file is a block (§statements): statements, optionally ending in an
+/// expression with no `;` that is the file's value. So `let x = 2; x * 21` and
+/// `42` are both whole programs, which is the entirety of goal §one-language's
+/// "a bare expression is a valid program" — the block rule applied to the
+/// outermost block, rather than a special case anywhere.
 pub fn parse(source: &str) -> Parse {
     let mut cursor = Cursor::new(tokenizer::tokenize(source));
     let file = cursor.open(NodeKind::SourceFile);

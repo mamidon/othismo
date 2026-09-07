@@ -1,4 +1,4 @@
-# §14 — Metaprogramming & Tooling Constructs
+# §comptime — Metaprogramming & Tooling Constructs
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -8,12 +8,13 @@ Not core language, but genuinely constructs — and painful to retrofit, because
 either needs a syntax slot reserved for it or a compiler pipeline shaped to accommodate
 it.
 
-Three have specific pull for Glue. Goal §2.2 (cheap to compile *and* cheap to interpret)
-argues against an elaborate macro layer, since that is one of the classic ways a language
-becomes miserable to compile. Goal §2.4 (inspect a running system) needs *something* at
-runtime describing program structure, which is reflection under another name. And the
-same goal makes test declarations more than good hygiene: an interpreter and a compiler
-must be held to a shared conformance suite from the day there are two back ends.
+Three have specific pull for Glue. Goal §both-modes (cheap to compile *and* cheap to
+interpret) argues against an elaborate macro layer, since that is one of the classic ways
+a language becomes miserable to compile. Goal §living (inspect a running system) needs
+*something* at runtime describing program structure, which is reflection under another
+name. And the same goal makes test declarations more than good hygiene: an interpreter and
+a compiler must be held to a shared conformance suite from the day there are two back
+ends.
 
 ## Checklist
 
@@ -35,9 +36,9 @@ must be held to a shared conformance suite from the day there are two back ends.
 
 ### Scope of this decision
 
-§14 has nine checklist items. This settles **compile-time evaluation**, and with it most
-of §8. Attributes, conditional compilation, reflection, doc generation, debug info, and
-test declarations are untouched and still unstarted.
+§comptime has nine checklist items. This settles **compile-time evaluation**, and with it
+most of §generics. Attributes, conditional compilation, reflection, doc generation, debug
+info, and test declarations are untouched and still unstarted.
 
 Macros fall out decided, because choosing comptime is choosing against them. That is
 recorded under *Semantics*, since a declined feature has no syntax.
@@ -59,9 +60,9 @@ let table = comptime build_table(256);
 ```
 
 There is no `comptime let`, no `comptime var`, and no `inline for`. A `let` binding is
-already comptime-known when its initializer is (§3), so a binding form would name the same
-thing twice — the argument §3 used to decline `const`, reaching the same answer a second
-time.
+already comptime-known when its initializer is (§statements), so a binding form would name
+the same thing twice — the argument §statements used to decline `const`, reaching the same
+answer a second time.
 
 ### The type of a type is `Type`
 
@@ -75,11 +76,11 @@ fn Pair(comptime A: Type, comptime B: Type) -> Type {
 ```
 
 `Type` is a **predeclared name, not a keyword** — the same status `u64`, `bool`, and `Str`
-already have (§6). The `type` keyword stays where §6 put it, on the alias form.
+already have (§types). The `type` keyword stays where §types put it, on the alias form.
 
 **`comptime` is the only new token this section adds.** Everything else here is spelled
-out of what §1 already lexes: `Type` is an identifier, an instantiation is a call, and a
-type annotation is a type annotation.
+out of what §lexical already lexes: `Type` is an identifier, an instantiation is a call,
+and a type annotation is a type annotation.
 
 ### Generics have no syntax
 
@@ -93,17 +94,17 @@ let xs: List(u64) = …;
 fn first(comptime T: Type, xs: List(T)) -> T { … }
 ```
 
-- **No `<>`, no `[]`, no turbofish.** §2's postfix rung already parses every one of these,
-  because they are calls and nothing else.
+- **No `<>`, no `[]`, no turbofish.** §expressions' postfix rung already parses every one
+  of these, because they are calls and nothing else.
 - **The `<` ambiguity never arises.** `a < b` is a comparison, always. C++ and Rust both
   spend a disambiguation rule here; Glue has nothing to disambiguate.
-- **§8's syntax slot is empty by construction.** Its semantic questions — bounds, variance,
-  inference of type arguments, what a generic message handler means — are untouched and
-  stay there.
+- **§generics' syntax slot is empty by construction.** Its semantic questions — bounds,
+  variance, inference of type arguments, what a generic message handler means — are
+  untouched and stay there.
 
-### §6's declaration forms survive as sugar
+### §types' declaration forms survive as sugar
 
-**Decided 2026-08-18, jointly with §6.** Types-as-values makes both of §6's
+**Decided 2026-08-18, jointly with §types.** Types-as-values makes both of §types'
 type-introducing forms expressible as `let`. Neither is removed.
 
 ```
@@ -112,12 +113,12 @@ type InstanceId = u64;              ≡   let InstanceId = u64;
 ```
 
 Keeping them costs two sugar rules and buys the conventional spellings, which is goal
-§2.3's trade made in the direction §2.3 asks for: the novelty is that a type is a value,
-and a reader who never needs that fact never has to see it. `struct Point { … }` still
-reads the way it reads in every language that has structs.
+§boring's trade made in the direction §boring asks for: the novelty is that a type is a
+value, and a reader who never needs that fact never has to see it. `struct Point { … }`
+still reads the way it reads in every language that has structs.
 
-What §14 *adds* to §6 is the anonymous form — `struct { … }` with no name, as an
-expression — because a generic has to return a type it cannot name in advance. §6 owns
+What §comptime *adds* to §types is the anonymous form — `struct { … }` with no name, as an
+expression — because a generic has to return a type it cannot name in advance. §types owns
 its identity rule; see there.
 
 The one thing this costs is the `type` spelling. `type X = T;` keeps the keyword, so the
@@ -135,24 +136,25 @@ Glue takes Zig's model: **types are ordinary values at compile time, and a gener
 function that takes or returns one.** Monomorphization is not a pass with rules of its
 own; it is what calling such a function means.
 
-§1 already committed to half of this. An unsuffixed integer literal is "an unpinned
+§lexical already committed to half of this. An unsuffixed integer literal is "an unpinned
 integer constant … which acquires a concrete type only at the point it becomes a runtime
-value," cited there as `comptime_int`. §14 generalizes that from one type to every type
-rather than introducing a foreign idea — the two-stage story §1 tells about integers
-becomes the story the whole language tells.
+value," cited there as `comptime_int`. §comptime generalizes that from one type to every
+type rather than introducing a foreign idea — the two-stage story §lexical tells about
+integers becomes the story the whole language tells.
 
-Stated against goal §2.3, this is the largest novelty spend outside §13. It is affordable
-because it is mostly *subtraction*: no generic syntax, no separate generic type system, no
-macro layer, no `const` binding form, and one new keyword in total. §8 stops being a
-mechanism and becomes a list of questions about bounds and inference.
+Stated against goal §boring, this is the largest novelty spend outside §modules. It is
+affordable because it is mostly *subtraction*: no generic syntax, no separate generic type
+system, no macro layer, no `const` binding form, and one new keyword in total. §generics
+stops being a mechanism and becomes a list of questions about bounds and inference.
 
 ### Comptime-known
 
 A value is comptime-known when it is
 
-- a literal, or an unpinned constant (§1);
+- a literal, or an unpinned constant (§lexical);
 - a `comptime` parameter, within its function's body;
-- a non-`mut` `let` whose initializer is comptime-known (§3's existing rule, unchanged);
+- a non-`mut` `let` whose initializer is comptime-known (§statements' existing rule,
+  unchanged);
 - the result of a call whose arguments are all comptime-known, when the callee performs no
   runtime-only operation;
 - the value of a `comptime` expression — which is an error when none of the above
@@ -171,17 +173,17 @@ ordering:
 - evaluating that call needs `List`'s body typed;
 - typing that body needs its comptime parameters bound, which is instantiation.
 
-§10's choice of local/bidirectional inference over whole-program Hindley–Milner is what
-makes this tractable. Every signature is annotated (§5), so a body can be elaborated
-knowing only its own signature and the declarations it names. The decision that keeps
-compilation cheap is the same one that lets typing and evaluation interleave.
+§inference's choice of local/bidirectional inference over whole-program Hindley–Milner is
+what makes this tractable. Every signature is annotated (§functions), so a body can be
+elaborated knowing only its own signature and the declarations it names. The decision that
+keeps compilation cheap is the same one that lets typing and evaluation interleave.
 
 ### Instantiation is memoized, and that is where type identity comes from
 
 Instantiations are cached on `(declaration, comptime argument values)`. `List(u64)`
 evaluated twice yields the same instance, so **two types are the same type when they are
-the same cache entry.** §6's nominal typing survives without a new rule: a generic type's
-identity is its declaration plus its arguments.
+the same cache entry.** §types' nominal typing survives without a new rule: a generic
+type's identity is its declaration plus its arguments.
 
 The cache is also what makes monomorphization finite. A generic that instantiates itself
 does not terminate without it; with it, recursion terminates as soon as arguments repeat.
@@ -193,12 +195,12 @@ does not terminate without it; with it, recursion terminates as soon as argument
   compared at runtime, or returned from a runtime function. Everything else may cross.
 - **Runtime to comptime.** Nothing crosses. Ever.
 
-That asymmetry is why the model stays cheap to compile (goal §2.2): comptime is a strictly
-earlier stage, never a mutual dependency with execution.
+That asymmetry is why the model stays cheap to compile (goal §both-modes): comptime is a
+strictly earlier stage, never a mutual dependency with execution.
 
-It also *defers* §14's reflection item rather than answering it. Reflection is precisely
-the question of whether `Type` acquires a runtime representation, and it can be added
-later without disturbing anything above.
+It also *defers* §comptime's reflection item rather than answering it. Reflection is
+precisely the question of whether `Type` acquires a runtime representation, and it can be
+added later without disturbing anything above.
 
 ### Comptime is hermetic
 
@@ -213,8 +215,8 @@ and it is deferred rather than declined; see
 closed:
 
 - **Reproducibility.** A program whose meaning depends on image state cannot be rebuilt
-  from source. That is goal §4.5's hazard at its sharpest, and inside the compiler is the
-  worst place to meet it.
+  from source. That is goal §image's hazard at its sharpest, and inside the compiler is
+  the worst place to meet it.
 - **Tooling.** Deterministic comptime is what lets the language server cache
   instantiations across keystrokes. Non-deterministic comptime invalidates all of them on
   every edit.
@@ -242,21 +244,21 @@ parsing, and name resolution, and nothing more. `max` above is accepted as writt
 whether `>` exists on `T` is answered only when someone calls it, and the diagnostic
 arrives at the call site rather than at the declaration.
 
-That is a direct tax on goal §2.4, which wants tooling to be a strength. A generic
+That is a direct tax on goal §living, which wants tooling to be a strength. A generic
 function nobody has called yet cannot be given a red squiggle, and no amount of
 language-server effort changes that.
 
 Accepted, because the alternative — bounds strong enough to check a body ahead of
-instantiation — is a second type system layered on the first, and §8 has not yet
+instantiation — is a second type system layered on the first, and §generics has not yet
 established what a bound would be. **Open:** whether an opt-in bound buys early checking
 back for the code that wants it.
 
 ### Macros are declined
 
 Choosing comptime decides this. Compile-time evaluation covers what macros are usually
-reached for — tables, specialization, generated declarations — and goal §2.2 names an
-elaborate macro layer as one of the specific ways a language becomes expensive to compile.
-Nothing textual, nothing syntactic, nothing hygienic.
+reached for — tables, specialization, generated declarations — and goal §both-modes names
+an elaborate macro layer as one of the specific ways a language becomes expensive to
+compile. Nothing textual, nothing syntactic, nothing hygienic.
 
 The one thing comptime does not cover is generating declarations under *new names* from a
 pattern. If that need turns up it returns as its own decision, rather than by extending
@@ -265,8 +267,8 @@ comptime sideways into the macro system that was declined on purpose.
 ### What reaches the back ends
 
 Elaboration lowers to a **core IR**: typed, monomorphic, and free of comptime, generics,
-and `Type`. Both back ends consume it, and it is the concrete form of goal §2.2's shared
-front end.
+and `Type`. Both back ends consume it, and it is the concrete form of goal §both-modes'
+shared front end.
 
 ```
 source → CST → typed tree → [elaboration] → core IR → { interpreter, wasm }
@@ -279,9 +281,9 @@ bytes to be reachable from. Core IR nodes instead carry provenance back to CST n
 diagnostic about an instantiation can name real source in both the generic and the call
 that instantiated it.
 
-Goal §2.2 asks for a conformance suite "from the first day there are two back ends." Core
-IR is where it attaches: one program, one core IR, two executions, identical observable
-results.
+Goal §both-modes asks for a conformance suite "from the first day there are two back
+ends." Core IR is where it attaches: one program, one core IR, two executions, identical
+observable results.
 
 **Specified 2026-08-18 in [`../core-ir.md`](../core-ir.md)**, which owns core IR's shape
 and the decisions behind it — A-normal form, slots, and the choice to make the interpreter
@@ -289,14 +291,15 @@ double as the comptime evaluator, so that comptime and runtime semantics cannot 
 
 ### Open
 
-- Whether an uninstantiated generic can be checked at all, given bounds (§8).
+- Whether an uninstantiated generic can be checked at all, given bounds (§generics).
 - How a comptime function **rejects** its arguments — Zig's `@compileError`, or something
   else. Without it, a bad instantiation fails somewhere inside a body it didn't write.
 - Whether comptime evaluation may mutate during its own execution (`comptime var`), which
-  loops and table-building want and §3's `mut` rule does not obviously grant.
+  loops and table-building want and §statements' `mut` rule does not obviously grant.
 - Iteration that must unroll because the bound is comptime-known but the body is runtime
   (`inline for`).
-- Whether type arguments may be **inferred** at a call site rather than passed (§10), and
-  the explicit form for when inference fails.
+- Whether type arguments may be **inferred** at a call site rather than passed
+  (§inference), and the explicit form for when inference fails.
 - Whether `Type` values support equality, ordering, or printing during comptime.
-- Where a runtime value reaching a comptime parameter is caught and **blamed** (§10).
+- Where a runtime value reaching a comptime parameter is caught and **blamed**
+  (§inference).

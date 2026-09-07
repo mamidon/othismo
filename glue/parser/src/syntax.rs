@@ -70,43 +70,43 @@ impl Event {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NodeKind {
     // ---- Root -------------------------------------------------------------
-    /// A file is a block (§3): statements, then an optional trailing
+    /// A file is a block (§statements): statements, then an optional trailing
     /// expression with no `;` that is the file's value.
     SourceFile,
 
     // ---- Statements -------------------------------------------------------
     /// `let mut? pattern (: Type)? = Expr ;` — the initializer is not
-    /// optional (§3).
+    /// optional (§statements).
     LetStmt,
-    /// `place assignOp Expr ;` (§3). The place is parsed as an ordinary
-    /// expression and checked to be a name, field, or index later — a bad
-    /// place deserves "you can't assign to a call", which needs the parse.
+    /// `place assignOp Expr ;` (§statements). The place is parsed as an
+    /// ordinary expression and checked to be a name, field, or index later — a
+    /// bad place deserves "you can't assign to a call", which needs the parse.
     AssignStmt,
     ExprStmt,
     WhileStmt,
     BreakStmt,
     ContinueStmt,
-    /// `return ;` or `return Expr ;` (§4).
+    /// `return ;` or `return Expr ;` (§control).
     ReturnStmt,
 
     // ---- Declarations -----------------------------------------------------
-    // Statements too, per §3 collapsing Lox's declaration/statement split.
-    // A leading `DocComment` token is a child of the declaration it attaches
-    // to (§1); one attached to nothing stays a stray token in its enclosing
-    // block, with a warning.
+    // Statements too, per §statements collapsing Lox's declaration/statement
+    // split. A leading `DocComment` token is a child of the declaration it
+    // attaches to (§lexical); one attached to nothing stays a stray token in
+    // its enclosing block, with a warning.
     FnDecl,
     ParamList,
     /// `name: Type` or `name: mut Type` — the `mut` is the parameter's, not
-    /// the type's (§5), so it lives here.
+    /// the type's (§functions), so it lives here.
     Param,
     /// `-> Type`. Also how [`NodeKind::FnType`] tells its return from its
     /// parameters.
     RetType,
     StructDecl,
     FieldDeclList,
-    /// `name: Type` in a struct body (§6). Always annotated.
+    /// `name: Type` in a struct body (§types). Always annotated.
     FieldDecl,
-    /// `type Name = Type ;` (§6).
+    /// `type Name = Type ;` (§types).
     TypeAliasDecl,
 
     // ---- Expressions ------------------------------------------------------
@@ -115,12 +115,12 @@ pub enum NodeKind {
     /// span on demand by `tokenizer::literal_value`.
     LiteralExpr,
     NameExpr,
-    /// `{ … }` — an expression (§2), so `if` and `while` bodies and function
-    /// bodies are all the same node.
+    /// `{ … }` — an expression (§expressions), so `if` and `while` bodies and
+    /// function bodies are all the same node.
     BlockExpr,
-    /// An expression (§2). With no `else` its type is unit.
+    /// An expression (§expressions). With no `else` its type is unit.
     IfExpr,
-    /// Grouping and nothing else (§2).
+    /// Grouping and nothing else (§expressions).
     ParenExpr,
     /// `()` — the unit value. Its own kind rather than a childless
     /// [`NodeKind::ParenExpr`], so lowering reads the kind instead of
@@ -129,43 +129,44 @@ pub enum NodeKind {
     /// Prefix `-`, `!`, `~`.
     UnaryExpr,
     BinaryExpr,
-    /// `x as T` (§2) — explicit and trapping.
+    /// `x as T` (§expressions) — explicit and trapping.
     CastExpr,
     CallExpr,
     ArgList,
-    /// `a[i]`. In the precedence table at level 1 (§2); nothing but `Str` is
-    /// indexable until §8 brings collections, which is the type checker's
-    /// complaint to make, not the parser's.
+    /// `a[i]`. In the precedence table at level 1 (§expressions); nothing but
+    /// `Str` is indexable until §generics brings collections, which is the
+    /// type checker's complaint to make, not the parser's.
     IndexExpr,
     /// `a.b`.
     FieldExpr,
-    /// `a.b(…)`. Deliberately *not* a `CallExpr` wrapping a `FieldExpr`:
-    /// that spelling would decide that `obj.method` is a field access
-    /// yielding a callable, which is Lox's model and exactly the thing §2
-    /// hands to §11 undecided.
+    /// `a.b(…)`. Deliberately *not* a `CallExpr` wrapping a `FieldExpr`: that
+    /// spelling would decide that `obj.method` is a field access yielding a
+    /// callable, which is Lox's model and exactly the thing §expressions hands
+    /// to §objects undecided.
     MethodCallExpr,
-    /// `Point { x: 1, y: 2 }` (§6).
+    /// `Point { x: 1, y: 2 }` (§types).
     StructLitExpr,
     FieldInitList,
     FieldInit,
-    /// `|x| expr` (§5). Parameter types are optional here, unlike a `fn`.
+    /// `|x| expr` (§functions). Parameter types are optional here, unlike a
+    /// `fn`.
     LambdaExpr,
     LambdaParamList,
     LambdaParam,
 
     // ---- Patterns ---------------------------------------------------------
-    /// The whole of patterns today: a plain name (§3). §7 adds the rest, and
-    /// a `let` whose first child is already a pattern node absorbs that
-    /// without the shape changing.
+    /// The whole of patterns today: a plain name (§statements). §unions adds
+    /// the rest, and a `let` whose first child is already a pattern node
+    /// absorbs that without the shape changing.
     NamePat,
 
     // ---- Types ------------------------------------------------------------
-    /// `u64`, `Str`, `Point`. Generic arguments arrive with §8.
+    /// `u64`, `Str`, `Point`. Generic arguments arrive with §generics.
     NameType,
-    /// `fn(u64) -> u64` (§5). Parameter types are bare children; the return
-    /// is a [`NodeKind::RetType`], which is what tells them apart.
+    /// `fn(u64) -> u64` (§functions). Parameter types are bare children; the
+    /// return is a [`NodeKind::RetType`], which is what tells them apart.
     FnType,
-    /// `()` (§6).
+    /// `()` (§types).
     UnitType,
 
     // ---- Recovery ---------------------------------------------------------

@@ -4,7 +4,7 @@
 > It exists to be cited when a later decision contradicts it — either the decision
 > changes, or this document does, deliberately.
 
-## 1. The problem
+## §problem — The problem
 
 An operating system should have a language.
 
@@ -26,9 +26,9 @@ library. That makes the cliff a choice rather than an inheritance. Glue is the
 language Othismo is designed around, and Othismo is the runtime Glue is designed
 for. Neither is meant to be useful without the other.
 
-## 2. What we're optimizing for
+## §goals — What we're optimizing for
 
-### 2.1 One language across the whole range
+### §one-language — One language across the whole range
 
 The same language should serve a one-line interactive command and a long-lived
 deployed application. Not two dialects, not a scripting subset — one language whose
@@ -48,7 +48,7 @@ The test: a plausible shell one-liner and a plausible module should be recogniza
 the same language, and it should be possible to grow the first into the second by
 addition alone.
 
-### 2.2 Cheap to interpret *and* cheap to compile
+### §both-modes — Cheap to interpret *and* cheap to compile
 
 Both execution modes are first-class, and neither is allowed to be embarrassing:
 
@@ -67,7 +67,7 @@ Interpreter and compiler must agree on semantics, and the way to keep that true 
 shared front end and a shared conformance test suite from the first day there are two
 back ends — not an intention to reconcile them later.
 
-### 2.3 Boring syntax and semantics
+### §boring — Boring syntax and semantics
 
 Deliberately unoriginal. `if`, `while`, functions, some form of basic
 object-orientation, familiar operators and precedence. If a construct has a
@@ -75,12 +75,12 @@ conventional spelling, use the conventional spelling.
 
 This isn't modesty — it's budget allocation. Novelty is a fixed resource that gets
 spent on the things a user must learn before they can do anything, and Glue intends
-to spend all of it in one place (§2.4). Every unit spent on a clever syntax is a unit
+to spend all of it in one place (§living). Every unit spent on a clever syntax is a unit
 unavailable for the part that's actually the point.
 
 See `language-constructs.md` for the checklist of constructs this implies.
 
-### 2.4 Where the novelty goes: living systems
+### §living — Where the novelty goes: living systems
 
 This is the actual thesis. Everything above is in service of it.
 
@@ -113,7 +113,7 @@ possibilities:
   `/othismo.telemetry` for trace context alongside operation parameters. Tracing
   isn't something to invent later; it's something to not squander.
 
-### 2.5 Lineage
+### §lineage — Lineage
 
 Smalltalk is the closest existing thing to the intended feel: a language and a
 runtime designed together, a live image, uniform message passing, and a system you
@@ -130,7 +130,7 @@ Worth studying deliberately, and for specific things:
 - **Lisp machines** — a system that is its own development environment
 - **Unix shell** — the thing to beat on immediacy, and the reason the cliff exists
 
-## 3. Non-goals
+## §non-goals — Non-goals
 
 Stated as firmly as the goals, because a goals document that only accumulates is useless.
 
@@ -139,22 +139,22 @@ Stated as firmly as the goals, because a goals document that only accumulates is
 - **Not a systems language.** Not competing with C, Rust, or Zig. No manual memory
   management as the primary model, no pretense of zero-cost abstraction everywhere.
 - **Not maximally fast.** Fast enough that "real work" is honest — not fast enough to
-  win benchmarks, and not at the price of §2.1, §2.2, or §2.4.
+  win benchmarks, and not at the price of §one-language, §both-modes, or §living.
 - **Not compatible with anything.** Not a superset, subset, or transpile target of an
   existing language. Familiar, not compatible.
 - **Not general-purpose in the portable sense.** Glue targets Othismo. Running well
   outside Othismo is not a requirement and shouldn't shape the design.
 - **Not everything-is-a-message dogma.** The uniform-message model is a means to
   introspection, not a principle to be honored past the point where it costs more
-  than it returns (see §4.2).
+  than it returns (see §granularity).
 - **Not a stable language yet.** No backward-compatibility obligations during design.
 
-## 4. Known tensions
+## §tensions — Known tensions
 
 These are unresolved, and being clear about them now is cheaper than discovering them
 during implementation. They are roughly in order of how much they could hurt.
 
-### 4.1 Liveness vs. WebAssembly
+### §liveness — Liveness vs. WebAssembly
 
 The central conflict. WebAssembly modules are immutable once instantiated. "Reach into
 a deployed system and change it" is very nearly the one thing the compilation target
@@ -165,7 +165,7 @@ some combination — and they have very different consequences for both language
 runtime. This one deserves its own document before much else is decided, because the
 answer constrains the memory model, the module system, and what "an object" even is.
 
-### 4.2 Message granularity
+### §granularity — Message granularity
 
 Smalltalk's uniformity was affordable because everything was one image with one
 object model. Othismo has a real boundary: cross-instance messages are BSON documents
@@ -176,7 +176,7 @@ instance-level ones — and the language has to make that distinction visible wi
 making it miserable. Where that line falls, and whether the programmer draws it or
 the compiler does, is open.
 
-### 4.3 Free telemetry only covers the boundary
+### §telemetry — Free telemetry only covers the boundary
 
 Runtime-observed messages give you the edges of the graph for free. They give you
 nothing about what happens *inside* an instance between messages — which is where
@@ -184,7 +184,7 @@ loops, computation, and most bugs live. Either intra-instance activity is invisi
 or the language/compiler emits something, at which point it isn't free anymore. Worth
 deciding what the honest claim is, and stating that rather than the stronger version.
 
-### 4.4 Gradual typing has a performance cliff
+### §cliff — Gradual typing has a performance cliff
 
 "Omit the types and it works" plus "compiled code is genuinely fast" are in tension:
 unannotated code generally means boxed, dynamically dispatched values, and wasm makes
@@ -192,7 +192,7 @@ that cost concrete. The usual outcomes are a performance cliff at the annotation
 boundary and a soundness question about whether annotations are trusted or checked.
 Neither is fatal, both are much cheaper to decide now than to retrofit.
 
-### 4.5 The image is a mixed blessing
+### §image — The image is a mixed blessing
 
 The image is Smalltalk's superpower and its most-cited failure: state that only exists
 in the image is state that isn't in version control, isn't reviewable, and isn't
@@ -200,7 +200,7 @@ reproducible. Othismo has an image already. The relationship between source text
 image state — which is authoritative, how changes made live get captured, whether an
 image can be rebuilt from source — is a question Glue can't avoid inheriting.
 
-### 4.6 Interactive convenience vs. program-scale clarity
+### §scale — Interactive convenience vs. program-scale clarity
 
 Every affordance that makes a one-liner pleasant (implicit variables, coercions,
 truthiness, terse defaults, silent failure) is a liability at ten thousand lines. The
@@ -208,18 +208,18 @@ shells got this wrong in one direction; most compiled languages refuse the quest
 entirely. Wanting one language for both means choosing per-feature, repeatedly, and
 having a rule for how to choose.
 
-## 5. How to use this document
+## How to use this document
 
-When a design decision is made, it should be traceable to a goal in §2 or an explicit
-choice against one. When something in §4 gets resolved, it moves out of §4 and into
-its own document, and this file links to it. When a goal turns out to be wrong, edit
-this file and say so — a goals document that quietly stops describing the project is
+When a design decision is made, it should be traceable to a goal in §goals or an explicit
+choice against one. When something in §tensions gets resolved, it moves out of §tensions
+and into its own document, and this file links to it. When a goal turns out to be wrong,
+edit this file and say so — a goals document that quietly stops describing the project is
 worse than none.
 
 ## Related
 
 - `language-constructs.md` — checklist of constructs a language needs, from
-  *Crafting Interpreters*; the raw material §2.3 draws on
-- `../../thoughts/namespace.md` — the namespace §2.4 depends on
+  *Crafting Interpreters*; the raw material §boring draws on
+- `../../thoughts/namespace.md` — the namespace §living depends on
 - `../../thoughts/messages.rfc.md` — message format, including `/othismo.telemetry`
 - `../../thoughts/runtime.md` — host/guest boundary and the async model

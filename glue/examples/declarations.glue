@@ -1,24 +1,25 @@
-// §5 and §6 — functions, data, and types.
+// §functions and §types — functions, data, and types.
 //
-// §3 collapses Lox's declaration/statement split, so every declaration here is
-// a statement and may appear anywhere one may.
+// §statements collapses Lox's declaration/statement split, so every
+// declaration here is a statement and may appear anywhere one may.
 
 // ---- Functions ------------------------------------------------------------
 
 // Parameter types are required, and the return type is required when it isn't
-// unit. That is §10's local-inference boundary: signatures are annotated,
-// bodies are inferred — which keeps a function's meaning readable without
-// reading its body.
+// unit. That is §inference's local-inference boundary: signatures are
+// annotated, bodies are inferred — which keeps a function's meaning readable
+// without reading its body.
 fn add(a: u64, b: u64) -> u64 {
   a + b
 }
 
-// A stand-in for §13's host. A program has no way to reach the outside world
-// yet, so the functions here that would print or fetch something do nothing —
-// and unit, which is what they return, is a real value rather than an absence.
+// A stand-in for §modules' host. A program has no way to reach the outside
+// world yet, so the functions here that would print or fetch something do
+// nothing — and unit, which is what they return, is a real value rather than
+// an absence.
 fn emit(text: Str) { }
 
-// The return type is omitted when it is unit (§5).
+// The return type is omitted when it is unit (§functions).
 fn log(message: Str) {
   emit(message);
 }
@@ -29,24 +30,25 @@ fn work() { }
 
 // `mut` on a parameter means the function may mutate the caller's value, and
 // the caller must pass a `mut` binding. It belongs to the parameter, not to
-// the type, even though it is written where a type modifier would be (§5).
+// the type, even though it is written where a type modifier would be
+// (§functions).
 //
 // `Counter` is declared further down: a declaration is order-independent
-// within its block, which is what mutual recursion needs (§5, §12).
+// within its block, which is what mutual recursion needs (§functions, §scope).
 fn advance(c: mut Counter, by: u64) {
   c.steps = c.steps + by;
 }
 
 // There is no overloading, by arity or by type: one name, one function. The
 // cost of `add_u64` versus `add_f64` is smaller than the cost of resolution
-// rules nobody can predict (§5).
+// rules nobody can predict (§functions).
 fn add_f64(a: f64, b: f64) -> f64 {
   a + b
 }
 
 // A `fn` may be declared inside a block. It is scoped to that block and
 // captures nothing — it is an ordinary function that happens to be private.
-// To capture, use a lambda (§5).
+// To capture, use a lambda (§functions).
 fn outer(n: u64) -> u64 {
   fn double(x: u64) -> u64 {
     x * 2
@@ -54,7 +56,7 @@ fn outer(n: u64) -> u64 {
   double(n)
 }
 
-// Recursion is permitted (§5).
+// Recursion is permitted (§functions).
 fn countdown(n: u64) -> u64 {
   if n == 0 {
     return 0;
@@ -79,7 +81,8 @@ fn compose(callback: fn(u64) -> u64) -> fn(u64) -> u64 {
 }
 
 // ---- Lambdas --------------------------------------------------------------
-// Lambdas capture by reference, implicitly — there is no capture list (§5).
+// Lambdas capture by reference, implicitly — there is no capture list
+// (§functions).
 //
 // A lambda's types come from context, so each of these has to have some: an
 // annotation on the parameter, or a type on the binding it is being given to,
@@ -99,7 +102,7 @@ let mapped = apply((x) -> x * 3, 4);
 // ---- Structs --------------------------------------------------------------
 // Nominal, not structural: two structs with identical fields are different
 // types. A name is a decision, and structural typing makes every field name
-// load-bearing forever (§6).
+// load-bearing forever (§types).
 
 // A point in two dimensions.
 struct Point {
@@ -121,7 +124,7 @@ struct Line {
 
 // Field mutability follows the binding, not the field: a `mut` binding permits
 // assigning any field, a non-`mut` binding permits none. There is no per-field
-// `mut` (§6).
+// `mut` (§types).
 let origin = Point { x: 0, y: 0 };
 let mut moving = Point { x: 1, y: 2 };
 moving.x = 5;
@@ -139,7 +142,7 @@ let diagonal = Line {
 // ---- Type aliases ---------------------------------------------------------
 // An alias is a second name for one type, not a new one — `InstanceId` and
 // `u64` are interchangeable everywhere. A distinct type sharing a
-// representation is a different feature, and isn't here yet (§6).
+// representation is a different feature, and isn't here yet (§types).
 
 // Identifies a live instance in the Othismo namespace.
 type InstanceId = u64;
@@ -150,7 +153,7 @@ type Nothing = ();
 // ---- Unit -----------------------------------------------------------------
 // A function with no `-> T` returns unit. Unit is a real value with one
 // inhabitant, not an absence: it can be bound, returned, and stored, which
-// keeps `fn` types uniform (§5).
+// keeps `fn` types uniform (§functions).
 
 let nil: () = ();
 

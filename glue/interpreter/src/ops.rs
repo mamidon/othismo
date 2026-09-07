@@ -1,15 +1,15 @@
-//! §2's operators, applied to values.
+//! §expressions' operators, applied to values.
 //!
-//! Separate from the executor so that the semantics are readable on their own —
-//! this file is what to check against §2's table, and `exec.rs` is what to check
-//! against core IR's instruction set.
+//! Separate from the executor so that the semantics are readable on their own
+//! — this file is what to check against §expressions' table, and `exec.rs` is
+//! what to check against core IR's instruction set.
 //!
 //! `&&` and `||` are absent, and now absent twice over: they short-circuit,
-//! which makes them control flow wearing an operator's clothes (§2), so
-//! elaboration lowers them to [`ir::program::Stmt::If`] and there is no
+//! which makes them control flow wearing an operator's clothes (§expressions),
+//! so elaboration lowers them to [`ir::program::Stmt::If`] and there is no
 //! [`BinOp`] for either. Neither back end implements laziness.
 //!
-//! What §2 promises and this delivers:
+//! What §expressions promises and this delivers:
 //!
 //! * **Overflow traps**, at the operand's own width — `255u8 + 1` traps where
 //!   `255u16 + 1` does not. Every integer operation is checked.
@@ -17,19 +17,19 @@
 //!   dividend** — `-7s64 / 2s64` is `-3` and `-7s64 % 2s64` is `-1`, which is
 //!   what wasm's `div_s`/`rem_s` do.
 //! * **Integer division and remainder by zero trap.** Float division does not:
-//!   §2 also says floats follow IEEE-754, and IEEE's answer is an infinity.
-//!   Trapping is the rule for the operation with no representable answer, and
-//!   float division by zero has one.
-//! * **Strings**: `+` concatenates, and comparison is by bytes (§1: strings are
-//!   UTF-8, so byte order is code-point order).
-//! * **Instances compare by identity** (§2), which under §6's reference
-//!   semantics is the only equality they could have.
+//!   §expressions also says floats follow IEEE-754, and IEEE's answer is an
+//!   infinity. Trapping is the rule for the operation with no representable
+//!   answer, and float division by zero has one.
+//! * **Strings**: `+` concatenates, and comparison is by bytes (§lexical:
+//!   strings are UTF-8, so byte order is code-point order).
+//! * **Instances compare by identity** (§expressions), which under §types'
+//!   reference semantics is the only equality they could have.
 //!
-//! What is *not* here any more: the type checks. §1's "no implicit conversion"
-//! and §2's "cross-type comparison does not exist" are elaboration's now, so a
-//! pair of operands that disagree cannot reach this file. Where one appears to,
-//! the answer is `unreachable!` rather than a message — an interpreter bug, not
-//! a program's.
+//! What is *not* here any more: the type checks. §lexical's "no implicit
+//! conversion" and §expressions' "cross-type comparison does not exist" are
+//! elaboration's now, so a pair of operands that disagree cannot reach this
+//! file. Where one appears to, the answer is `unreachable!` rather than a
+//! message — an interpreter bug, not a program's.
 
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -52,19 +52,20 @@ pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
             Ok(float(op, a, b, bits))
         }
         (Value::Str(a), Value::Str(b)) => Ok(match op {
-            // §2: `+` concatenates. Nothing else about a string is arithmetic.
+            // §expressions: `+` concatenates. Nothing else about a string is
+            // arithmetic.
             BinOp::Add => Value::string(&format!("{a}{b}")),
             _ => Value::Bool(compare(op, Some(a.as_bytes().cmp(b.as_bytes())))),
         }),
         (Value::Char(a), Value::Char(b)) => Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
-        // §2 gives no meaning to `false < true`, so elaboration admits only
-        // equality here and the ordering arm is unreachable.
+        // §expressions gives no meaning to `false < true`, so elaboration
+        // admits only equality here and the ordering arm is unreachable.
         (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(compare(op, Some(a.cmp(&b))))),
-        // Unit has one inhabitant, so two of them are equal (§6).
+        // Unit has one inhabitant, so two of them are equal (§types).
         (Value::Unit, Value::Unit) => Ok(Value::Bool(compare(op, Some(Ordering::Equal)))),
-        // §2: equality on values, identity on instance references. §6's
-        // reference semantics is what makes those different answers, and
-        // ordering is not defined on an instance at all — so elaboration
+        // §expressions: equality on values, identity on instance references.
+        // §types' reference semantics is what makes those different answers,
+        // and ordering is not defined on an instance at all — so elaboration
         // admits only these two.
         (Value::Struct(a), Value::Struct(b)) => Ok(Value::Bool(match op {
             BinOp::Eq => Rc::ptr_eq(&a, &b),
@@ -72,7 +73,7 @@ pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
             _ => unreachable!("`{}` is not defined on an instance", op.name()),
         })),
         (left, right) => unreachable!(
-            "§1 has no implicit conversion, so elaboration refuses `{}` against `{}`",
+            "§lexical has no implicit conversion, so elaboration refuses `{}` against `{}`",
             left.type_name(),
             right.type_name()
         ),
@@ -81,9 +82,9 @@ pub(crate) fn binary(op: BinOp, left: Value, right: Value) -> OpResult {
 
 pub(crate) fn unary(op: UnOp, operand: Value) -> OpResult {
     match (op, operand) {
-        // §2 defines `-` on signed and float types only; negating an unsigned
-        // value is a type error elaboration has already reported. What is left
-        // is the one signed value whose negation does not fit.
+        // §expressions defines `-` on signed and float types only; negating an
+        // unsigned value is a type error elaboration has already reported.
+        // What is left is the one signed value whose negation does not fit.
         (UnOp::Neg, Value::Int { value, ty }) => checked(-value, ty, "-"),
         (UnOp::Neg, Value::Float { value, bits }) => Ok(round(-value, bits)),
         (UnOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
@@ -110,14 +111,15 @@ fn integer(op: BinOp, a: i128, b: i128, ty: IntTy) -> OpResult {
     };
     match value {
         Some(value) => checked(value, ty, name),
-        // Only reachable for `i128`'s own edges, which the widths §1 has cannot
-        // produce — but the answer is the same one the width check gives.
+        // Only reachable for `i128`'s own edges, which the widths §lexical has
+        // cannot produce — but the answer is the same one the width check
+        // gives.
         None => Err(overflow(name, ty)),
     }
 }
 
-/// §2's overflow rule: the mathematical result, or a trap if the type cannot
-/// hold it. There is no wrapping.
+/// §expressions' overflow rule: the mathematical result, or a trap if the
+/// type cannot hold it. There is no wrapping.
 fn checked(value: i128, ty: IntTy, operator: &'static str) -> OpResult {
     if ty.holds(value) {
         Ok(Value::Int { value, ty })
@@ -143,8 +145,8 @@ fn float(op: BinOp, a: f64, b: f64, bits: u8) -> Value {
         // integer one does.
         BinOp::Rem => round(a % b, bits),
         // `partial_cmp` gives `None` for NaN against anything, which is where
-        // §2's "every ordering against NaN is false, and `NaN != NaN`" comes
-        // from rather than being a rule of its own.
+        // §expressions' "every ordering against NaN is false, and `NaN !=
+        // NaN`" comes from rather than being a rule of its own.
         _ => Value::Bool(compare(op, a.partial_cmp(&b))),
     }
 }

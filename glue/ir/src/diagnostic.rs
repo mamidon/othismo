@@ -37,8 +37,8 @@ pub enum DiagnosticKind {
         ty: String,
         field: String,
     },
-    /// §5: a nested `fn` captures nothing. The name exists — it is just not
-    /// reachable from here.
+    /// §functions: a nested `fn` captures nothing. The name exists — it is
+    /// just not reachable from here.
     FnCapturesNothing(String),
     NotAType(String),
     NotAValue(String),
@@ -48,10 +48,11 @@ pub enum DiagnosticKind {
         expected: String,
         found: String,
     },
-    /// §2 has no truthiness: a condition is a `bool` or it is an error.
+    /// §expressions has no truthiness: a condition is a `bool` or it is an
+    /// error.
     ConditionNotBool(String),
-    /// §1: `u64 + s64` and `u32 + u64` are both errors. There is no promotion
-    /// lattice.
+    /// §lexical: `u64 + s64` and `u32 + u64` are both errors. There is no
+    /// promotion lattice.
     MixedOperands {
         op: String,
         left: String,
@@ -61,8 +62,9 @@ pub enum DiagnosticKind {
         op: String,
         ty: String,
     },
-    /// §2: negating an unsigned value has no representable result but zero, so
-    /// it is refused at compile time rather than trapped at run time.
+    /// §expressions: negating an unsigned value has no representable result
+    /// but zero, so it is refused at compile time rather than trapped at run
+    /// time.
     NegateUnsigned(String),
     NotCallable(String),
     WrongArity {
@@ -72,7 +74,7 @@ pub enum DiagnosticKind {
     NotAStruct(String),
     MissingField(String),
     DuplicateField(String),
-    /// §5: a lambda's types come from context, and there wasn't any.
+    /// §functions: a lambda's types come from context, and there wasn't any.
     CannotInferLambda,
     CannotCast {
         from: String,
@@ -80,41 +82,43 @@ pub enum DiagnosticKind {
     },
 
     // ---- Constants --------------------------------------------------------
-    /// §1: pinning by context failed, and pinning by sign would not fit either.
+    /// §lexical: pinning by context failed, and pinning by sign would not fit
+    /// either.
     ConstantOutOfRange {
         value: String,
         ty: String,
     },
-    /// §2: constant expressions are checked at compile time rather than
-    /// trapping, so this is where overflow lands when every operand is
+    /// §expressions: constant expressions are checked at compile time rather
+    /// than trapping, so this is where overflow lands when every operand is
     /// constant.
     ConstantOverflow,
     ConstantDivisionByZero,
-    /// §1: integer and float constants do not mix.
+    /// §lexical: integer and float constants do not mix.
     MixedConstantKinds,
 
     // ---- Statements -------------------------------------------------------
-    /// §3: the left side of an assignment is a place — a name, a field, or an
-    /// index.
+    /// §statements: the left side of an assignment is a place — a name, a
+    /// field, or an index.
     NotAPlace,
-    /// §6: field mutability follows the binding, so a non-`mut` binding permits
-    /// assigning no field.
+    /// §types: field mutability follows the binding, so a non-`mut` binding
+    /// permits assigning no field.
     AssignToNonMut(String),
-    /// §5: a `mut` parameter permits the callee to mutate the argument in
-    /// place, so the argument has to *be* a place rather than a value computed
-    /// at the call.
+    /// §functions: a `mut` parameter permits the callee to mutate the argument
+    /// in place, so the argument has to *be* a place rather than a value
+    /// computed at the call.
     MutArgumentNotAPlace {
         parameter: String,
     },
-    /// §5's rule, which §3 names as the one that consumes `mut`: a call that
-    /// mutates requires a `mut` binding at the call site, so the mutation is
-    /// visible where it happens rather than only where it was declared.
+    /// §functions' rule, which §statements names as the one that consumes
+    /// `mut`: a call that mutates requires a `mut` binding at the call site,
+    /// so the mutation is visible where it happens rather than only where it
+    /// was declared.
     MutArgumentNotMutable {
         parameter: String,
         argument: String,
     },
-    /// §4: unlabelled, and applying to the innermost enclosing loop — of which
-    /// there is none here.
+    /// §control: unlabelled, and applying to the innermost enclosing loop — of
+    /// which there is none here.
     JumpOutsideLoop(&'static str),
 
     // ---- Not yet ----------------------------------------------------------

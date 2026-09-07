@@ -1,21 +1,22 @@
 //! What a Glue program evaluates to.
 //!
-//! §1's six kinds of literal. There is no `nil`: §1 doesn't have one, so
-//! neither does this, and [`Value::Unit`] is a real value with one inhabitant
-//! rather than an absence (§5).
+//! §lexical's six kinds of literal. There is no `nil`: §lexical doesn't have
+//! one, so neither does this, and [`Value::Unit`] is a real value with one
+//! inhabitant rather than an absence (§functions).
 //!
-//! **A value carries its type.** §1's numeric tower is real now — elaboration
-//! pins every constant and every slot to a width before this crate sees it — so
-//! `255u8 + 1` has to trap where `255u16 + 1` does not, and the check needs the
-//! width at hand. Core IR keeps types in slots (invariant 1), so the width
-//! could equally be looked up from the slot an operand names; carrying it in
-//! the value instead keeps [`crate::ops`] a function of values alone, which is
-//! what makes that file checkable against §2's table on its own.
+//! **A value carries its type.** §lexical's numeric tower is real now —
+//! elaboration pins every constant and every slot to a width before this crate
+//! sees it — so `255u8 + 1` has to trap where `255u16 + 1` does not, and the
+//! check needs the width at hand. Core IR keeps types in slots (invariant 1),
+//! so the width could equally be looked up from the slot an operand names;
+//! carrying it in the value instead keeps [`crate::ops`] a function of values
+//! alone, which is what makes that file checkable against §expressions' table
+//! on its own.
 //!
 //! The alternative reading — the one this crate held while it walked the
-//! concrete syntax tree — was that every integer is an `i64` and every float an
-//! `f64`, with a literal's suffix read and discarded. §10's arrival is what
-//! ends that.
+//! concrete syntax tree — was that every integer is an `i64` and every float
+//! an `f64`, with a literal's suffix read and discarded. §inference's arrival
+//! is what ends that.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -23,7 +24,7 @@ use std::rc::Rc;
 
 use ir::program::FuncId;
 
-/// One of §1's integer types: `u8`…`u64` and `s8`…`s64`.
+/// One of §lexical's integer types: `u8`…`u64` and `s8`…`s64`.
 ///
 /// `s` rather than `i`, matching wasm's instruction suffixes and the IR's
 /// [`ir::types::TypeDef::Int`].
@@ -63,9 +64,9 @@ impl IntTy {
         }
     }
 
-    /// Whether a mathematical value is representable in this type — §2's
-    /// overflow check, and the only thing standing between a `u8` and wasm's
-    /// silent wrapping.
+    /// Whether a mathematical value is representable in this type —
+    /// §expressions' overflow check, and the only thing standing between a
+    /// `u8` and wasm's silent wrapping.
     pub fn holds(self, value: i128) -> bool {
         value >= self.min() && value <= self.max()
     }
@@ -78,14 +79,14 @@ impl IntTy {
 /// A runtime value.
 ///
 /// An integer is held as its mathematical value at `i128`, wide enough for
-/// every one of §1's types, with [`IntTy`] saying which of them it belongs to.
-/// That is deliberately not a machine representation: §2 asks for a *checked*
-/// answer to every operation, and checking is easier from the value than from
-/// its bits.
+/// every one of §lexical's types, with [`IntTy`] saying which of them it
+/// belongs to. That is deliberately not a machine representation: §expressions
+/// asks for a *checked* answer to every operation, and checking is easier from
+/// the value than from its bits.
 ///
 /// `Rc<str>` for strings so that copying one is a refcount bump. Nothing
-/// mutates a string in place — §2's `+` produces a new one — so shared
-/// ownership needs no interior mutability to go with it.
+/// mutates a string in place — §expressions' `+` produces a new one — so
+/// shared ownership needs no interior mutability to go with it.
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
@@ -102,24 +103,24 @@ pub enum Value {
     },
     Char(char),
     Str(Rc<str>),
-    /// A `fn` or a lambda (§5). Every function value is a closure, and a plain
-    /// `fn` has an empty environment — one representation, because the
+    /// A `fn` or a lambda (§functions). Every function value is a closure, and
+    /// a plain `fn` has an empty environment — one representation, because the
     /// difference between the two forms was spent during elaboration.
     Closure(Rc<Closure>),
-    /// An instance of a `struct` (§6).
+    /// An instance of a `struct` (§types).
     ///
     /// Reference semantics: the `Rc` *is* the semantics. Binding one to a
     /// second name copies the reference, so a mutation through either is
-    /// visible through both, and identity — which §2 defines equality on for
-    /// instances — is pointer identity.
+    /// visible through both, and identity — which §expressions defines
+    /// equality on for instances — is pointer identity.
     Struct(Rc<StructVal>),
     /// A one-word box holding a value, which no Glue program can name.
     ///
     /// Lowering introduces one for a binding that is both captured and
-    /// assigned, so that §5's promise — a captured binding outlives its frame,
-    /// and everyone holding it sees the same writes — has somewhere to be
-    /// true. An uncaptured binding is a slot and an unassigned capture is a
-    /// copy; neither costs this.
+    /// assigned, so that §functions' promise — a captured binding outlives
+    /// its frame, and everyone holding it sees the same writes — has somewhere
+    /// to be true. An uncaptured binding is a slot and an unassigned capture
+    /// is a copy; neither costs this.
     Cell(Rc<RefCell<Value>>),
 }
 
@@ -141,9 +142,9 @@ pub struct StructShape {
     pub(crate) fields: Vec<Rc<str>>,
 }
 
-/// Shallow, deliberately: §6 lets a struct hold itself, and a program can build
-/// a cycle by assigning a field, so deriving this would recurse forever the
-/// first time anything printed a value.
+/// Shallow, deliberately: §types lets a struct hold itself, and a program can
+/// build a cycle by assigning a field, so deriving this would recurse forever
+/// the first time anything printed a value.
 impl fmt::Debug for StructVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {{ … }}", self.shape.name)
@@ -165,11 +166,11 @@ pub struct Closure {
     pub(crate) name: Rc<str>,
 }
 
-/// Structural, as §2 asks.
+/// Structural, as §expressions asks.
 ///
-/// Two integers of different types never meet — §1 has no promotion lattice and
-/// elaboration refuses the comparison — so the type is compared as well, and
-/// disagreement is inequality rather than a panic.
+/// Two integers of different types never meet — §lexical has no promotion
+/// lattice and elaboration refuses the comparison — so the type is compared as
+/// well, and disagreement is inequality rather than a panic.
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {
@@ -182,7 +183,7 @@ impl PartialEq for Value {
                     ty: b,
                 },
             ) => a == b && left == right,
-            // IEEE-754 (§2), so `NaN != NaN`.
+            // IEEE-754 (§expressions), so `NaN != NaN`.
             (
                 Value::Float {
                     value: left,
@@ -195,14 +196,14 @@ impl PartialEq for Value {
             ) => a == b && left == right,
             (Value::Char(left), Value::Char(right)) => left == right,
             (Value::Str(left), Value::Str(right)) => left == right,
-            // §2 defines equality on values and identity on instance
+            // §expressions defines equality on values and identity on instance
             // references, and says nothing about functions — elaboration
             // refuses to compare two of them. This impl still has to answer,
             // and answers identity, which is the only thing that could be
             // meant. A cell is storage rather than a value, so the same holds.
-            // §2: identity on instance references, which under §6's reference
-            // semantics is the only equality a struct could have — two
-            // instances with equal fields are two instances.
+            // §expressions: identity on instance references, which under
+            // §types' reference semantics is the only equality a struct could
+            // have — two instances with equal fields are two instances.
             (Value::Struct(left), Value::Struct(right)) => Rc::ptr_eq(left, right),
             (Value::Closure(left), Value::Closure(right)) => Rc::ptr_eq(left, right),
             (Value::Cell(left), Value::Cell(right)) => Rc::ptr_eq(left, right),
@@ -241,9 +242,9 @@ impl Value {
 
     /// How to name this value's type in a message.
     ///
-    /// Exact, unlike the vague "an integer" this crate used to give: there is a
-    /// type checker in front of it now, and a value knows which of §1's types
-    /// it belongs to.
+    /// Exact, unlike the vague "an integer" this crate used to give: there is
+    /// a type checker in front of it now, and a value knows which of
+    /// §lexical's types it belongs to.
     pub fn type_name(&self) -> String {
         match self {
             Value::Unit => "()".to_string(),
@@ -303,7 +304,7 @@ impl fmt::Display for Value {
 impl StructVal {
     /// `P { x: 1, y: "b" }`, to a fixed depth.
     ///
-    /// §6 gives structs reference semantics and lets one hold itself, so a
+    /// §types gives structs reference semantics and lets one hold itself, so a
     /// program can build a cycle and printing has to stop somewhere. Below the
     /// budget a struct is written as its name and an ellipsis, which is what
     /// the reader wants at that depth anyway.

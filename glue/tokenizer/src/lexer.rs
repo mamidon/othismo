@@ -27,8 +27,9 @@ pub(crate) fn tokenize(source: &str) -> Tokens {
     let mut cursor = Cursor::new(source.as_bytes());
     let mut out = Tokens::default();
 
-    // A leading byte-order mark is skipped, not required (§1). It's emitted as
-    // trivia rather than stepped over, so the stream still tiles the file.
+    // A leading byte-order mark is skipped, not required (§lexical). It's
+    // emitted as trivia rather than stepped over, so the stream still tiles
+    // the file.
     if cursor.eat_seq(&[0xEF, 0xBB, 0xBF]) {
         out.tokens
             .push(Token::new(TokenKind::Whitespace, Span::new(0, 3)));
@@ -145,10 +146,10 @@ fn is_whitespace(byte: u8) -> bool {
 
 /// A leading-dot float, or field access — the only two things a `.` can be.
 fn consume_dot(cursor: &mut Cursor<u8>, source: &str, out: &mut Tokens) -> TokenKind {
-    // §1's one exception to context-free lexing: `.5` is a float unless the
-    // preceding significant token could end an expression, in which case the
-    // `.` is field access. Decided by the previous *token*, not by adjacency,
-    // so `pair. 0` and `pair .0` agree.
+    // §lexical's one exception to context-free lexing: `.5` is a float unless
+    // the preceding significant token could end an expression, in which case
+    // the `.` is field access. Decided by the previous *token*, not by
+    // adjacency, so `pair. 0` and `pair .0` agree.
     let leading_dot_float = cursor.peek(1).is_some_and(|byte| byte.is_ascii_digit())
         && !previous_can_end_expression(&out.tokens);
     if leading_dot_float {
@@ -185,8 +186,8 @@ fn consume_to_end_of_line(cursor: &mut Cursor<u8>) {
     cursor.consume_while(|byte| byte != b'\n' && byte != b'\r');
 }
 
-/// Block comments nest (§1), so this counts depth rather than looking for the
-/// first `*/`.
+/// Block comments nest (§lexical), so this counts depth rather than looking
+/// for the first `*/`.
 fn consume_block_comment(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> TokenKind {
     let start = cursor.index();
     cursor.eat_seq(b"/*");
@@ -239,8 +240,8 @@ fn consume_string(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) ->
     TokenKind::Str
 }
 
-/// `'x'` — exactly one Unicode scalar value (§1). Nothing else in the language
-/// uses `'`, so an unterminated one is unambiguously a mistake.
+/// `'x'` — exactly one Unicode scalar value (§lexical). Nothing else in the
+/// language uses `'`, so an unterminated one is unambiguously a mistake.
 fn consume_char(cursor: &mut Cursor<u8>, diagnostics: &mut Vec<Diagnostic>) -> TokenKind {
     let start = cursor.index();
     cursor.consume();
@@ -321,9 +322,9 @@ fn consume_identifier(
     cursor.consume_while(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
 
     // A non-ASCII letter glued to the run means someone wrote a Unicode
-    // identifier, which §1 rules out. Take the whole word so the diagnostic
-    // covers `café` once, rather than pointing at the `é` and calling the rest
-    // a valid identifier.
+    // identifier, which §lexical rules out. Take the whole word so the
+    // diagnostic covers `café` once, rather than pointing at the `é` and
+    // calling the rest a valid identifier.
     if peek_char(cursor, source).is_some_and(is_word_character) {
         consume_word(cursor, source);
         diagnostics.push(Diagnostic::new(
@@ -333,8 +334,8 @@ fn consume_identifier(
         return TokenKind::Unknown;
     }
 
-    // Keywords are reserved, not contextual (§1), so this is a lookup and not
-    // a question for the parser.
+    // Keywords are reserved, not contextual (§lexical), so this is a lookup
+    // and not a question for the parser.
     TokenKind::keyword(&source[start..cursor.index()]).unwrap_or(TokenKind::Ident)
 }
 

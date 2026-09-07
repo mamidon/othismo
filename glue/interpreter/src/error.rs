@@ -1,15 +1,14 @@
 //! What stops a program mid-flight.
 //!
 //! The list is short, and complete, and that is the point of having elaborated
-//! first.
-//! Everything this crate used to refuse — an unbound name, a condition that
-//! isn't `bool`, the wrong number of arguments, `1 + 1.5` — is an
-//! [`ir::Diagnostic`] before the program runs. What is left is §2's traps:
-//! the operations that are well typed and still have no answer.
+//! first. Everything this crate used to refuse — an unbound name, a condition
+//! that isn't `bool`, the wrong number of arguments, `1 + 1.5` — is an
+//! [`ir::Diagnostic`] before the program runs. What is left is §expressions'
+//! traps: the operations that are well typed and still have no answer.
 //!
-//! Every trap is fatal. §9 hasn't decided what a trap is or whether one is
-//! recoverable, so the interpreter does the one thing that can't be wrong in
-//! advance of that decision: it stops, and says where.
+//! Every trap is fatal. §errors hasn't decided what a trap is or whether one
+//! is recoverable, so the interpreter does the one thing that can't be wrong
+//! in advance of that decision: it stops, and says where.
 //!
 //! # Two types, one shape
 //!
@@ -60,25 +59,25 @@ impl std::error::Error for RuntimeError {}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TrapKind {
-    /// §2: overflow is an error, not a wrap. wasm's native behaviour is silent
-    /// wrapping, so this is a check the interpreter pays for deliberately —
-    /// and §1's widths are what make it reachable at all.
+    /// §expressions: overflow is an error, not a wrap. wasm's native behaviour
+    /// is silent wrapping, so this is a check the interpreter pays for
+    /// deliberately — and §lexical's widths are what make it reachable at all.
     Overflow {
         operator: &'static str,
         ty: String,
     },
     DividedByZero,
-    /// §2: `as` is explicit and trapping. Truncation and rounding are defined
-    /// behaviour rather than traps, so this is the conversion with no
-    /// representable answer — an integer too wide for its target, or a float
-    /// past the edges of one.
+    /// §expressions: `as` is explicit and trapping. Truncation and rounding
+    /// are defined behaviour rather than traps, so this is the conversion with
+    /// no representable answer — an integer too wide for its target, or a
+    /// float past the edges of one.
     CastOutOfRange {
         value: String,
         ty: String,
     },
-    /// §5: there is no tail-call guarantee, so deep recursion exhausts the
-    /// stack and traps. This is that trap, raised at a depth the host stack
-    /// still has room for rather than by falling off it.
+    /// §functions: there is no tail-call guarantee, so deep recursion exhausts
+    /// the stack and traps. This is that trap, raised at a depth the host
+    /// stack still has room for rather than by falling off it.
     RecursionLimit,
 }
 

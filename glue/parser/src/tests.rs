@@ -134,8 +134,8 @@ fn an_empty_node_is_still_a_node() {
 /// Parses, asserts the parse was clean, and renders the shape.
 ///
 /// Parenthesized rather than dumped as kinds: what these tests are checking is
-/// how §2's table groups the operands, and the operators themselves are the
-/// readable way to say so.
+/// how §expressions' table groups the operands, and the operators themselves
+/// are the readable way to say so.
 fn shape(source: &str) -> String {
     let parsed = parse(source);
     assert!(
@@ -187,8 +187,8 @@ fn grouped(parsed: &Parse, source: &str) -> String {
     out
 }
 
-/// Every rung of §2's table, each pinned against the rung below it. If this
-/// passes, the table in `expr.rs` matches the table in the spec.
+/// Every rung of §expressions' table, each pinned against the rung below it.
+/// If this passes, the table in `expr.rs` matches the table in the spec.
 #[test]
 fn precedence_ladder() {
     // Postfix binds tighter than unary...
@@ -230,8 +230,8 @@ fn postfix_chains_left() {
 }
 
 /// A method call is its own node, not a call whose callee is a field access —
-/// §2 leaves it to §11 whether `obj.method` is a value on its own, and the
-/// tree must not answer that question early.
+/// §expressions leaves it to §objects whether `obj.method` is a value on its
+/// own, and the tree must not answer that question early.
 #[test]
 fn a_method_call_is_not_a_call_of_a_field() {
     let parsed = parse("a.b(c)");
@@ -316,22 +316,23 @@ fn bindings() {
         skeleton("let n: u32 = 42;"),
         "(SourceFile (LetStmt (NamePat) (NameType) (LiteralExpr)))"
     );
-    // `mut` gates mutation, not rebinding (§3) — but it is still just a token.
+    // `mut` gates mutation, not rebinding (§statements) — but it is still just
+    // a token.
     assert_eq!(
         skeleton("let mut count = 0;"),
         "(SourceFile (LetStmt (NamePat) (LiteralExpr)))"
     );
 }
 
-/// §3 makes assignment a statement, so `if x = 1 { … }` cannot compile — the
-/// typo class is gone by construction rather than by lint.
+/// §statements makes assignment a statement, so `if x = 1 { … }` cannot
+/// compile — the typo class is gone by construction rather than by lint.
 #[test]
 fn assignment_is_a_statement() {
     assert_eq!(
         skeleton("count = count + 1;"),
         "(SourceFile (AssignStmt (NameExpr) (BinaryExpr (NameExpr) (LiteralExpr))))"
     );
-    // The left side is a place: a name, a field, or an index (§3).
+    // The left side is a place: a name, a field, or an index (§statements).
     assert_eq!(
         skeleton("p.x = 5;"),
         "(SourceFile (AssignStmt (FieldExpr (NameExpr)) (LiteralExpr)))"
@@ -342,8 +343,9 @@ fn assignment_is_a_statement() {
     );
 }
 
-/// A file is a block (§3): statements, then an optional trailing expression
-/// with no `;` that is the file's value. That is all of goal §2.1.
+/// A file is a block (§statements): statements, then an optional trailing
+/// expression with no `;` that is the file's value. That is all of goal
+/// §one-language.
 #[test]
 fn a_file_is_a_block() {
     assert_eq!(
@@ -372,8 +374,8 @@ fn blocks_are_expressions() {
     );
 }
 
-/// §4: braces mandatory, condition unparenthesized, and `else if` is `else`
-/// followed by another `if` rather than a keyword of its own.
+/// §control: braces mandatory, condition unparenthesized, and `else if` is
+/// `else` followed by another `if` rather than a keyword of its own.
 #[test]
 fn conditionals() {
     assert_eq!(
@@ -429,12 +431,12 @@ fn declarations() {
         "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) \
          (RetType (NameType)) (BlockExpr (BinaryExpr (NameExpr) (NameExpr)))))"
     );
-    // §5: the return type is omitted when it is unit.
+    // §functions: the return type is omitted when it is unit.
     assert_eq!(
         skeleton("fn log(message: Str) { }"),
         "(SourceFile (FnDecl (ParamList (Param (NameType))) (BlockExpr)))"
     );
-    // §5: `mut` on a parameter is the parameter's, not the type's.
+    // §functions: `mut` on a parameter is the parameter's, not the type's.
     assert_eq!(
         skeleton("fn advance(c: mut Counter, by: u64) { }"),
         "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) (BlockExpr)))"
@@ -449,7 +451,7 @@ fn declarations() {
     );
 }
 
-/// §5: a `fn` may be declared inside a block, and captures nothing.
+/// §functions: a `fn` may be declared inside a block, and captures nothing.
 #[test]
 fn declarations_nest() {
     assert_eq!(
@@ -503,7 +505,7 @@ fn lambdas() {
         "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam (NameType))) \
          (BinaryExpr (NameExpr) (LiteralExpr)))))"
     );
-    // §5: parameter types come from context, unlike a `fn`.
+    // §functions: parameter types come from context, unlike a `fn`.
     assert_eq!(
         skeleton("let inc = (x) -> x + 1;"),
         "(SourceFile (LetStmt (NamePat) (LambdaExpr (LambdaParamList (LambdaParam)) \
@@ -635,8 +637,9 @@ fn diagnostics(source: &str) -> Vec<DiagnosticKind> {
         .collect()
 }
 
-/// §2 makes comparison non-associative so the error names the mistake rather
-/// than letting it surface later as a `bool` compared to a number.
+/// §expressions makes comparison non-associative so the error names the
+/// mistake rather than letting it surface later as a `bool` compared to a
+/// number.
 #[test]
 fn comparison_does_not_chain() {
     assert_eq!(

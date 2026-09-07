@@ -1,4 +1,4 @@
-# §11 — Objects & Abstraction
+# §objects — Objects & Abstraction
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -11,13 +11,13 @@ common and far more compilable.
 
 The Othismo-specific question is the one that matters most: given a runtime whose unit is
 an *instance in a namespace exchanging BSON messages*, the right declaration here may be
-`actor` or `instance` with a message handler rather than `class`. Goal §2.4 wants program
-structure to line up with runtime structure so that a running program is already an
-addressable, inspectable graph. Goal §4.2 is the counterweight: if Glue objects map
-one-to-one onto Othismo instances the result is beautifully introspectable and probably
-far too slow, which implies two kinds of object — cheap in-instance ones and addressable
-instance-level ones — and a language that makes that distinction visible without making
-it miserable.
+`actor` or `instance` with a message handler rather than `class`. Goal §living wants
+program structure to line up with runtime structure so that a running program is already
+an addressable, inspectable graph. Goal §granularity is the counterweight: if Glue objects
+map one-to-one onto Othismo instances the result is beautifully introspectable and
+probably far too slow, which implies two kinds of object — cheap in-instance ones and
+addressable instance-level ones — and a language that makes that distinction visible
+without making it miserable.
 
 ## Lox's grammar **[Lox]**
 

@@ -1,4 +1,4 @@
-# §4 — Control Flow
+# §control — Control Flow
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -10,7 +10,8 @@ pleasant. The omissions that hurt most are `for-in` with an iteration protocol,
 `break`/`continue`, and error handling of any kind.
 
 Two forms of control flow have their own sections because they carry a type-system
-component this one doesn't: **error handling** (§9) and **pattern matching** (§7).
+component this one doesn't: **error handling** (§errors) and **pattern matching**
+(§unions).
 
 Two of the constructs on that list — iteration and async — need things Glue doesn't have
 yet, and are left out rather than sketched. What remains is the branching and looping a
@@ -34,12 +35,13 @@ language needs to work at all.
   - Implicit return of last expression
   - Multiple return values
   - Returning from top level; returning from an initializer (Lox: banned)
-- **`match` / pattern matching** **[Lox-omits]** — see §7, including `switch`-with-fallthrough
-  as the worse version of it, and `if let` / `while let` as its loop and branch forms
+- **`match` / pattern matching** **[Lox-omits]** — see §unions, including
+  `switch`-with-fallthrough as the worse version of it, and `if let` / `while let` as its
+  loop and branch forms
 - **`goto`** — no (see Design Note: Considering Goto Harmful, ch. 23) **[wasm]** — worth
   noting wasm *has* no goto; it has structured `block`/`loop`/`br`/`br_if`/`br_table`,
   which is a good reason not to want one
-- **Error handling** — Lox has none at all; see §9 for the whole family (exceptions,
+- **Error handling** — Lox has none at all; see §errors for the whole family (exceptions,
   Result types and propagation, traps vs. recoverable errors, `defer`/cleanup)
 - **Async control flow** — relevant to othismo: `async`/`await`, or CPS, or one-shot
   continuations. Note wasm's single-threaded guest + host-driven message loop means the
@@ -52,14 +54,14 @@ language needs to work at all.
 ### Not decided here
 
 - **Labelled `break` / `continue`** — deferred. See [Deferred decisions](deferred.md).
-- **`match` arms and patterns** — §7's. §4 records only that `match` is an expression (§2)
-  and that it is how branching on shape is spelled.
-- **Error handling** — §9's entirely: exceptions versus results, traps, propagation, and
-  cleanup.
+- **`match` arms and patterns** — §unions'. §control records only that `match` is an
+  expression (§expressions) and that it is how branching on shape is spelled.
+- **Error handling** — §errors' entirely: exceptions versus results, traps, propagation,
+  and cleanup.
 - **Iteration and async** — both need constructs that don't exist yet, so neither is
-  designed here. Iterating requires an iterable (§6) and, for the counting case, ranges;
-  awaiting requires something to await, which is a reply to a message (§11, §13). They
-  come back when their prerequisites do.
+  designed here. Iterating requires an iterable (§types) and, for the counting case,
+  ranges; awaiting requires something to await, which is a reply to a message (§objects,
+  §modules). They come back when their prerequisites do.
 
 ### Conditionals
 
@@ -78,9 +80,9 @@ if x > 0 {
   ambiguous, so no disambiguation rule is needed.
 - `else if` is `else` followed by another `if`, not a distinct `elif` keyword. It falls
   out of `else` accepting either a block or an `if`.
-- A map literal in the condition needs parentheses (§1) — the one place users trip.
-- `if` is an expression (§2). With no `else` its type is unit, so it can be a statement
-  but not a value.
+- A map literal in the condition needs parentheses (§lexical) — the one place users trip.
+- `if` is an expression (§expressions). With no `else` its type is unit, so it can be a
+  statement but not a value.
 
 ### Loops
 
@@ -90,15 +92,16 @@ while ready() {
 }
 ```
 
-- **`while` is the only loop.** It takes a `bool` condition; there is no truthiness (§2).
-- The body is a block and introduces a scope (§12).
+- **`while` is the only loop.** It takes a `bool` condition; there is no truthiness
+  (§expressions).
+- The body is a block and introduces a scope (§scope).
 - **Loops are statements, not expressions.** Their value is unit. This is why there is no
   `loop` keyword and no `break` with a value: those exist to make an infinite loop produce
   something, and `while true { … }` covers the control flow without the extra construct.
 
 There is no `for` of any kind. The C-style three-clause form is `while` with extra syntax,
-and the `for … in` form needs something to iterate — an iterable (§6) and, for counting,
-ranges. Neither is worth adding a keyword for until then.
+and the `for … in` form needs something to iterate — an iterable (§types) and, for
+counting, ranges. Neither is worth adding a keyword for until then.
 
 ### `break`, `continue`, `return`
 
@@ -111,9 +114,10 @@ return value;
 
 - `break` and `continue` apply to the innermost enclosing loop. Unlabelled only, for now.
 - `return` exits the enclosing function. It is for *early* exit: a function body is a
-  block, so its ordinary result is the trailing expression (§2, §3), and a well-shaped
-  function often has no `return` at all.
-- `return` inside a block expression still returns from the function, not the block (§2).
+  block, so its ordinary result is the trailing expression (§expressions, §statements),
+  and a well-shaped function often has no `return` at all.
+- `return` inside a block expression still returns from the function, not the block
+  (§expressions).
 
 ### Declined
 
@@ -124,8 +128,9 @@ return value;
   that `while true { …; if !c { break; } }` is an acceptable price, and it's one fewer
   keyword and one fewer precedence question.
 - **`loop`** — `while true` is already boring and conventional.
-- **`switch` with fallthrough** — `match` (§7) is the better version of the same idea, and
-  fallthrough is a bug generator with a compatibility argument Glue doesn't have to honor.
+- **`switch` with fallthrough** — `match` (§unions) is the better version of the same
+  idea, and fallthrough is a bug generator with a compatibility argument Glue doesn't have
+  to honor.
 - **`while … else`** — Python's loop-else confuses nearly everyone who meets it.
 
 ---
@@ -137,18 +142,18 @@ return value;
 ### Conditions
 
 Every condition — `if`, `while` — must have type `bool`. Not "must be convertible to
-bool": there are no implicit conversions (§2) and no truthiness, so the only thing that
-can appear there is a `bool`.
+bool": there are no implicit conversions (§expressions) and no truthiness, so the only
+thing that can appear there is a `bool`.
 
 ### Loop values and termination
 
 - A loop's value is unit. A `while` whose body never runs is still unit, so there is no
   "what if it never executes" question to answer.
 - **Non-termination is not an error.** An infinite loop in a guest instance blocks that
-  instance; whether the host can interrupt it is a runtime concern (§16's resource limits,
-  §15's observability), not a language one. Worth stating because a language with a
-  host-driven message loop invites the assumption that the host can always regain control,
-  and it cannot, absent a mechanism nobody has designed yet.
+  instance; whether the host can interrupt it is a runtime concern (§wasm's resource
+  limits, §semantics' observability), not a language one. Worth stating because a
+  language with a host-driven message loop invites the assumption that the host can always
+  regain control, and it cannot, absent a mechanism nobody has designed yet.
 
 ### Structured control flow
 

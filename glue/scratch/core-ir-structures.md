@@ -43,7 +43,7 @@ pub struct Slot(u32);      pub struct FieldIdx(u32);
 pub struct Sym(u32);       // interned name, diagnostics only
 pub struct CstId(u32);     // provenance into the parser's tree
 pub struct InstId(u32);    // an instantiation, for the call-site chain
-pub struct HostId(u32);    // a §13 host import
+pub struct HostId(u32);    // a §modules host import
 
 // ---- program ---------------------------------------------------------------
 
@@ -54,7 +54,7 @@ pub struct Program {
     pub insts:  Vec<Instantiation>,
     pub hosts:  Vec<HostImport>,
     pub entry:  Option<FuncId>,
-    /// §14's memo. This is the whole of monomorphization.
+    /// §comptime's memo. This is the whole of monomorphization.
     instantiations: HashMap<(DeclId, Vec<ConstId>), FuncId>,
 }
 
@@ -75,7 +75,7 @@ pub enum TypeDef {
 pub struct StructDef {
     pub name:   Option<Sym>,               // "Pair(u64, Str)" for diagnostics
     pub fields: Vec<(Sym, TypeId)>,
-    pub origin: Origin,                    // §6: identity IS the allocation site
+    pub origin: Origin,                    // §types: identity IS the allocation site
 }
 
 pub struct Types { defs: Vec<TypeDef>, interned: HashMap<TypeDef, TypeId> }
@@ -83,7 +83,7 @@ pub struct Types { defs: Vec<TypeDef>, interned: HashMap<TypeDef, TypeId> }
 impl Types {
     /// Primitives, `Fn`, `Cell` — structural, so interning is correct.
     pub fn intern(&mut self, d: TypeDef) -> TypeId { … }
-    /// The ONLY way to make a struct. Never interned: §6 says every evaluation
+    /// The ONLY way to make a struct. Never interned: §types says every evaluation
     /// of `struct { … }` yields a fresh type.
     pub fn fresh_struct(&mut self, s: StructDef) -> TypeId { … }
 }
@@ -104,7 +104,7 @@ pub struct SlotDef {
     pub ty:      TypeId,
     pub name:    Option<Sym>,   // None for an ANF temporary
     pub kind:    SlotKind,      // param | capture | local | temp
-    pub mutable: bool,          // §3: in-place mutation permitted through this binding
+    pub mutable: bool,          // §statements: in-place mutation permitted
 }
 
 pub struct Block {
@@ -124,8 +124,8 @@ pub enum Stmt {
     Break,
     Continue,
     Return(Option<Operand>),
-    Drop(Rvalue),               // §3's expression statement
-    Trap(TrapKind),             // provisional; §9 owns the taxonomy
+    Drop(Rvalue),               // §statements' expression statement
+    Trap(TrapKind),             // provisional; §errors owns the taxonomy
 }
 
 pub enum Operand { Slot(Slot), Const(ConstId) }
@@ -137,10 +137,10 @@ pub enum Rvalue {
     Cast   (Operand),                                    // target = dst slot's type
     Call         { func: FuncId,   args: Vec<Operand> },
     CallIndirect { callee: Operand, args: Vec<Operand> },
-    CallHost     { import: HostId, args: Vec<Operand> }, // §13
+    CallHost     { import: HostId, args: Vec<Operand> }, // §modules
     MakeStruct   (Vec<Operand>),                         // type = dst slot's type
     Field        { base: Operand, field: FieldIdx },
-    Index        { base: Operand, index: Operand },      // Str for now; §6
+    Index        { base: Operand, index: Operand },      // Str for now; §types
     MakeCell     (Operand),
     CellGet      (Operand),
     MakeClosure  { func: FuncId, captures: Vec<Operand> },
@@ -156,7 +156,7 @@ pub enum Place {
 
 pub enum UnOp  { Neg, Not }
 pub enum BinOp { Add, Sub, Mul, Div, Rem, Eq, Ne, Lt, Le, Gt, Ge }
-// No And/Or — §2 short-circuits, so `&&` and `||` lower to `If`.
+// No And/Or — §expressions short-circuits, so `&&` and `||` lower to `If`.
 
 // ---- constants: where comptime results land --------------------------------
 
@@ -179,7 +179,7 @@ pub struct Origin { pub cst: CstId, pub inst: Option<InstId> }
 
 pub struct Instantiation {
     pub decl: DeclId, pub args: Vec<ConstId>,
-    pub call_site: CstId, pub parent: Option<InstId>,   // the chain §14 wants
+    pub call_site: CstId, pub parent: Option<InstId>,   // the chain §comptime wants
 }
 ```
 
@@ -271,7 +271,7 @@ fn counter() -> fn() -> u64 {
   (block 0
     (assign t0 (cellget n))
     (assign t1 (add t0 (const 1u64)))
-    (store (cell n) t1)               ; §3's assignment statement
+    (store (cell n) t1)               ; §statements' assignment statement
     (assign t0 (cellget n))           ; the block's trailing expression
     (return t0)))
 ```
@@ -287,21 +287,23 @@ exactly this reason.
 ## Two things this sharpened — both resolved
 
 **A capture needs a cell only if the binding is assigned.** *(Proposed as "only if `mut`";
-corrected and accepted 2026-08-18.)* `core-ir.md` said captured bindings get cells, which is
-stronger than necessary: copying an unassigned binding's value into the closure environment
-is observationally identical, because every copy stays equal forever — and under §6's
-reference semantics copying a struct binding copies the *reference*, so mutation of the
-object stays visible either way. What the cell protects is assignment to the **name**.
+corrected and accepted 2026-08-18.)* `core-ir.md` said captured bindings get cells, which
+is stronger than necessary: copying an unassigned binding's value into the closure
+environment is observationally identical, because every copy stays equal forever — and
+under §types' reference semantics copying a struct binding copies the *reference*, so
+mutation of the object stays visible either way. What the cell protects is assignment to
+the **name**.
 
-The draft said that meant `mut`, and that was wrong. §3 is explicit that rebinding is
-unrestricted on any binding and that `mut` gates only in-place mutation, so a lambda can
-rebind a non-`mut` captured binding and the criterion has to be assignment. §5 reads the
-other way — "the binding must be `mut` for the lambda to mutate it at all" — and that
-disagreement is now written down in `core-ir.md` rather than silently resolved here.
+The draft said that meant `mut`, and that was wrong. §statements is explicit that
+rebinding is unrestricted on any binding and that `mut` gates only in-place mutation, so a
+lambda can rebind a non-`mut` captured binding and the criterion has to be assignment.
+§functions reads the other way — "the binding must be `mut` for the lambda to mutate it at
+all" — and that disagreement is now written down in `core-ir.md` rather than silently
+resolved here.
 
-That still makes §5's per-iteration promise fall out more cheaply than the doc described: an
-unassigned `let` in a loop body is copied fresh into each closure, per iteration, with no
-allocation at all. Only captured *and assigned* bindings pay.
+That still makes §functions' per-iteration promise fall out more cheaply than the doc
+described: an unassigned `let` in a loop body is copied fresh into each closure, per
+iteration, with no allocation at all. Only captured *and assigned* bindings pay.
 
 **The constant pool needs no `Rc<RefCell>` and no unsafe.** *(Accepted 2026-08-18.)* `Const::Struct` holds
 `Vec<ConstId>`, so sharing is "the same id twice" and a cycle is just an id that

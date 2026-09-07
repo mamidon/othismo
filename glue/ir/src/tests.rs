@@ -50,8 +50,9 @@ fn only_error(source: &str) -> String {
 
 // ---- The shape of it -------------------------------------------------------
 
-/// Goal §2.1: a bare expression is a whole program, because §3 makes a file a
-/// block and a block's value is its trailing expression.
+/// Goal §one-language: a bare expression is a whole program, because
+/// §statements makes a file a block and a block's value is its trailing
+/// expression.
 #[test]
 fn a_file_is_a_block() {
     assert_eq!(
@@ -59,7 +60,7 @@ fn a_file_is_a_block() {
         "\
 (func <file> () -> u64
   (block 0
-    (return (const 42u64))))   ; the file's top level (§3)"
+    (return (const 42u64))))   ; the file's top level (§statements)"
     );
 }
 
@@ -97,7 +98,7 @@ fn count_to(n: u64) -> u64 {
 }
 
 /// The second worked example: a captured binding that is assigned needs a
-/// heap cell, because a slot dies with its frame (§5).
+/// heap cell, because a slot dies with its frame (§functions).
 #[test]
 fn captured_and_assigned_gets_a_cell() {
     let source = "\
@@ -126,8 +127,8 @@ fn counter() -> fn() -> u64 {
 
 /// A captured binding that is never assigned is copied into the environment
 /// instead. Every copy stays equal forever, so the sharing a cell provides is
-/// unobservable — and under §6's reference semantics a struct binding copies
-/// its reference, so mutation of the object is visible either way.
+/// unobservable — and under §types' reference semantics a struct binding
+/// copies its reference, so mutation of the object is visible either way.
 #[test]
 fn captured_but_never_assigned_needs_no_cell() {
     let ir = ir("\
@@ -148,7 +149,8 @@ fn mut_without_capture_needs_no_cell() {
 }
 
 /// Invariant 2: every operand is a slot or a constant, so a nested expression
-/// becomes a sequence and §15's evaluation order is the order of the data.
+/// becomes a sequence and §semantics' evaluation order is the order of the
+/// data.
 #[test]
 fn operands_are_atomic() {
     let ir = ir("fn f(a: u64, b: u64, c: u64) -> u64 { (a * a) - (b * c) }");
@@ -163,10 +165,10 @@ fn operands_are_atomic() {
     );
 }
 
-// ---- §1 Unpinned constants -------------------------------------------------
+// ---- §lexical Unpinned constants -------------------------------------------
 
-/// §1: a binding stays an unpinned constant when its initializer is one and it
-/// is never assigned, so this is `-2` rather than an underflow.
+/// §lexical: a binding stays an unpinned constant when its initializer is one
+/// and it is never assigned, so this is `-2` rather than an underflow.
 #[test]
 fn an_unassigned_constant_binding_stays_unpinned() {
     assert_eq!(
@@ -174,13 +176,14 @@ fn an_unassigned_constant_binding_stays_unpinned() {
         "\
 (func <file> () -> s64
   (block 0
-    (return (const -2s64))))   ; the file's top level (§3)"
+    (return (const -2s64))))   ; the file's top level (§statements)"
     );
 }
 
-/// §1's other half: assignment anywhere in the scope pins the binding at its
-/// declaration. The subtraction is then an ordinary runtime one on `u64`,
-/// which §2 says traps on underflow rather than folding to a negative.
+/// §lexical's other half: assignment anywhere in the scope pins the binding at
+/// its declaration. The subtraction is then an ordinary runtime one on `u64`,
+/// which §expressions says traps on underflow rather than folding to a
+/// negative.
 #[test]
 fn an_assigned_binding_pins_at_its_declaration() {
     let ir = ir("let n = 3; n = 4; n - 5");
@@ -188,20 +191,21 @@ fn an_assigned_binding_pins_at_its_declaration() {
     assert!(ir.contains("(sub n (const 5u64))"), "{ir}");
 }
 
-/// §1: context wins over sign.
+/// §lexical: context wins over sign.
 #[test]
 fn context_pins_a_constant() {
     assert!(ir("let x: u8 = 200; x").contains("(const 200u8)"));
 }
 
-/// §1: an integer may carry a float suffix.
+/// §lexical: an integer may carry a float suffix.
 #[test]
 fn an_integer_may_carry_a_float_suffix() {
     assert!(ir("1f64").contains("(const 1.0f64)"));
 }
 
-/// §1: no implicit conversion between pinned types. There is no promotion
-/// lattice, so mixed widths are an error rather than a silent widening.
+/// §lexical: no implicit conversion between pinned types. There is no
+/// promotion lattice, so mixed widths are an error rather than a silent
+/// widening.
 #[test]
 fn pinned_types_do_not_mix() {
     assert_eq!(
@@ -211,9 +215,10 @@ fn pinned_types_do_not_mix() {
     );
 }
 
-// ---- §2 Expressions --------------------------------------------------------
+// ---- §expressions ----------------------------------------------------------
 
-/// §2: constant expressions are checked at compile time rather than trapping.
+/// §expressions: constant expressions are checked at compile time rather than
+/// trapping.
 #[test]
 fn constant_failures_are_compile_errors() {
     assert_eq!(
@@ -226,8 +231,8 @@ fn constant_failures_are_compile_errors() {
     );
 }
 
-/// §2's rule reaches *pinned* constants too. `255u8 + 1` has a width to
-/// overflow, so it is an error rather than the `0` wrapping would give.
+/// §expressions' rule reaches *pinned* constants too. `255u8 + 1` has a width
+/// to overflow, so it is an error rather than the `0` wrapping would give.
 #[test]
 fn pinned_constants_are_checked_too() {
     assert_eq!(
@@ -241,20 +246,21 @@ fn pinned_constants_are_checked_too() {
     assert!(ir("254u8 + 1").contains("(const 255u8)"));
 }
 
-/// §2: `+` concatenates strings, and folding one is the same rule.
+/// §expressions: `+` concatenates strings, and folding one is the same rule.
 #[test]
 fn constant_strings_concatenate() {
     assert!(ir("\"a\" + \"b\"").contains("(const \"ab\")"));
 }
 
-/// §1: an intermediate in constant arithmetic can never overflow, because
-/// there is nothing to overflow until the result is pinned.
+/// §lexical: an intermediate in constant arithmetic can never overflow,
+/// because there is nothing to overflow until the result is pinned.
 #[test]
 fn constant_intermediates_do_not_overflow() {
     assert!(ir("(1000000 * 1000000) / 1000000").contains("(const 1000000u64)"));
 }
 
-/// §2: there is no truthiness. A condition is a `bool` or it is an error.
+/// §expressions: there is no truthiness. A condition is a `bool` or it is an
+/// error.
 #[test]
 fn a_condition_must_be_bool() {
     assert_eq!(
@@ -263,8 +269,9 @@ fn a_condition_must_be_bool() {
     );
 }
 
-/// §2: negating an unsigned value is refused at compile time, because there is
-/// no representable result but zero and an error says so earlier and better.
+/// §expressions: negating an unsigned value is refused at compile time,
+/// because there is no representable result but zero and an error says so
+/// earlier and better.
 #[test]
 fn unsigned_negation_is_a_type_error() {
     assert_eq!(
@@ -273,8 +280,9 @@ fn unsigned_negation_is_a_type_error() {
     );
 }
 
-/// §2: `&&` and `||` short-circuit, so they are control flow and lower to
-/// `if`. Neither back end implements laziness, and `BinOp` has no entry.
+/// §expressions: `&&` and `||` short-circuit, so they are control flow and
+/// lower to `if`. Neither back end implements laziness, and `BinOp` has no
+/// entry.
 #[test]
 fn short_circuit_lowers_to_a_branch() {
     let ir = ir("fn f(a: bool, b: bool) -> bool { a && b }");
@@ -282,15 +290,16 @@ fn short_circuit_lowers_to_a_branch() {
     assert!(!ir.contains("(and "), "{ir}");
 }
 
-/// §2: cross-type comparison does not exist — `1 == \"1\"` is a type error and
-/// not `false`.
+/// §expressions: cross-type comparison does not exist — `1 == \"1\"` is a type
+/// error and not `false`.
 #[test]
 fn cross_type_comparison_is_an_error() {
     assert!(only_error("1u64 == \"1\"").contains("needs both operands to have the same type"),);
 }
 
-/// §2: `as` is explicit. Float to integer truncates toward zero, which is
-/// defined behaviour rather than a trap, so it happens at compile time.
+/// §expressions: `as` is explicit. Float to integer truncates toward zero,
+/// which is defined behaviour rather than a trap, so it happens at compile
+/// time.
 #[test]
 fn constant_casts_follow_the_conversion_table() {
     assert!(ir("1.5 as s64").contains("(const 1s64)"));
@@ -301,10 +310,10 @@ fn constant_casts_follow_the_conversion_table() {
     );
 }
 
-// ---- §3 Statements ---------------------------------------------------------
+// ---- §statements -----------------------------------------------------------
 
-/// §3: a `let` may shadow an existing binding, including in the same scope.
-/// Two bindings means two slots, and the dump disambiguates them.
+/// §statements: a `let` may shadow an existing binding, including in the same
+/// scope. Two bindings means two slots, and the dump disambiguates them.
 #[test]
 fn shadowing_makes_a_second_binding() {
     let ir = ir("let x = 1u64; let x = x + 1u64; x");
@@ -312,16 +321,16 @@ fn shadowing_makes_a_second_binding() {
     assert!(ir.contains("(slot 1 x.1"), "{ir}");
 }
 
-/// §3: the initializer is evaluated before the binding exists, so `let x = x;`
-/// names the outer one.
+/// §statements: the initializer is evaluated before the binding exists, so
+/// `let x = x;` names the outer one.
 #[test]
 fn an_initializer_names_the_outer_binding() {
     let ir = ir("let x = 1u64; { let x = x; x }");
     assert!(ir.contains("(assign x.1 x.0)"), "{ir}");
 }
 
-/// §3: assignment must match the binding's type. To give a name a value of
-/// another type, declare it again.
+/// §statements: assignment must match the binding's type. To give a name a
+/// value of another type, declare it again.
 #[test]
 fn assignment_must_match_the_binding_type() {
     assert_eq!(
@@ -330,7 +339,7 @@ fn assignment_must_match_the_binding_type() {
     );
 }
 
-// ---- §4 Control flow -------------------------------------------------------
+// ---- §control --------------------------------------------------------------
 
 #[test]
 fn a_jump_needs_a_loop() {
@@ -340,11 +349,11 @@ fn a_jump_needs_a_loop() {
     );
 }
 
-/// §4: a loop is a statement and its value is unit, so the `while` carries no
-/// destination.
-/// §4: a jump written in a loop's *condition* belongs to that loop — it is the
-/// innermost one enclosing it. The condition needs a block expression to hold a
-/// statement, which is the only way to write one there.
+/// §control: a loop is a statement and its value is unit, so the `while`
+/// carries no destination. §control: a jump written in a loop's *condition*
+/// belongs to that loop — it is the innermost one enclosing it. The condition
+/// needs a block expression to hold a statement, which is the only way to
+/// write one there.
 #[test]
 fn a_jump_in_a_condition_belongs_to_its_loop() {
     let ir = ir("while { break; true } { }");
@@ -360,10 +369,10 @@ fn a_loop_has_no_value() {
     assert!(ir.contains("(cond t1)"), "{ir}");
 }
 
-// ---- §5 Functions ----------------------------------------------------------
+// ---- §functions ------------------------------------------------------------
 
-/// §5: a nested `fn` is scoped to its block and captures nothing. To capture,
-/// use a lambda.
+/// §functions: a nested `fn` is scoped to its block and captures nothing. To
+/// capture, use a lambda.
 #[test]
 fn a_fn_captures_nothing() {
     assert_eq!(
@@ -372,8 +381,8 @@ fn a_fn_captures_nothing() {
     );
 }
 
-/// §5: a lambda's types come from context. With none, that is an error rather
-/// than a guess — and it is one error, not one per use.
+/// §functions: a lambda's types come from context. With none, that is an error
+/// rather than a guess — and it is one error, not one per use.
 #[test]
 fn a_lambda_needs_context() {
     assert_eq!(
@@ -396,8 +405,8 @@ fn a_lambda_takes_its_types_from_context() {
     );
 }
 
-/// §5: mutual recursion needs declarations to be order-independent, so they
-/// are hoisted to the top of their block.
+/// §functions: mutual recursion needs declarations to be order-independent, so
+/// they are hoisted to the top of their block.
 #[test]
 fn declarations_are_hoisted() {
     let ir = ir("\
@@ -408,8 +417,8 @@ even(4)");
     assert!(ir.contains("(call even"), "{ir}");
 }
 
-/// §5: arity and types are checked statically, so there is nothing dynamic
-/// left to check at run time.
+/// §functions: arity and types are checked statically, so there is nothing
+/// dynamic left to check at run time.
 #[test]
 fn arity_is_checked() {
     assert_eq!(
@@ -418,8 +427,8 @@ fn arity_is_checked() {
     );
 }
 
-/// §5: a function is a value, and every function value is a closure — a plain
-/// `fn` with an empty environment. Calling one is indirect.
+/// §functions: a function is a value, and every function value is a closure —
+/// a plain `fn` with an empty environment. Calling one is indirect.
 #[test]
 fn a_function_used_as_a_value_is_a_closure() {
     let ir = ir("fn add(a: u64, b: u64) -> u64 { a + b } let f = add; f(1, 2)");
@@ -427,9 +436,9 @@ fn a_function_used_as_a_value_is_a_closure() {
     assert!(ir.contains("(call-indirect f"), "{ir}");
 }
 
-/// §5: `mut` on a parameter is permission to mutate the argument in place, and
-/// §3 is the rule that consumes it — the call site must pass a `mut` binding,
-/// so a call that mutates is visible where it happens.
+/// §functions: `mut` on a parameter is permission to mutate the argument in
+/// place, and §statements is the rule that consumes it — the call site must
+/// pass a `mut` binding, so a call that mutates is visible where it happens.
 #[test]
 fn a_mut_argument_needs_a_mut_binding() {
     assert_eq!(
@@ -443,8 +452,8 @@ fn a_mut_argument_needs_a_mut_binding() {
     );
 }
 
-/// §5: and the argument has to *be* a place, since there is nothing to mutate
-/// in a value the call itself computed.
+/// §functions: and the argument has to *be* a place, since there is nothing to
+/// mutate in a value the call itself computed.
 #[test]
 fn a_mut_argument_must_be_a_place() {
     assert_eq!(
@@ -457,10 +466,10 @@ fn a_mut_argument_must_be_a_place() {
     );
 }
 
-/// §5's own example, end to end: a `mut` binding passed to a `mut` parameter,
-/// mutated through a field. §6's reference semantics is what carries the
-/// change back — nothing is written back at the call, and the IR grows no node
-/// for it.
+/// §functions' own example, end to end: a `mut` binding passed to a `mut`
+/// parameter, mutated through a field. §types' reference semantics is what
+/// carries the change back — nothing is written back at the call, and the IR
+/// grows no node for it.
 #[test]
 fn a_mut_parameter_mutates_through_the_reference() {
     let ir = ir("struct C { n: u64 }
@@ -476,8 +485,8 @@ fn a_mut_parameter_mutates_through_the_reference() {
     );
 }
 
-/// §3: a plain parameter is an immutable binding, exactly like a `let`, so
-/// nothing may be mutated through it.
+/// §statements: a plain parameter is an immutable binding, exactly like a
+/// `let`, so nothing may be mutated through it.
 #[test]
 fn a_plain_parameter_permits_no_mutation() {
     assert_eq!(
@@ -486,7 +495,7 @@ fn a_plain_parameter_permits_no_mutation() {
     );
 }
 
-/// §3: `mut` gates in-place mutation and nothing else. Rebinding is
+/// §statements: `mut` gates in-place mutation and nothing else. Rebinding is
 /// unrestricted on every binding, parameters included.
 #[test]
 fn assignment_needs_no_mut() {
@@ -494,10 +503,10 @@ fn assignment_needs_no_mut() {
     assert!(ir.contains("(slot 0 n u64 param)"), "{ir}");
 }
 
-// ---- §6 Data and types -----------------------------------------------------
+// ---- §types Data and types -------------------------------------------------
 
-/// §6: nominal. Two structs with identical fields are different types, because
-/// identity comes from the act of construction.
+/// §types: nominal. Two structs with identical fields are different types,
+/// because identity comes from the act of construction.
 #[test]
 fn structs_are_nominal() {
     assert_eq!(
@@ -506,7 +515,7 @@ fn structs_are_nominal() {
     );
 }
 
-/// §6: field mutability follows the binding. A non-`mut` binding permits
+/// §types: field mutability follows the binding. A non-`mut` binding permits
 /// assigning no field.
 #[test]
 fn field_assignment_needs_a_mut_binding() {
@@ -516,8 +525,9 @@ fn field_assignment_needs_a_mut_binding() {
     );
 }
 
-/// §2: fields evaluate in written order; they are stored in declaration order.
-/// The two are separated here rather than left for a back end to guess.
+/// §expressions: fields evaluate in written order; they are stored in
+/// declaration order. The two are separated here rather than left for a back
+/// end to guess.
 #[test]
 fn struct_fields_are_stored_in_declaration_order() {
     let ir = ir("struct P { x: u64, y: Str } let p = P { y: \"b\", x: 1 }; p");
@@ -532,15 +542,15 @@ fn a_missing_field_is_named() {
     );
 }
 
-/// §6: an alias is a second name for one type, not a new one.
+/// §types: an alias is a second name for one type, not a new one.
 #[test]
 fn an_alias_is_the_same_type() {
     let ir = ir("type Id = u64; fn f(id: Id) -> u64 { id } f(1)");
     assert!(ir.contains("(func f (u64) -> u64"), "{ir}");
 }
 
-/// A struct may name itself, because §6 gives structs reference semantics and
-/// so a recursive one is ordinary rather than an infinite size.
+/// A struct may name itself, because §types gives structs reference semantics
+/// and so a recursive one is ordinary rather than an infinite size.
 #[test]
 fn a_struct_may_name_itself() {
     let ir = ir("struct Node { next: Node, value: u64 } fn f(n: Node) -> u64 { n.value } 0u64");

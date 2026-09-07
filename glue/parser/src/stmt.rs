@@ -1,13 +1,15 @@
 //! Statements and declarations.
 //!
-//! §3 collapses Lox's declaration/statement split: `fn`, `struct`, and `type`
-//! are statements like any other, because mandatory braces (§4) already make
-//! `if x { let y = 1; }` the only spelling of the thing the split existed to
-//! reject. So there is one production here, not two.
+//! §statements collapses Lox's declaration/statement split: `fn`, `struct`,
+//! and `type` are statements like any other, because mandatory braces
+//! (§control) already make `if x { let y = 1; }` the only spelling of the
+//! thing the split existed to reject. So there is one production here, not
+//! two.
 //!
-//! A file is a block (§3), so [`statements`] serves both — the only difference
-//! is whether it stops at `}` or at the end of input. Both may end in a
-//! trailing expression with no `;`, which is that block's value (§2).
+//! A file is a block (§statements), so [`statements`] serves both — the only
+//! difference is whether it stops at `}` or at the end of input. Both may end
+//! in a trailing expression with no `;`, which is that block's value
+//! (§expressions).
 
 use tokenizer::TokenKind;
 
@@ -45,8 +47,9 @@ fn statement(cursor: &mut Cursor, terminator: TokenKind) {
         TokenKind::Continue => jump(cursor, NodeKind::ContinueStmt),
         TokenKind::Return => return_stmt(cursor),
         TokenKind::Semicolon => {
-            // §3 has no empty statement, so this is always a mistake — but a
-            // harmless one, and the `;` is consumed so it can't be re-reported.
+            // §statements has no empty statement, so this is always a mistake
+            // — but a harmless one, and the `;` is consumed so it can't be
+            // re-reported.
             cursor.error(DiagnosticKind::StraySemicolon);
             let mark = cursor.open(NodeKind::Error);
             cursor.bump();
@@ -65,12 +68,12 @@ fn expr_or_assign(cursor: &mut Cursor, terminator: TokenKind) {
     // Captured now, because `open_before` consumes `parsed`.
     let block_like = expr::is_block_like(parsed.kind());
 
-    // §3's compound forms — `+=` and the rest — are not in the core, so `=` is
-    // the only thing that makes this an assignment.
+    // §statements' compound forms — `+=` and the rest — are not in the core,
+    // so `=` is the only thing that makes this an assignment.
     if cursor.at(TokenKind::Equals) {
-        // §3: the left side is a *place* — a name, a field, or an index. That
-        // it actually is one is checked later, so the message can name what
-        // was assigned to rather than just refusing to parse.
+        // §statements: the left side is a *place* — a name, a field, or an
+        // index. That it actually is one is checked later, so the message can
+        // name what was assigned to rather than just refusing to parse.
         let mark = cursor.open_before(parsed, NodeKind::AssignStmt);
         cursor.bump();
         expr(cursor);
@@ -90,10 +93,10 @@ fn expr_or_assign(cursor: &mut Cursor, terminator: TokenKind) {
     // after a block-shaped expression, which needs none.
     let at_end = cursor.at(terminator) || cursor.at_eof();
     if at_end {
-        return; // The trailing expression, and so the block's value (§2).
+        return; // The trailing expression, and so the block's value (§expressions).
     }
 
-    // §3's `exprStmt → expression ";"` read literally would demand
+    // §statements' `exprStmt → expression ";"` read literally would demand
     // `if c { … };`. A block-shaped expression is already delimited, so it
     // stands as a statement on its own.
     if !block_like {
@@ -105,7 +108,7 @@ fn expr_or_assign(cursor: &mut Cursor, terminator: TokenKind) {
 
 // ---- Bindings --------------------------------------------------------------
 
-/// `let mut? pattern (: Type)? = expr ;` (§3).
+/// `let mut? pattern (: Type)? = expr ;` (§statements).
 fn let_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::LetStmt);
     cursor.bump(); // `let`
@@ -114,7 +117,7 @@ fn let_stmt(cursor: &mut Cursor) {
     if cursor.eat(TokenKind::Colon) {
         ty(cursor);
     }
-    // §3: always required. There is no declare-then-assign, and so no
+    // §statements: always required. There is no declare-then-assign, and so no
     // definite-assignment analysis to specify or implement.
     cursor.expect(TokenKind::Equals, DiagnosticKind::ExpectedInitializer);
     expr(cursor);
@@ -122,8 +125,9 @@ fn let_stmt(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// The whole of patterns today: a plain name (§3). §7 adds the rest, and a
-/// `let` whose second child is already a pattern node absorbs that unchanged.
+/// The whole of patterns today: a plain name (§statements). §unions adds the
+/// rest, and a `let` whose second child is already a pattern node absorbs that
+/// unchanged.
 fn pattern(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::NamePat);
     cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
@@ -132,7 +136,7 @@ fn pattern(cursor: &mut Cursor) {
 
 // ---- Declarations ----------------------------------------------------------
 
-/// `fn name(a: T, b: mut U) -> R { … }` (§5).
+/// `fn name(a: T, b: mut U) -> R { … }` (§functions).
 fn fn_decl(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::FnDecl);
     cursor.bump(); // `fn`
@@ -143,12 +147,13 @@ fn fn_decl(cursor: &mut Cursor) {
     while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
         let param = cursor.open(NodeKind::Param);
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
-        // §5: parameter types are required — signatures are annotated, bodies
-        // inferred, and that boundary is what lets a reader know what a
+        // §functions: parameter types are required — signatures are annotated,
+        // bodies inferred, and that boundary is what lets a reader know what a
         // function means without reading it.
         cursor.expect(TokenKind::Colon, DiagnosticKind::ExpectedParameterType);
-        // `mut` belongs to the parameter, not the type (§5), so it lives on
-        // `Param` even though it is written where a type modifier would be.
+        // `mut` belongs to the parameter, not the type (§functions), so it
+        // lives on `Param` even though it is written where a type modifier
+        // would be.
         cursor.eat(TokenKind::Mut);
         ty(cursor);
         cursor.close(param);
@@ -159,7 +164,7 @@ fn fn_decl(cursor: &mut Cursor) {
     cursor.expect(TokenKind::ParenRight, DiagnosticKind::ExpectedClosingParen);
     cursor.close(params);
 
-    // §5: omitted when the return type is unit.
+    // §functions: omitted when the return type is unit.
     if cursor.at(TokenKind::Arrow) {
         let ret = cursor.open(NodeKind::RetType);
         cursor.bump();
@@ -171,7 +176,7 @@ fn fn_decl(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// `struct Name { x: T, y: U, }` (§6).
+/// `struct Name { x: T, y: U, }` (§types).
 fn struct_decl(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::StructDecl);
     cursor.bump(); // `struct`
@@ -182,7 +187,7 @@ fn struct_decl(cursor: &mut Cursor) {
     while !cursor.at(TokenKind::BraceRight) && !cursor.at_eof() {
         let field = cursor.open(NodeKind::FieldDecl);
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
-        // §6: field types are required; there is no inference across a
+        // §types: field types are required; there is no inference across a
         // declaration boundary.
         cursor.expect(TokenKind::Colon, DiagnosticKind::ExpectedColon);
         ty(cursor);
@@ -196,7 +201,7 @@ fn struct_decl(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// `type Name = T ;` — a second name for one type, not a new one (§6).
+/// `type Name = T ;` — a second name for one type, not a new one (§types).
 fn type_alias(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::TypeAliasDecl);
     cursor.bump(); // `type`
@@ -209,7 +214,8 @@ fn type_alias(cursor: &mut Cursor) {
 
 // ---- Control flow ----------------------------------------------------------
 
-/// `while c { … }` — the only loop (§4), and a statement, so its value is unit.
+/// `while c { … }` — the only loop (§control), and a statement, so its value
+/// is unit.
 fn while_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::WhileStmt);
     cursor.bump(); // `while`
@@ -218,7 +224,8 @@ fn while_stmt(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// `break ;` and `continue ;` — unlabelled, applying to the innermost loop (§4).
+/// `break ;` and `continue ;` — unlabelled, applying to the innermost loop
+/// (§control).
 fn jump(cursor: &mut Cursor, kind: NodeKind) {
     let mark = cursor.open(kind);
     cursor.bump();
@@ -226,7 +233,7 @@ fn jump(cursor: &mut Cursor, kind: NodeKind) {
     cursor.close(mark);
 }
 
-/// `return ;` or `return expr ;` — for *early* exit (§4). A well-shaped
+/// `return ;` or `return expr ;` — for *early* exit (§control). A well-shaped
 /// function often has none, since a body is a block and ends in its value.
 fn return_stmt(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::ReturnStmt);

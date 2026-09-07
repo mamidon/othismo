@@ -33,22 +33,22 @@ Status: **—** not started · **◑** partially defined · **✓** defined
 
 | § | Section | Covers | Syntax | Semantics |
 | --- | --- | --- | --- | --- |
-| 1 | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
-| 2 | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ |
-| 3 | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | ◑ | ◑ |
-| 4 | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | ◑ | ◑ |
-| 5 | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | ◑ | ◑ |
-| 6 | [Data and types](constructs/06-data-and-types.md) | Primitives, aggregates, memory, representation | ◑ | ◑ |
-| 7 | [Unions and pattern matching](constructs/07-unions-and-pattern-matching.md) | Sum types, patterns, exhaustiveness | — | — |
-| 8 | [Generics and polymorphism](constructs/08-generics.md) | Type parameters, bounds, monomorphize vs. box | — | — |
-| 9 | [Error handling](constructs/09-error-handling.md) | Exceptions vs. results, traps, failure across messages | — | — |
-| 10 | [Type inference and gradual typing](constructs/10-type-inference.md) | Optional annotations, inference scope, dynamic values | — | — |
-| 11 | [Objects and abstraction](constructs/11-objects-and-abstraction.md) | Classes/actors, dispatch, inheritance | — | — |
-| 12 | [Scope and name resolution](constructs/12-scope-and-names.md) | Lexical scoping, shadowing, late binding | — | — |
-| 13 | [Modules and program structure](constructs/13-modules-and-program-structure.md) | Imports, visibility, entry point, Othismo namespace | — | — |
-| 14 | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | ◑ | ◑ |
-| 15 | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | — | — |
-| 16 | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | — | — |
+| §lexical | [Lexical structure](constructs/01-lexical-structure.md) | Identifiers, literals, comments, layout | ◑ | ◑ |
+| §expressions | [Expressions](constructs/02-expressions.md) | Operators, precedence, expression forms | ◑ | ◑ |
+| §statements | [Statements and declarations](constructs/03-statements-and-declarations.md) | Statement/expression split, blocks, bindings | ◑ | ◑ |
+| §control | [Control flow](constructs/04-control-flow.md) | Branching, looping, iteration, async | ◑ | ◑ |
+| §functions | [Functions](constructs/05-functions.md) | Declarations, closures, parameters, host functions | ◑ | ◑ |
+| §types | [Data and types](constructs/06-data-and-types.md) | Primitives, aggregates, memory, representation | ◑ | ◑ |
+| §unions | [Unions and pattern matching](constructs/07-unions-and-pattern-matching.md) | Sum types, patterns, exhaustiveness | — | — |
+| §generics | [Generics and polymorphism](constructs/08-generics.md) | Type parameters, bounds, monomorphize vs. box | — | — |
+| §errors | [Error handling](constructs/09-error-handling.md) | Exceptions vs. results, traps, failure across messages | — | — |
+| §inference | [Type inference and gradual typing](constructs/10-type-inference.md) | Optional annotations, inference scope, dynamic values | — | — |
+| §objects | [Objects and abstraction](constructs/11-objects-and-abstraction.md) | Classes/actors, dispatch, inheritance | — | — |
+| §scope | [Scope and name resolution](constructs/12-scope-and-names.md) | Lexical scoping, shadowing, late binding | — | — |
+| §modules | [Modules and program structure](constructs/13-modules-and-program-structure.md) | Imports, visibility, entry point, Othismo namespace | — | — |
+| §comptime | [Metaprogramming and tooling](constructs/14-metaprogramming-and-tooling.md) | Macros, attributes, debug info, tests | ◑ | ◑ |
+| §semantics | [Semantics without syntax](constructs/15-invisible-semantics.md) | Evaluation order, coercion, traps, reentrancy | — | — |
+| §wasm | [wasm target decisions](constructs/16-wasm-target-decisions.md) | Cross-cutting constraints from the target | — | — |
 
 Alongside the numbered sections, [**Deferred decisions**](constructs/deferred.md) is a
 companion register of things consciously postponed — what was deferred, why, and what it
@@ -59,25 +59,27 @@ It also indexes the **Open** questions that remain owned by their own sections, 
 one place to look for everything unresolved.
 
 [**Core IR**](core-ir.md) is a third companion document, and the only one that is not
-about the surface language: it specifies the typed, monomorphic representation §14's
+about the surface language: it specifies the typed, monomorphic representation §comptime's
 elaboration lowers to, and which the interpreter and the wasm back end both consume. It
 sits outside the numbering because it is not a construct.
 
-§15 is expected to stay empty under *Syntax* by construction — if something lands there,
-it probably belongs in another section. §16 is a constraint set rather than a feature
-area, and may end up recording where each decision went rather than a spelling of its own.
+§semantics is expected to stay empty under *Syntax* by construction — if something lands
+there, it probably belongs in another section. §wasm is a constraint set rather than a
+feature area, and may end up recording where each decision went rather than a spelling of
+its own.
 
 Five sections cover things Lox lacks and Glue wants, and are the reason the numbering
-past §4 differs from the book's: **§7 unions and matching**, **§8 generics**,
-**§9 error handling**, **§10 inference**, and **§13 modules**.
+past §control differs from the book's: **§unions**, **§generics**, **§errors**,
+**§inference**, and **§modules**.
 
-§7–§10 are ordered by dependency rather than by importance. Unions come first because
-`Result` and `Option` are unions; generics next because those unions are parameterized;
-error handling then has almost nothing left to invent beyond a propagation operator; and
-inference last, since it has to account for everything the four of them introduced.
+§unions–§inference are ordered by dependency rather than by importance. Unions come first
+because `Result` and `Option` are unions; generics next because those unions are
+parameterized; error handling then has almost nothing left to invent beyond a propagation
+operator; and inference last, since it has to account for everything the four of them
+introduced.
 
-§13 is the largest deliberate novelty spend, because Othismo's runtime namespace and a
-conventional compile-time module system are two answers to the same question.
+§modules is the largest deliberate novelty spend, because Othismo's runtime namespace and
+a conventional compile-time module system are two answers to the same question.
 
 ---
 

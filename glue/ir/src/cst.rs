@@ -91,7 +91,7 @@ pub fn is_type(kind: NodeKind) -> bool {
 }
 
 /// The forms hoisted to the top of their block, so that mutual recursion works
-/// while statements still run in order (§3, §5, §12).
+/// while statements still run in order (§statements, §functions, §scope).
 pub fn is_declaration(kind: NodeKind) -> bool {
     matches!(
         kind,

@@ -1,4 +1,4 @@
-# §3 — Statements and Declarations
+# §statements — Statements and Declarations
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -8,9 +8,9 @@ Whether the language has a statement/expression split at all is the most structu
 syntax decision available. Lox has one; many languages don't, and make everything an
 expression instead.
 
-This section is where goal §2.1 bites hardest: "a bare expression is a valid program"
-and "no required `main`, no module preamble" are both claims about what the top level of
-`program` accepts.
+This section is where goal §one-language bites hardest: "a bare expression is a valid
+program" and "no required `main`, no module preamble" are both claims about what the top
+level of `program` accepts.
 
 ## Lox's grammar **[Lox]**
 
@@ -46,8 +46,9 @@ statement   → exprStmt | forStmt | ifStmt | printStmt | returnStmt | whileStmt
 
 ### The statement/expression split
 
-Glue has one, with §2's carve-out: blocks, `if`, and `match` are expressions. What remains
-a statement is everything that binds a name or performs an effect in sequence.
+Glue has one, with §expressions' carve-out: blocks, `if`, and `match` are expressions.
+What remains a statement is everything that binds a name or performs an effect in
+sequence.
 
 ```
 statement  → exprStmt | declStmt | assignStmt | controlStmt
@@ -57,9 +58,9 @@ assignStmt → place assignOp expression ";"
 ```
 
 **Lox's declaration/statement split is unnecessary here.** Lox separates the two
-productions purely to reject `if (x) var y = 1;`. Braces are mandatory in Glue (§4), so
-that program is already unwriteable — `if x { let y = 1; }` is the only spelling, and it
-scopes correctly on its own. One less grammar rule for the same guarantee.
+productions purely to reject `if (x) var y = 1;`. Braces are mandatory in Glue (§control),
+so that program is already unwriteable — `if x { let y = 1; }` is the only spelling, and
+it scopes correctly on its own. One less grammar rule for the same guarantee.
 
 ### Bindings
 
@@ -82,13 +83,13 @@ let mut count = 0;       // mutable binding
 
 - **No implicit declaration.** Assigning to an unbound name is an error, never a
   declaration.
-- **The left side is a pattern** (§7), so destructuring falls out of `let` rather than
-  needing its own form. Until §7 exists, the only pattern is a plain name. Patterns in
-  `let` must be irrefutable.
+- **The left side is a pattern** (§unions), so destructuring falls out of `let` rather
+  than needing its own form. Until §unions exists, the only pattern is a plain name.
+  Patterns in `let` must be irrefutable.
 
 ### Constants
 
-**There is no `const` keyword.** §1 already gives the useful half: a binding with a
+**There is no `const` keyword.** §lexical already gives the useful half: a binding with a
 constant initializer that is never assigned to stays an unpinned constant, folded at
 compile time and usable wherever a constant is expected. A second keyword would name the
 same thing twice.
@@ -96,7 +97,7 @@ same thing twice.
 What that does *not* provide is a way to **require** compile-time evaluation — the thing
 you need if an array length or a type parameter must be a constant.
 
-**Answered 2026-08-18 by §14, and not with a binding form.** `comptime` is that
+**Answered 2026-08-18 by §comptime, and not with a binding form.** `comptime` is that
 requirement, and it is spelled where the requirement lives rather than on the binding: on
 a parameter whose argument must be known at compile time, and as a prefix on an expression
 that must be evaluated at compile time.
@@ -107,8 +108,8 @@ let table = comptime build_table(256);      // this expression must be folded
 ```
 
 That leaves this section's rule exactly as it was — a non-`mut` `let` is comptime-known
-when its initializer is, and there is still no `const`. §14 declines a `comptime let` for
-the same reason §3 declines `const`: it would name the same thing twice.
+when its initializer is, and there is still no `const`. §comptime declines a `comptime
+let` for the same reason §statements declines `const`: it would name the same thing twice.
 
 ### Shadowing
 
@@ -121,11 +122,11 @@ let input = parse(input);    // u64 — same name, new binding
 
 This is deliberate and it earns its keep twice. It's the natural way to write a
 narrowing pipeline without inventing `input2`, and it's what makes redefinition at a
-prompt behave the way anyone would expect — goal §4.5 wants a live session where you
+prompt behave the way anyone would expect — goal §image wants a live session where you
 restate a binding, and shadowing is that, with no special REPL rule.
 
 Shadowing creates a *new* binding; it does not mutate the old one. Anything that captured
-the old binding still sees the old value (§12).
+the old binding still sees the old value (§scope).
 
 ### Assignment
 
@@ -138,18 +139,19 @@ count += 1;
 ```
 
 Compound forms: `+= -= *= /= %= &= |= ^= <<= >>=`. Each is exactly `a = a op b` with the
-place evaluated once, and each traps on overflow like the operator it wraps (§2).
+place evaluated once, and each traps on overflow like the operator it wraps
+(§expressions).
 
 > **Cut from the core.** `=` is the only assignment operator implemented. Ten tokens for a
 > rewrite the reader can do, and half of them are spelled from operators that are
 > themselves cut. "The place is evaluated once" has no observable consequence until a place
-> can have side effects, which needs §11. See
+> can have side effects, which needs §objects. See
 > [Deferred decisions](deferred.md#compound-assignment).
 
 The left side is a **place**: a name, a field, or an index — not a pattern. Parallel
 assignment (`a, b = b, a`) is declined; `let` destructuring covers the real need, and a
 statement that assigns to several places at once interacts badly with evaluation order
-being fully specified (§2).
+being fully specified (§expressions).
 
 ### Expression statements
 
@@ -165,24 +167,24 @@ No rule requires the value to be unit, and nothing marks a discard as deliberate
 ### The top level
 
 **A file is a block.** It holds statements, and it may end in a trailing expression with
-no `;`, which is the file's value under §2's rule.
+no `;`, which is the file's value under §expressions' rule.
 
 ```
 let x = 2;
 x * 21          // the value of this file: 42
 ```
 
-That is the whole of goal §2.1's "a bare expression is a valid program" — not a REPL
-special case, just the block rule applied to the outermost block. A prompt and a file
+That is the whole of goal §one-language's "a bare expression is a valid program" — not a
+REPL special case, just the block rule applied to the outermost block. A prompt and a file
 accept the same input because they *are* the same construct.
 
-There is no `print` statement. Output is a host import (§13); the interactive front end
-displays the top-level trailing expression, which is a property of the language rather
+There is no `print` statement. Output is a host import (§modules); the interactive front
+end displays the top-level trailing expression, which is a property of the language rather
 than a feature of the REPL. What a *deployed* module does with a top-level value — and
-whether it has one — is §13's, along with the entry point.
+whether it has one — is §modules', along with the entry point.
 
 Module-level bindings, `mut` included, are permitted; when they initialize and in what
-order is §12's and §13's.
+order is §scope's and §modules'.
 
 ---
 
@@ -192,21 +194,22 @@ order is §12's and §13's.
 
 ### Scope and lifetime
 
-- A block introduces a scope (§12). A binding is visible from its declaration to the end
-  of the enclosing block — not before, which makes use-before-declaration a static error
-  rather than a runtime surprise.
+- A block introduces a scope (§scope). A binding is visible from its declaration to the
+  end of the enclosing block — not before, which makes use-before-declaration a static
+  error rather than a runtime surprise.
 - Shadowing introduces a new binding. The shadowed one is not destroyed, merely
-  unreachable by name; a closure that captured it (§5) still sees it.
+  unreachable by name; a closure that captured it (§functions) still sees it.
 - **Open:** whether a `let` at module scope is visible to declarations above it. Functions
   need to be mutually recursive, so *some* top-level forms must be order-independent while
-  statements are order-dependent. §12 and §13 own the rule; §3 records that the two cases
-  cannot both be "in order."
+  statements are order-dependent. §scope and §modules own the rule; §statements records
+  that the two cases cannot both be "in order."
 
 ### Initialization
 
 Every binding is initialized at its declaration, so there is no uninitialized state to
-observe and no default-value rule to write. This is a direct consequence of §1 having no
-`nil`: without a universal absent value, "declared but unset" has nothing to hold.
+observe and no default-value rule to write. This is a direct consequence of §lexical
+having no `nil`: without a universal absent value, "declared but unset" has nothing to
+hold.
 
 ### Mutation
 
@@ -233,16 +236,17 @@ give a name a value of a different type, declare it again; that's shadowing, abo
 is why both forms remain useful.
 
 This rests on a function being able to declare that it mutates its receiver or a
-parameter, which is §5's and §11's to design. §3 fixes only the rule that consumes it:
-calling such a function requires a `mut` binding.
+parameter, which is §functions' and §objects' to design. §statements fixes only the rule
+that consumes it: calling such a function requires a `mut` binding.
 
 **Open:** where `mut` attaches once patterns exist — `let mut (a, b) = …` marking the
-whole binding, or `let (mut a, b) = …` marking each. §7 decides when destructuring does.
+whole binding, or `let (mut a, b) = …` marking each. §unions decides when destructuring
+does.
 
 **What this does not give us.** Rust's version carries a real guarantee because borrow
 checking forbids a second, mutable path to the same value. Glue is not adopting ownership
-or borrowing (goal §3), so `let` means "you cannot mutate through *this* name" — not "this
-value will not change". If §6 gives aggregates reference semantics, then
+or borrowing (§non-goals), so `let` means "you cannot mutate through *this* name" — not
+"this value will not change". If §types gives aggregates reference semantics, then
 
 ```
 let a = obj;
@@ -250,9 +254,9 @@ let mut b = obj;
 b.mutate();        // a observes the change
 ```
 
-is possible, and `let` is an ergonomic guard rather than a guarantee. If §6 chooses value
-semantics, the situation can't arise. **Open for §6** — and the answer decides how strong
-a claim the documentation is allowed to make about `let`.
+is possible, and `let` is an ergonomic guard rather than a guarantee. If §types chooses
+value semantics, the situation can't arise. **Open for §types** — and the answer decides
+how strong a claim the documentation is allowed to make about `let`.
 
 ### Evaluation
 

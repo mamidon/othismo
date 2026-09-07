@@ -1,16 +1,16 @@
 //! Expressions, by precedence climbing.
 //!
-//! §2's precedence table is a ladder — eight rungs in the core, since the
-//! bitwise and shift levels are gone — and writing it as eight mutually
-//! recursive functions would mean eight near-identical bodies and a stack
-//! frame per rung for every operand. It is written here as binding powers
-//! instead: one loop, one table, and the table is the only thing to read when
-//! checking it against the spec.
+//! §expressions' precedence table is a ladder — eight rungs in the core,
+//! since the bitwise and shift levels are gone — and writing it as eight
+//! mutually recursive functions would mean eight near-identical bodies and a
+//! stack frame per rung for every operand. It is written here as binding
+//! powers instead: one loop, one table, and the table is the only thing to
+//! read when checking it against the spec.
 //!
-//! Binding power runs the other way from §2's level numbers — level 1 binds
-//! tightest, so it gets the *largest* power. A left-associative operator takes
-//! `(2n, 2n + 1)`, so its right operand refuses to swallow another operator at
-//! the same level and the tree leans left.
+//! Binding power runs the other way from §expressions' level numbers — level
+//! 1 binds tightest, so it gets the *largest* power. A left-associative
+//! operator takes `(2n, 2n + 1)`, so its right operand refuses to swallow
+//! another operator at the same level and the tree leans left.
 
 use tokenizer::TokenKind;
 
@@ -19,8 +19,8 @@ use crate::cursor::Cursor;
 use crate::diagnostic::DiagnosticKind;
 use crate::syntax::NodeKind;
 
-/// §2's ladder, tightest first. Names here are the table's row labels; the
-/// numbers are derived from them so that the two can't drift.
+/// §expressions' ladder, tightest first. Names here are the table's row
+/// labels; the numbers are derived from them so that the two can't drift.
 mod level {
     pub const POSTFIX: u8 = 8; // f(…)  a[…]  .field  .method(…)
     pub const UNARY: u8 = 7; //   -  !
@@ -39,7 +39,7 @@ const fn left_assoc(level: u8) -> (u8, u8) {
 
 /// Whether an expression carries its own braces.
 ///
-/// §3's `exprStmt → expression ";"` read literally would require
+/// §statements' `exprStmt → expression ";"` read literally would require
 /// `if c { … };`. These forms are already delimited, so the `;` is optional
 /// after them and their appearance mid-block is unambiguous.
 pub fn is_block_like(kind: NodeKind) -> bool {
@@ -64,9 +64,9 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
         primary(cursor)
     };
 
-    // §2 makes comparison non-associative. The loop still runs twice on
-    // `a < b < c` — recovering is better than stopping — but the second turn
-    // is reported rather than quietly building `(a < b) < c`.
+    // §expressions makes comparison non-associative. The loop still runs twice
+    // on `a < b < c` — recovering is better than stopping — but the second
+    // turn is reported rather than quietly building `(a < b) < c`.
     let mut previous_was_comparison = false;
 
     loop {
@@ -83,7 +83,7 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
             continue;
         }
 
-        // `Point { x: 1 }` (§6). Only after a bare name, and only where a
+        // `Point { x: 1 }` (§types). Only after a bare name, and only where a
         // brace can't be a block instead — see `Cursor::no_struct_literal`.
         if operator == TokenKind::BraceLeft
             && lhs.kind() == NodeKind::NameExpr
@@ -125,8 +125,9 @@ fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
     lhs
 }
 
-/// §2's prefix operators. No `+`, which would be a no-op with a spelling, and
-/// no `~` — the core has no bitwise operators to complement with.
+/// §expressions' prefix operators. No `+`, which would be a no-op with a
+/// spelling, and no `~` — the core has no bitwise operators to complement
+/// with.
 fn is_unary_operator(kind: TokenKind) -> bool {
     matches!(kind, TokenKind::Minus | TokenKind::Bang)
 }
@@ -210,7 +211,7 @@ fn arg_list(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// `{ x: 1, y: 2 }` — the body of a struct literal (§6).
+/// `{ x: 1, y: 2 }` — the body of a struct literal (§types).
 fn field_init_list(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::FieldInitList);
     cursor.bump(); // `{`
@@ -230,8 +231,8 @@ fn field_init_list(cursor: &mut Cursor) {
     cursor.close(mark);
 }
 
-/// `{ … }` — an expression (§2), so a function body, an `if` arm, and a `let`
-/// initializer are all the same node.
+/// `{ … }` — an expression (§expressions), so a function body, an `if` arm,
+/// and a `let` initializer are all the same node.
 pub fn block(cursor: &mut Cursor) -> Closed {
     let mark = cursor.open(NodeKind::BlockExpr);
     cursor.expect(TokenKind::BraceLeft, DiagnosticKind::ExpectedOpeningBrace);
@@ -244,7 +245,7 @@ pub fn block(cursor: &mut Cursor) -> Closed {
 }
 
 /// The condition of an `if` or `while`. Braces are mandatory and the condition
-/// is unparenthesized (§4), which is what makes the struct-literal ban
+/// is unparenthesized (§control), which is what makes the struct-literal ban
 /// necessary.
 pub fn condition(cursor: &mut Cursor) {
     let allowed = cursor.set_struct_literals_allowed(false);
@@ -252,10 +253,10 @@ pub fn condition(cursor: &mut Cursor) {
     cursor.set_struct_literals_allowed(allowed);
 }
 
-/// `if c { … } else if d { … } else { … }` — an expression (§2).
+/// `if c { … } else if d { … } else { … }` — an expression (§expressions).
 ///
 /// `else if` is `else` followed by another `if` rather than a keyword of its
-/// own (§4), so the chain nests instead of flattening.
+/// own (§control), so the chain nests instead of flattening.
 fn if_expr(cursor: &mut Cursor) -> Closed {
     let mark = cursor.open(NodeKind::IfExpr);
     cursor.bump(); // `if`
@@ -271,7 +272,7 @@ fn if_expr(cursor: &mut Cursor) -> Closed {
     cursor.close(mark)
 }
 
-/// `(x) -> x + 1`, `(x: u64) -> x + 1`, or `() -> work()` (§5).
+/// `(x) -> x + 1`, `(x: u64) -> x + 1`, or `() -> work()` (§functions).
 ///
 /// Parameter types are optional here, unlike a `fn`: a declaration is read by
 /// others, a lambda is read in place.
@@ -299,7 +300,7 @@ fn lambda(cursor: &mut Cursor) -> Closed {
     cursor.close(params);
 
     // `->` introduces the *body*, not a return type: a lambda's types come
-    // from context (§5), so there is nowhere for one to go.
+    // from context (§functions), so there is nowhere for one to go.
     cursor.expect(TokenKind::Arrow, DiagnosticKind::ExpectedLambdaBody);
     expr(cursor);
     cursor.close(mark)
@@ -334,7 +335,7 @@ fn primary(cursor: &mut Cursor) -> Closed {
         // and only what follows the `)` says which.
         TokenKind::ParenLeft if at_lambda(cursor) => lambda(cursor),
         TokenKind::ParenLeft => {
-            // `()` is the unit value, not an empty grouping (§6).
+            // `()` is the unit value, not an empty grouping (§types).
             let unit = cursor.nth(1) == TokenKind::ParenRight;
             let mark = cursor.open(if unit {
                 NodeKind::UnitExpr
@@ -361,8 +362,8 @@ fn primary(cursor: &mut Cursor) -> Closed {
 
 /// Types, to the extent `as` needs them.
 ///
-/// §6 and §8 own this properly — generic arguments, and whatever §8's
-/// collections spell. What's here is what can be written today.
+/// §types and §generics own this properly — generic arguments, and whatever
+/// §generics' collections spell. What's here is what can be written today.
 pub fn ty(cursor: &mut Cursor) -> Closed {
     match cursor.peek() {
         TokenKind::Ident => {

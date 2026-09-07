@@ -1,4 +1,4 @@
-# §5 — Functions
+# §functions — Functions
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -38,14 +38,14 @@ arguments  → expression ( "," expression )*
   - Named / keyword arguments **[Lox-omits]**
   - Variadics **[Lox-omits]**
   - Pass-by-value vs. reference; mutability of parameters
-  - Destructuring parameters (patterns: §7)
-  - Type annotations on parameters and returns — where they're required (§10)
+  - Destructuring parameters (patterns: §unions)
+  - Type annotations on parameters and returns — where they're required (§inference)
 - **Recursion**, mutual recursion, and whether forward declaration is needed
 - **Tail calls** **[wasm]** — wasm has a tail-call proposal; without it, deep recursion
   needs a trampoline
 - **Overloading** by arity or type (usually: don't)
 - **Operator overloading** / user-defined operators
-- **Generics / polymorphism** — monomorphize or box **[wasm]** → §8
+- **Generics / polymorphism** — monomorphize or box **[wasm]** → §generics
 - **Inline / purity / effect annotations**
 - **Native / foreign / host functions** **[wasm]** — the import/export surface. For glue,
   this is arguably the *central* construct: how does a source-level declaration become a
@@ -57,13 +57,14 @@ arguments  → expression ( "," expression )*
 
 ### Not decided here
 
-- **Generics** — §8.
-- **Methods, receivers, and `self`** — §11. §5 covers free functions; a method adds a
-  receiver and an owner, and both are §11's.
-- **Host and foreign functions** — §13, because declaring one means saying where it comes
-  from, which is a module-system question. This is the section's biggest absence: until
-  §13 exists, a Glue program can compute but cannot observably *do* anything (§3).
-- **Operator overloading** — §6, with traits.
+- **Generics** — §generics.
+- **Methods, receivers, and `self`** — §objects. §functions covers free functions; a
+  method adds a receiver and an owner, and both are §objects'.
+- **Host and foreign functions** — §modules, because declaring one means saying where it
+  comes from, which is a module-system question. This is the section's biggest absence:
+  until §modules exists, a Glue program can compute but cannot observably *do* anything
+  (§statements).
+- **Operator overloading** — §types, with traits.
 
 ### Declaration
 
@@ -80,21 +81,23 @@ fn log(message: Str) {
 - **Parameter types are required. Return type is required when it isn't unit**, written
   `-> T`, and omitted when it is.
 
-  This is the local-inference boundary §10 wants: **signatures are annotated, bodies can
-  be inferred.** Inference inside a body is available, not mandatory — annotations on a
-  `let` stay optional wherever the compiler can manage without them, and permitted
-  wherever a reader wants them (§3). It's also what keeps a function's meaning readable
-  without reading its body, and what lets the two front ends agree without whole-program
-  analysis (goal §2.2).
-- The body is a block, so its value is its trailing expression (§2, §3). `return` is for
-  early exit (§4) — a well-shaped function often has none.
+  This is the local-inference boundary §inference wants: **signatures are annotated,
+  bodies can be inferred.** Inference inside a body is available, not mandatory —
+  annotations on a `let` stay optional wherever the compiler can manage without them, and
+  permitted wherever a reader wants them (§statements). It's also what keeps a function's
+  meaning readable without reading its body, and what lets the two front ends agree
+  without whole-program analysis (goal §both-modes).
+- The body is a block, so its value is its trailing expression (§expressions,
+  §statements). `return` is for early exit (§control) — a well-shaped function often has
+  none.
 - **No overloading**, by arity or by type. One name, one function. Overload resolution
-  interacts badly with inference (§10) and with generics (§8), and the cost of `add_u64`
-  versus `add_f64` is smaller than the cost of resolution rules nobody can predict.
+  interacts badly with inference (§inference) and with generics (§generics), and the cost
+  of `add_u64` versus `add_f64` is smaller than the cost of resolution rules nobody can
+  predict.
 
 ### Parameters
 
-- **Parameters are immutable bindings** by default, exactly like `let` (§3).
+- **Parameters are immutable bindings** by default, exactly like `let` (§statements).
 - `mut` on a parameter means **the function may mutate the caller's value**, and the
   caller must pass a `mut` binding:
 
@@ -107,12 +110,14 @@ fn log(message: Str) {
   advance(frozen, 1);       // error — frozen is not mut
   ```
 
-  This is the mechanism §3 promised: a call that mutates requires a `mut` binding at the
-  call site, so mutation is visible where it happens rather than only where it's declared.
+  This is the mechanism §statements promised: a call that mutates requires a `mut` binding
+  at the call site, so mutation is visible where it happens rather than only where it's
+  declared.
 
   **Open:** whether a `mut` parameter is by reference or copy-in/copy-out. The difference
-  is observable only through aliasing, which is §6's question (value versus reference
-  semantics), so §5 fixes the syntax and the checking rule and leaves representation to §6.
+  is observable only through aliasing, which is §types' question (value versus reference
+  semantics), so §functions fixes the syntax and the checking rule and leaves
+  representation to §types.
 - **No default values, no named arguments, no variadics.** All three are additive later;
   all three complicate call resolution now, and none is needed to get the language
   standing up.
@@ -125,7 +130,7 @@ fn apply(g: fn(u64) -> u64, x: u64) -> u64 { g(x) }
 ```
 
 The type of a function is `fn(T, …) -> R`, with `-> R` omitted for unit. On wasm this is a
-`funcref` in a table, called through `call_indirect` (§16).
+`funcref` in a table, called through `call_indirect` (§wasm).
 
 ### Lambdas
 
@@ -176,38 +181,39 @@ whether a name happens to be in scope.
 
 - **Lambdas capture by reference**, implicitly — there is no capture list. Mutation of a
   captured binding is visible to everyone holding it, and the binding must be `mut` for
-  the lambda to mutate it at all (§3).
+  the lambda to mutate it at all (§statements).
 - Captured bindings therefore **outlive the frame that created them**. On wasm this means
-  a heap-allocated environment, since the target has no closures of its own (§16); in the
-  interpreter it means the same thing by a different route. Both back ends must agree on
-  *what* is captured, which is why capture is by binding and not by expression.
+  a heap-allocated environment, since the target has no closures of its own (§wasm); in
+  the interpreter it means the same thing by a different route. Both back ends must agree
+  on *what* is captured, which is why capture is by binding and not by expression.
 - **The classic loop-variable trap is currently absent**, and worth noticing before it
   comes back. In most languages, closures created in a loop share one loop variable and
-  all observe its final value. Glue has only `while` (§4), so the "loop variable" is an
-  ordinary `let` inside the body — a fresh binding per iteration, captured separately.
-  Whatever iteration construct §4 eventually gains inherits this question, and the answer
-  should be per-iteration.
+  all observe its final value. Glue has only `while` (§control), so the "loop variable" is
+  an ordinary `let` inside the body — a fresh binding per iteration, captured separately.
+  Whatever iteration construct §control eventually gains inherits this question, and the
+  answer should be per-iteration.
 
 ### Calls
 
-- Arguments evaluate left to right, before the call (§2).
+- Arguments evaluate left to right, before the call (§expressions).
 - Arity and types are checked statically. There is no arity checking at runtime because
   there is nothing dynamic to check.
 - **Recursion is permitted.** Mutual recursion needs top-level declarations to be
-  order-independent, which §12 and §13 owe an answer to (§3).
+  order-independent, which §scope and §modules owe an answer to (§statements).
 - **No tail-call guarantee.** wasm's tail-call proposal would give us one cheaply, but
-  until it's relied upon, deep recursion exhausts the stack and traps (§15's resource
-  limits). Code that must recurse unboundedly needs a loop or an explicit worklist.
+  until it's relied upon, deep recursion exhausts the stack and traps (§semantics'
+  resource limits). Code that must recurse unboundedly needs a loop or an explicit
+  worklist.
 
 ### Parameter passing
 
 Arguments are passed by value; a `mut` parameter additionally permits the callee to write
 through to the caller's binding. What "by value" costs for an aggregate — a copy, or a
-reference under the hood — is §6's, and it is the same open question as the `mut`
+reference under the hood — is §types', and it is the same open question as the `mut`
 representation above.
 
 ### Unit
 
 A function with no `-> T` returns unit. Unit is a real value with one inhabitant, not an
 absence: it can be bound, returned, and stored, which keeps `fn` types uniform and means
-generic code (§8) needs no special case for "returns nothing".
+generic code (§generics) needs no special case for "returns nothing".

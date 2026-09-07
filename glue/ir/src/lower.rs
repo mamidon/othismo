@@ -1,12 +1,12 @@
 //! Elaboration: concrete syntax tree in, core IR out.
 //!
 //! Name resolution, type checking, A-normal form, capture analysis, and slot
-//! allocation happen in one pass. §14 says they must — an annotation can need a
-//! call evaluated before its type exists, so the passes are mutually recursive
-//! and admit no ordering. What makes that tractable is §10's choice of local
-//! inference over whole-program Hindley–Milner: every `fn` signature is
-//! annotated (§5), so a body can be elaborated knowing only its own signature
-//! and the declarations it names.
+//! allocation happen in one pass. §comptime says they must — an annotation can
+//! need a call evaluated before its type exists, so the passes are mutually
+//! recursive and admit no ordering. What makes that tractable is §inference's
+//! choice of local inference over whole-program Hindley–Milner: every `fn`
+//! signature is annotated (§functions), so a body can be elaborated knowing
+//! only its own signature and the declarations it names.
 //!
 //! The CST is read and never rewritten. It is the language server's tree and
 //! has to keep the property `parser` opens with — every byte reachable — and a
@@ -50,14 +50,14 @@ pub fn lower(tree: &Tree, source: &str) -> Lowered {
 
 /// The result of checking an expression.
 ///
-/// The two constant variants are §1's unpinned constants: a mathematical value
-/// with no type yet, which acquires one at the point it becomes a runtime
-/// value. They are not an optimization — `let n = 3; n - 5` is `-2` because of
-/// them, where pinning at the `let` would make it an underflow.
+/// The two constant variants are §lexical's unpinned constants: a mathematical
+/// value with no type yet, which acquires one at the point it becomes a
+/// runtime value. They are not an optimization — `let n = 3; n - 5` is `-2`
+/// because of them, where pinning at the `let` would make it an underflow.
 #[derive(Clone, Debug)]
 enum Checked {
     Val(Operand, TypeId),
-    /// An unpinned integer constant. `i128` stands in for §1's unbounded
+    /// An unpinned integer constant. `i128` stands in for §lexical's unbounded
     /// precision; exceeding it is [`DiagnosticKind::ConstantOverflow`], which
     /// is a smaller lie than wrapping would be.
     Int(i128),
@@ -78,7 +78,7 @@ enum Binding {
         mutable: bool,
     },
     /// A binding whose initializer was an unpinned constant and which is never
-    /// assigned (§1). It has no slot and no type until it is used.
+    /// assigned (§lexical). It has no slot and no type until it is used.
     Const(Checked),
     Func {
         id: FuncId,
@@ -102,8 +102,8 @@ struct FuncCtx {
     slots: Vec<SlotDef>,
     blocks: Vec<Block>,
     ret: TypeId,
-    /// False while a lambda's return type is still being inferred (§5: a
-    /// lambda's types come from context, and sometimes there isn't any).
+    /// False while a lambda's return type is still being inferred (§functions:
+    /// a lambda's types come from context, and sometimes there isn't any).
     ret_known: bool,
     loop_depth: u32,
     /// Names the dump gives to this function's lambdas: `outer.λ0`, `outer.λ1`.
@@ -122,13 +122,14 @@ struct Lowerer<'a> {
     /// lowered — otherwise every problem in a signature is reported twice.
     signatures: HashMap<NodeId, (Vec<ParamInfo>, TypeId)>,
     /// Each `fn`'s parameter names and their `mut` flags, so a call site can
-    /// check §5's rule. Kept here rather than read back off the callee's
-    /// [`SlotDef`]s, because a call may be lowered before the callee's body is
-    /// — that is what hoisting is for — and a slot does not exist until then.
+    /// check §functions' rule. Kept here rather than read back off the
+    /// callee's [`SlotDef`]s, because a call may be lowered before the
+    /// callee's body is — that is what hoisting is for — and a slot does not
+    /// exist until then.
     ///
-    /// Nothing records the same for a function *value*: §5 gives a `fn` type no
-    /// `mut`, so an indirect call has nothing to check against. See
-    /// [`Lowerer::call`].
+    /// Nothing records the same for a function *value*: §functions gives a
+    /// `fn` type no `mut`, so an indirect call has nothing to check against.
+    /// See [`Lowerer::call`].
     mut_params: HashMap<FuncId, Vec<(String, bool)>>,
 
     t_unit: TypeId,
@@ -194,9 +195,10 @@ impl<'a> Lowerer<'a> {
         let root = self.tree.root();
         let name = self.program.syms.intern("<file>");
 
-        // §3: a file is a block. Its trailing expression is the file's value,
-        // which makes goal §2.1's "a bare expression is a valid program" the
-        // block rule applied to the outermost block rather than a REPL rule.
+        // §statements: a file is a block. Its trailing expression is the
+        // file's value, which makes goal §one-language's "a bare expression is
+        // a valid program" the block rule applied to the outermost block
+        // rather than a REPL rule.
         let id = self.begin_func(Some(name), self.t_error, root);
         self.push_scope(None);
         self.declare_prelude();
@@ -218,8 +220,8 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// §1: type names are ordinary identifiers, not keywords, so they live in
-    /// the outermost scope and a program may shadow them.
+    /// §lexical: type names are ordinary identifiers, not keywords, so they
+    /// live in the outermost scope and a program may shadow them.
     fn declare_prelude(&mut self) {
         let scalars: Vec<(String, TypeId)> = vec![
             ("bool".into(), self.t_bool),
@@ -333,7 +335,7 @@ impl<'a> Lowerer<'a> {
 
     /// Emits the function's result, unless the body already ended in `return`.
     ///
-    /// §5: a body is a block, so its ordinary result is its trailing
+    /// §functions: a body is a block, so its ordinary result is its trailing
     /// expression and `return` is for early exit. A function using the early
     /// exit as its *only* exit would otherwise get a second, unreachable
     /// return after it.
@@ -360,7 +362,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn temp(&mut self, ty: TypeId) -> Slot {
-        // §3's `mut` is about a binding, and a temporary is not one.
+        // §statements' `mut` is about a binding, and a temporary is not one.
         self.slot(ty, None, SlotKind::Temp, false)
     }
 
@@ -443,8 +445,8 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    /// The facts of the innermost block scope, for §1's pinning rule and §5's
-    /// cell rule.
+    /// The facts of the innermost block scope, for §lexical's pinning rule and
+    /// §functions' cell rule.
     fn facts_needs_cell(&self, name: &str) -> bool {
         self.scopes
             .iter()
@@ -494,8 +496,8 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// §1's pinning rule, in order: context wins; otherwise sign decides;
-    /// otherwise it is an error.
+    /// §lexical's pinning rule, in order: context wins; otherwise sign
+    /// decides; otherwise it is an error.
     fn pin(&mut self, value: Checked, expect: Option<TypeId>, at: NodeId) -> (Operand, TypeId) {
         match value {
             Checked::Val(operand, ty) => {
@@ -585,8 +587,8 @@ impl<'a> Lowerer<'a> {
 impl Lowerer<'_> {
     /// Lowers a block's statements into `blk` and returns the block's value.
     ///
-    /// §2's semicolon rule: the value is the trailing expression, written
-    /// without a `;`. A block with none is unit.
+    /// §expressions' semicolon rule: the value is the trailing expression,
+    /// written without a `;`. A block with none is unit.
     fn block_into(&mut self, blk: BlockId, node: NodeId, expect: Option<TypeId>) -> Checked {
         let facts = scan::block_facts(self.tree, self.source, node);
         self.push_scope(Some(facts));
@@ -598,7 +600,8 @@ impl Lowerer<'_> {
         for child in &children {
             let kind = self.tree.kind(*child);
             if cst::is_expr(kind) {
-                // The trailing expression, and so the block's value (§2, §3).
+                // The trailing expression, and so the block's value
+                // (§expressions, §statements).
                 value = self.expr(blk, *child, expect);
             } else {
                 self.stmt(blk, *child);
@@ -609,10 +612,11 @@ impl Lowerer<'_> {
         value
     }
 
-    /// §3 and §5: declarations are order-independent within their block, so
-    /// that mutual recursion works while statements still run in order. §12
-    /// owes the general rule; hoisting per block is the smallest thing that
-    /// covers the cases that exist, and it is what the interpreter does too.
+    /// §statements and §functions: declarations are order-independent within
+    /// their block, so that mutual recursion works while statements still run
+    /// in order. §scope owes the general rule; hoisting per block is the
+    /// smallest thing that covers the cases that exist, and it is what the
+    /// interpreter does too.
     ///
     /// Four sub-passes, and the order between them matters: a struct's fields
     /// may name an alias, an alias may name a struct, and a signature may name
@@ -635,7 +639,8 @@ impl Lowerer<'_> {
             if self.tree.kind(*child) == NodeKind::TypeAliasDecl
                 && let Some((name, _)) = cst::name(self.tree, self.source, *child)
             {
-                // §6: an alias is a second name for one type, not a new one.
+                // §types: an alias is a second name for one type, not a new
+                // one.
                 let ty = match cst::type_child(self.tree, *child) {
                     Some(node) => self.resolve_type(node),
                     None => self.t_error,
@@ -673,8 +678,8 @@ impl Lowerer<'_> {
                     self.error_at(DiagnosticKind::DuplicateField(name), span);
                     continue;
                 }
-                // §6: field types are required — there is no inference across a
-                // declaration boundary.
+                // §types: field types are required — there is no inference
+                // across a declaration boundary.
                 let ty = match cst::type_child(self.tree, decl) {
                     Some(node) => self.resolve_type(node),
                     None => self.t_error,
@@ -734,12 +739,13 @@ impl Lowerer<'_> {
                             Some(node) => self.resolve_type(node),
                             None => self.t_error,
                         };
-                        // §5: `mut` belongs to the parameter, not the type.
+                        // §functions: `mut` belongs to the parameter, not the
+                        // type.
                         let mutable = cst::has_token(self.tree, param, TokenKind::Mut);
                         params.push(ParamInfo { name, ty, mutable });
                     }
                 }
-                // §5: omitted when the return type is unit.
+                // §functions: omitted when the return type is unit.
                 NodeKind::RetType => {
                     ret = match cst::type_child(self.tree, child) {
                         Some(node) => self.resolve_type(node),
@@ -785,8 +791,8 @@ impl Lowerer<'_> {
             None => Checked::Error,
         };
 
-        // §1: a binding stays an unpinned constant when its initializer is a
-        // constant expression and it is never assigned in its scope. Both
+        // §lexical: a binding stays an unpinned constant when its initializer
+        // is a constant expression and it is never assigned in its scope. Both
         // conditions are syntactic, which is the point — a rule needing
         // dataflow is a rule two back ends eventually disagree about.
         if annotation.is_none()
@@ -820,8 +826,8 @@ impl Lowerer<'_> {
             slot
         };
 
-        // §3: the initializer is evaluated before the binding exists, so
-        // binding *after* lowering it is what makes `let x = x;` name the
+        // §statements: the initializer is evaluated before the binding exists,
+        // so binding *after* lowering it is what makes `let x = x;` name the
         // outer one.
         self.bind(
             name,
@@ -853,9 +859,9 @@ impl Lowerer<'_> {
                     self.error(DiagnosticKind::NotAPlace, place);
                     return;
                 };
-                // §3: assignment must match the binding's type. To give a name
-                // a value of a different type, declare it again — that is
-                // shadowing, and it is why both forms stay useful.
+                // §statements: assignment must match the binding's type. To
+                // give a name a value of a different type, declare it again —
+                // that is shadowing, and it is why both forms stay useful.
                 let checked = self.expr(blk, value, Some(ty));
                 let (operand, _) = self.pin(checked, Some(ty), value);
                 if cell {
@@ -872,8 +878,9 @@ impl Lowerer<'_> {
                 }
             }
             NodeKind::FieldExpr => {
-                // §6: field mutability follows the binding. A `mut` binding
-                // permits assigning any field; a non-`mut` one permits none.
+                // §types: field mutability follows the binding. A `mut`
+                // binding permits assigning any field; a non-`mut` one permits
+                // none.
                 if let Some((root, span)) = self.place_root(place)
                     && let Some((_, Binding::Value { mutable: false, .. })) = self.resolve(&root)
                 {
@@ -950,11 +957,11 @@ impl Lowerer<'_> {
         // belongs inside it rather than before the loop. That is ANF's price,
         // and it is visible right here.
         //
-        // The condition is lowered *inside* the loop for §4's purposes: a jump
-        // written in it — which needs a block expression, so `while { break;
-        // true } { … }` — has this loop as its innermost enclosing one, since
-        // this is the loop it conditions. The header is where it lands, and
-        // both back ends leave the loop from there.
+        // The condition is lowered *inside* the loop for §control's purposes:
+        // a jump written in it — which needs a block expression, so `while {
+        // break; true } { … }` — has this loop as its innermost enclosing one,
+        // since this is the loop it conditions. The header is where it lands,
+        // and both back ends leave the loop from there.
         let header = self.new_block();
         self.cur_mut().loop_depth += 1;
         let cond = match cond_node {
@@ -969,7 +976,7 @@ impl Lowerer<'_> {
         let body = self.new_block();
         if let Some(body_node) = body_node {
             self.cur_mut().loop_depth += 1;
-            // §4: a loop is a statement and its value is unit.
+            // §control: a loop is a statement and its value is unit.
             self.block_into(body, body_node, None);
             self.cur_mut().loop_depth -= 1;
         }
@@ -977,9 +984,9 @@ impl Lowerer<'_> {
         self.emit(blk, Stmt::While { header, cond, body }, node);
     }
 
-    /// §2 and §4: a condition must be `bool`. Not "convertible to" — there are
-    /// no implicit conversions and no truthiness, so a `bool` is the only thing
-    /// that can appear here.
+    /// §expressions and §control: a condition must be `bool`. Not "convertible
+    /// to" — there are no implicit conversions and no truthiness, so a `bool`
+    /// is the only thing that can appear here.
     fn condition(&mut self, checked: Checked, at: NodeId) -> Operand {
         match checked {
             Checked::Val(operand, ty) if self.program.types.compatible(ty, self.t_bool) => operand,
@@ -1021,8 +1028,8 @@ impl Lowerer<'_> {
                 let checked = self.expr(blk, value, expect);
                 let (operand, ty) = self.pin(checked, expect, value);
                 if !known {
-                    // §5: a lambda with no context to take a return type from
-                    // adopts its first `return`.
+                    // §functions: a lambda with no context to take a return
+                    // type from adopts its first `return`.
                     let ctx = self.cur_mut();
                     ctx.ret = ty;
                     ctx.ret_known = true;
@@ -1222,8 +1229,8 @@ impl Lowerer<'_> {
             NodeKind::LiteralExpr => self.literal(node),
             NodeKind::NameExpr => self.name_expr(blk, node),
             NodeKind::ParenExpr => match cst::expr_children(self.tree, node).first() {
-                // §2: grouping and nothing else — it does not change a value's
-                // type, meaning, or evaluation.
+                // §expressions: grouping and nothing else — it does not change
+                // a value's type, meaning, or evaluation.
                 Some(&inner) => self.expr(blk, inner, expect),
                 None => Checked::Error,
             },
@@ -1246,14 +1253,16 @@ impl Lowerer<'_> {
             NodeKind::StructLitExpr => self.struct_lit(blk, node),
             NodeKind::LambdaExpr => self.lambda(blk, node, expect),
             NodeKind::IndexExpr => {
-                // §6: nothing but `Str` is indexable until §8 brings
-                // collections, and what `Str` indexing returns is still open.
+                // §types: nothing but `Str` is indexable until §generics
+                // brings collections, and what `Str` indexing returns is still
+                // open.
                 self.error(DiagnosticKind::Unsupported("indexing"), node);
                 Checked::Error
             }
             NodeKind::MethodCallExpr => {
-                // §11 is unstarted, and §2 hands it the question of whether
-                // `.` on a reference is a local call or a message send.
+                // §objects is unstarted, and §expressions hands it the
+                // question of whether `.` on a reference is a local call or a
+                // message send.
                 self.error(DiagnosticKind::Unsupported("method calls"), node);
                 Checked::Error
             }
@@ -1286,8 +1295,9 @@ impl Lowerer<'_> {
                 let id = self.program.consts.add(Const::Str(value.into()));
                 Checked::Val(Operand::Const(id), self.t_str)
             }
-            // §1: an unsuffixed literal has no type. It is a mathematical
-            // integer that acquires one where it becomes a runtime value.
+            // §lexical: an unsuffixed literal has no type. It is a
+            // mathematical integer that acquires one where it becomes a
+            // runtime value.
             Literal::Int {
                 value,
                 suffix: None,
@@ -1298,7 +1308,8 @@ impl Lowerer<'_> {
             } => {
                 let ty = self.numeric_type(suffix);
                 let value = value as i128;
-                // §1: an integer may carry a float suffix — `1f64` is a float.
+                // §lexical: an integer may carry a float suffix — `1f64` is a
+                // float.
                 if self.program.types.is_float(ty) {
                     return Checked::Val(self.float_const(value as f64, ty), ty);
                 }
@@ -1382,10 +1393,10 @@ impl Lowerer<'_> {
         match binding {
             Binding::Value { slot, ty, cell, .. } => {
                 if owner != current {
-                    // §5: a nested `fn` is scoped to its block and captures
-                    // nothing. A lambda's captures are already slots of its
-                    // own, put there before its body was walked, so reaching
-                    // here means the enclosing function is a `fn`.
+                    // §functions: a nested `fn` is scoped to its block and
+                    // captures nothing. A lambda's captures are already slots
+                    // of its own, put there before its body was walked, so
+                    // reaching here means the enclosing function is a `fn`.
                     self.error_at(DiagnosticKind::FnCapturesNothing(name), span);
                     return Checked::Error;
                 }
@@ -1398,8 +1409,8 @@ impl Lowerer<'_> {
             // A constant needs no capture: it is not storage, it is a value
             // known before either function runs.
             Binding::Const(value) => value,
-            // §5: a function is a value. Every function value is a closure,
-            // and a plain `fn` has an empty environment.
+            // §functions: a function is a value. Every function value is a
+            // closure, and a plain `fn` has an empty environment.
             Binding::Func { id, ty } => self.emit_temp(
                 blk,
                 Rvalue::MakeClosure {
@@ -1427,8 +1438,8 @@ impl Lowerer<'_> {
         let checked = self.expr(blk, cond_node, Some(self.t_bool));
         let cond = self.condition(checked, cond_node);
 
-        // §2: with no `else` the type is unit, so it can be a statement but not
-        // a value.
+        // §expressions: with no `else` the type is unit, so it can be a
+        // statement but not a value.
         let wants_value = else_node.is_some();
         let arm_expect = if wants_value { expect } else { None };
 
@@ -1443,8 +1454,8 @@ impl Lowerer<'_> {
             Some(else_node) if self.tree.kind(else_node) == NodeKind::BlockExpr => {
                 self.block_into(else_, else_node, arm_expect)
             }
-            // `else if` is `else` followed by another `if` (§4), so the chain
-            // nests rather than flattening.
+            // `else if` is `else` followed by another `if` (§control), so the
+            // chain nests rather than flattening.
             Some(else_node) => self.expr(else_, else_node, arm_expect),
             None => Checked::Val(Operand::Const(self.c_unit), self.t_unit),
         };
@@ -1499,8 +1510,8 @@ impl Lowerer<'_> {
 
         match op {
             Some(TokenKind::Minus) => match value {
-                // §1: unary `-` is an ordinary operation on constants, which is
-                // why `-1` needs no rule of its own in the lexer.
+                // §lexical: unary `-` is an ordinary operation on constants,
+                // which is why `-1` needs no rule of its own in the lexer.
                 Checked::Int(v) => Checked::Int(-v),
                 Checked::Float(v) => Checked::Float(-v),
                 Checked::Error => Checked::Error,
@@ -1508,9 +1519,10 @@ impl Lowerer<'_> {
                     if self.program.types.is_error(ty) {
                         return Checked::Error;
                     }
-                    // §2: negating an unsigned value has no representable
-                    // result but zero, so it is a type error rather than a
-                    // trap — the error arrives earlier and says more.
+                    // §expressions: negating an unsigned value has no
+                    // representable result but zero, so it is a type error
+                    // rather than a trap — the error arrives earlier and says
+                    // more.
                     if !self.program.types.is_signed_or_float(ty) {
                         let name = self.type_name(ty);
                         let kind = if self.program.types.is_integer(ty) {
@@ -1547,9 +1559,9 @@ impl Lowerer<'_> {
             return Checked::Error;
         };
 
-        // §2: `&&` and `||` short-circuit, which makes them control flow
-        // wearing an operator's clothes. They lower to `if`, so neither back
-        // end implements laziness and `BinOp` has no entry for them.
+        // §expressions: `&&` and `||` short-circuit, which makes them control
+        // flow wearing an operator's clothes. They lower to `if`, so neither
+        // back end implements laziness and `BinOp` has no entry for them.
         if matches!(token, TokenKind::AmpAmp | TokenKind::PipePipe) {
             return self.short_circuit(blk, node, lhs_node, rhs_node, token);
         }
@@ -1558,9 +1570,9 @@ impl Lowerer<'_> {
             return Checked::Error;
         };
 
-        // §2: operands evaluate left then right. In ANF that is the order of
-        // the statements below, so it is the shape of the data rather than a
-        // rule two back ends each have to remember.
+        // §expressions: operands evaluate left then right. In ANF that is the
+        // order of the statements below, so it is the shape of the data rather
+        // than a rule two back ends each have to remember.
         let hint = if op.is_comparison() { None } else { expect };
         let left = self.expr(blk, lhs_node, hint);
         let hint = self.known_type(&left).or(hint);
@@ -1570,7 +1582,7 @@ impl Lowerer<'_> {
             return Checked::Error;
         }
 
-        // §1: arithmetic over unpinned constants happens with unbounded
+        // §lexical: arithmetic over unpinned constants happens with unbounded
         // precision and the *result* is what gets typed, so an intermediate
         // can never overflow.
         if let Some(folded) = self.fold(op, &left, &right, node) {
@@ -1579,7 +1591,7 @@ impl Lowerer<'_> {
 
         // A hint pins an unpinned constant; it is not a check on a value that
         // already has a type. Passing it to both would report "expected `u32`,
-        // found `u64`" and bury §1's actual rule.
+        // found `u64`" and bury §lexical's actual rule.
         let known = self.known_type(&left).or_else(|| self.known_type(&right));
         let (left_op, left_ty) = self.pin_operand(left, known, lhs_node);
         let (right_op, right_ty) = self.pin_operand(right, known, rhs_node);
@@ -1587,9 +1599,10 @@ impl Lowerer<'_> {
         if self.program.types.is_error(left_ty) || self.program.types.is_error(right_ty) {
             return Checked::Error;
         }
-        // §1: no implicit conversion between pinned types. `u64 + s64` is an
-        // error, and so is `u32 + u64` — the alternative is C's promotion
-        // lattice, where mixed comparison silently does the wrong thing.
+        // §lexical: no implicit conversion between pinned types. `u64 + s64`
+        // is an error, and so is `u32 + u64` — the alternative is C's
+        // promotion lattice, where mixed comparison silently does the wrong
+        // thing.
         if left_ty != right_ty {
             let (left, right) = (self.type_name(left_ty), self.type_name(right_ty));
             self.error(
@@ -1625,27 +1638,28 @@ impl Lowerer<'_> {
         self.emit_temp(blk, Rvalue::Binary(op, left_op, right_op), ty, node)
     }
 
-    /// Which operators §2 defines on which types. They are built-in and closed
-    /// until §6 brings traits and operator overloading.
+    /// Which operators §expressions defines on which types. They are built-in
+    /// and closed until §types brings traits and operator overloading.
     fn defined_on(&self, op: BinOp, ty: TypeId) -> bool {
         let types = &self.program.types;
         match op {
-            // §2: `+` also concatenates strings.
+            // §expressions: `+` also concatenates strings.
             BinOp::Add => types.is_numeric(ty) || matches!(types.get(ty), TypeDef::Str),
             BinOp::Sub | BinOp::Mul | BinOp::Div => types.is_numeric(ty),
             BinOp::Rem => types.is_numeric(ty),
-            // §2: structural for values, and cross-type comparison does not
-            // exist — that part is checked by the operand types agreeing.
+            // §expressions: structural for values, and cross-type comparison
+            // does not exist — that part is checked by the operand types
+            // agreeing.
             BinOp::Eq | BinOp::Ne => !matches!(types.get(ty), TypeDef::Fn { .. }),
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => types.is_ordered(ty),
         }
     }
 
-    /// Constant folding over §1's unpinned constants.
+    /// Constant folding over §lexical's unpinned constants.
     ///
-    /// §2: "constant expressions are checked at compile time rather than
-    /// trapping", so overflow and division by zero are diagnostics here rather
-    /// than runtime traps.
+    /// §expressions: "constant expressions are checked at compile time rather
+    /// than trapping", so overflow and division by zero are diagnostics here
+    /// rather than runtime traps.
     fn fold(
         &mut self,
         op: BinOp,
@@ -1669,9 +1683,9 @@ impl Lowerer<'_> {
                         Some(value) => Checked::Int(value),
                         None => self.constant_overflow(node),
                     },
-                    // §2: division truncates toward zero and the remainder
-                    // takes the dividend's sign, which is what `i128` already
-                    // does.
+                    // §expressions: division truncates toward zero and the
+                    // remainder takes the dividend's sign, which is what
+                    // `i128` already does.
                     BinOp::Div | BinOp::Rem if b == 0 => {
                         self.error(DiagnosticKind::ConstantDivisionByZero, node);
                         Checked::Error
@@ -1689,8 +1703,8 @@ impl Lowerer<'_> {
                     BinOp::Mul => Checked::Float(a * b),
                     BinOp::Div => Checked::Float(a / b),
                     BinOp::Rem => Checked::Float(a % b),
-                    // IEEE-754 (§2): every ordering against NaN is false, and
-                    // `NaN != NaN`.
+                    // IEEE-754 (§expressions): every ordering against NaN is
+                    // false, and `NaN != NaN`.
                     BinOp::Eq => self.bool_const(a == b),
                     BinOp::Ne => self.bool_const(a != b),
                     BinOp::Lt => self.bool_const(a < b),
@@ -1699,7 +1713,7 @@ impl Lowerer<'_> {
                     BinOp::Ge => self.bool_const(a >= b),
                 })
             }
-            // §1: integer and float constants do not mix.
+            // §lexical: integer and float constants do not mix.
             (Checked::Int(_), Checked::Float(_)) | (Checked::Float(_), Checked::Int(_)) => {
                 self.error(DiagnosticKind::MixedConstantKinds, node);
                 Some(Checked::Error)
@@ -1723,13 +1737,13 @@ impl Lowerer<'_> {
         }
     }
 
-    /// §2: "Constant expressions are checked at compile time rather than
-    /// trapping. Anything that would trap at runtime — overflow, division by
-    /// zero — is a compile error when all operands are constants."
+    /// §expressions: "Constant expressions are checked at compile time rather
+    /// than trapping. Anything that would trap at runtime — overflow, division
+    /// by zero — is a compile error when all operands are constants."
     ///
-    /// [`Lowerer::fold`] covers §1's *unpinned* constants, which have no width
-    /// to overflow. This covers the pinned ones, where `255u8 + 1` has to be an
-    /// error rather than `0`.
+    /// [`Lowerer::fold`] covers §lexical's *unpinned* constants, which have no
+    /// width to overflow. This covers the pinned ones, where `255u8 + 1` has
+    /// to be an error rather than `0`.
     fn fold_pinned(
         &mut self,
         op: BinOp,
@@ -1769,15 +1783,15 @@ impl Lowerer<'_> {
                         self.error(DiagnosticKind::ConstantDivisionByZero, node);
                         return Some(Checked::Error);
                     }
-                    // §2: division truncates toward zero and the remainder
-                    // takes the dividend's sign.
+                    // §expressions: division truncates toward zero and the
+                    // remainder takes the dividend's sign.
                     BinOp::Div => Some(a / b),
                     BinOp::Rem => Some(a % b),
                     _ => return None,
                 };
-                // §1 and §2: once pinned, exceeding the type's range is an
-                // error rather than a wrap — and as a constant it is an error
-                // now rather than a trap that never runs.
+                // §lexical and §expressions: once pinned, exceeding the type's
+                // range is an error rather than a wrap — and as a constant it
+                // is an error now rather than a trap that never runs.
                 match value.filter(|value| self.fits(*value, int_ty)) {
                     Some(value) => Some(Checked::Val(self.int_const(value, int_ty), int_ty)),
                     None => {
@@ -1795,7 +1809,8 @@ impl Lowerer<'_> {
             ) => {
                 let (a, b) = (f64::from_bits(a), f64::from_bits(b));
                 if op.is_comparison() {
-                    // IEEE-754 (§2), so every ordering against NaN is false.
+                    // IEEE-754 (§expressions), so every ordering against NaN
+                    // is false.
                     return Some(self.bool_const(match op {
                         BinOp::Eq => a == b,
                         BinOp::Ne => a != b,
@@ -1815,7 +1830,8 @@ impl Lowerer<'_> {
                 };
                 Some(Checked::Val(self.float_const(value, float_ty), float_ty))
             }
-            // §2: `+` concatenates, and `==` and ordering compare bytes.
+            // §expressions: `+` concatenates, and `==` and ordering compare
+            // bytes.
             (Const::Str(a), Const::Str(b)) => Some(match op {
                 BinOp::Add => {
                     let joined: Rc<str> = format!("{a}{b}").into();
@@ -1883,10 +1899,11 @@ impl Lowerer<'_> {
         Checked::Val(Operand::Slot(dst), self.t_bool)
     }
 
-    /// `as` over §1's unpinned constants, following §2's conversion table:
-    /// integer to integer is exact or an error, float to integer truncates
-    /// toward zero, and integer to float rounds — because inexactness is
-    /// inherent to floats and is not an error, where integer overflow is.
+    /// `as` over §lexical's unpinned constants, following §expressions'
+    /// conversion table: integer to integer is exact or an error, float to
+    /// integer truncates toward zero, and integer to float rounds — because
+    /// inexactness is inherent to floats and is not an error, where integer
+    /// overflow is.
     fn cast_const(&mut self, value: Checked, target: TypeId, node: NodeId) -> Checked {
         let out_of_range = |lowerer: &mut Self, shown: String| {
             let ty = lowerer.type_name(target);
@@ -1908,8 +1925,9 @@ impl Lowerer<'_> {
                 Checked::Val(self.float_const(v, target), target)
             }
             Checked::Float(v) if self.program.types.is_integer(target) => {
-                // §2: traps on NaN and on the infinities, so as a constant it
-                // is refused rather than given a value nobody chose.
+                // §expressions: traps on NaN and on the infinities, so as a
+                // constant it is refused rather than given a value nobody
+                // chose.
                 if !v.is_finite() {
                     return out_of_range(self, v.to_string());
                 }
@@ -1948,9 +1966,10 @@ impl Lowerer<'_> {
         };
         let value = self.expr(blk, value_node, None);
 
-        // §2: a conversion that would *trap* at run time is a compile error
-        // when every operand is constant. Truncation and rounding are defined
-        // behaviour, not traps, so they happen here rather than being refused.
+        // §expressions: a conversion that would *trap* at run time is a
+        // compile error when every operand is constant. Truncation and
+        // rounding are defined behaviour, not traps, so they happen here
+        // rather than being refused.
         match value {
             Checked::Int(_) | Checked::Float(_) => return self.cast_const(value, target, node),
             Checked::Error => return Checked::Error,
@@ -1964,10 +1983,10 @@ impl Lowerer<'_> {
         if from == target {
             return Checked::Val(operand, target);
         }
-        // Numeric conversions only. §2 spells out what each one does — integer
-        // to integer traps unless representable, float to integer truncates and
-        // traps at the edges, integer to float rounds — and all of that is the
-        // back ends' to implement from one node.
+        // Numeric conversions only. §expressions spells out what each one does
+        // — integer to integer traps unless representable, float to integer
+        // truncates and traps at the edges, integer to float rounds — and all
+        // of that is the back ends' to implement from one node.
         if !(self.program.types.is_numeric(from) && self.program.types.is_numeric(target)) {
             let (from, to) = (self.type_name(from), self.type_name(target));
             self.error(DiagnosticKind::CannotCast { from, to }, node);
@@ -2036,9 +2055,9 @@ fn compare_ord(op: BinOp, ordering: std::cmp::Ordering) -> bool {
 // ---- Calls, fields, structs ------------------------------------------------
 
 impl Lowerer<'_> {
-    /// Returns the rvalue rather than a [`Checked`], because §3's expression
-    /// statement wants to discard it and every other caller wants it in a
-    /// temporary.
+    /// Returns the rvalue rather than a [`Checked`], because §statements'
+    /// expression statement wants to discard it and every other caller wants
+    /// it in a temporary.
     fn call(&mut self, blk: BlockId, node: NodeId) -> Option<(Rvalue, TypeId)> {
         let children = cst::nodes(self.tree, node);
         let callee_node = *children.first()?;
@@ -2049,8 +2068,8 @@ impl Lowerer<'_> {
             .unwrap_or_default();
 
         // A direct call when the callee names a `fn`, an indirect one through
-        // any other function value. §5 checks arity and types statically, so
-        // there is nothing dynamic left to check at run time.
+        // any other function value. §functions checks arity and types
+        // statically, so there is nothing dynamic left to check at run time.
         let direct = if self.tree.kind(callee_node) == NodeKind::NameExpr {
             cst::name(self.tree, self.source, callee_node)
                 .and_then(|(name, _)| self.resolve(&name))
@@ -2096,15 +2115,16 @@ impl Lowerer<'_> {
             );
         }
 
-        // §5's `mut` rule is checked only where the callee is known by name.
-        // A `fn` type carries no `mut` (§5 gives one no syntax), so a call
-        // through a function *value* has nothing to check against — the check
-        // travels with the declaration rather than with the type.
+        // §functions' `mut` rule is checked only where the callee is known by
+        // name. A `fn` type carries no `mut` (§functions gives one no syntax),
+        // so a call through a function *value* has nothing to check against —
+        // the check travels with the declaration rather than with the type.
         let mut_params = sig
             .and_then(|(id, _)| self.mut_params.get(&id).cloned())
             .unwrap_or_default();
 
-        // §2 and §5: arguments evaluate left to right, before the call.
+        // §expressions and §functions: arguments evaluate left to right,
+        // before the call.
         let mut operands = Vec::with_capacity(args.len());
         for (index, arg) in args.iter().enumerate() {
             if let Some((name, true)) = mut_params.get(index) {
@@ -2134,14 +2154,16 @@ impl Lowerer<'_> {
         Some((rvalue, ret))
     }
 
-    /// §5: a `mut` parameter permits the callee to mutate the argument in
-    /// place, and §3 is the rule that consumes it — mutating through a binding
-    /// requires that binding to be `mut`, at the call site as everywhere else.
+    /// §functions: a `mut` parameter permits the callee to mutate the argument
+    /// in place, and §statements is the rule that consumes it — mutating
+    /// through a binding requires that binding to be `mut`, at the call site
+    /// as everywhere else.
     ///
-    /// Nothing is written *back*: §3's `mut` gates in-place mutation, so what
-    /// the caller observes is whatever §6's semantics make observable through
-    /// the value it passed. For a struct that is the mutation itself; for a
-    /// scalar there is nothing to alias, and the callee mutates its own slot.
+    /// Nothing is written *back*: §statements' `mut` gates in-place mutation,
+    /// so what the caller observes is whatever §types' semantics make
+    /// observable through the value it passed. For a struct that is the
+    /// mutation itself; for a scalar there is nothing to alias, and the callee
+    /// mutates its own slot.
     fn check_mut_argument(&mut self, arg: NodeId, parameter: &str) {
         let Some((root, span)) = self.place_root(arg) else {
             self.error(
@@ -2222,7 +2244,7 @@ impl Lowerer<'_> {
             .map(|list| cst::nodes(self.tree, *list))
             .unwrap_or_default();
 
-        // §2: fields evaluate in *written* order. They are stored in
+        // §expressions: fields evaluate in *written* order. They are stored in
         // *declaration* order, which is what `MakeStruct` takes — so the two
         // orders are separated here rather than left for a back end to guess.
         let mut given: Vec<Option<Operand>> = vec![None; fields.len()];
@@ -2304,7 +2326,7 @@ impl Lowerer<'_> {
             .find(|child| self.tree.kind(*child) == NodeKind::BlockExpr);
         let body = self.new_block();
         let value = match body_node {
-            // §5: the body is a block, so its value is its trailing
+            // §functions: the body is a block, so its value is its trailing
             // expression. `return` is for early exit, and a well-shaped
             // function often has none.
             Some(body_node) => self.block_into(body, body_node, Some(ret)),
@@ -2326,9 +2348,10 @@ impl Lowerer<'_> {
                 Binding::Value {
                     slot,
                     ty: param.ty,
-                    // A parameter is never a cell: §5 gives a lambda no way to
-                    // rebind one, since a lambda's own parameters shadow it and
-                    // an enclosing function's are captured by value.
+                    // A parameter is never a cell: §functions gives a lambda
+                    // no way to rebind one, since a lambda's own parameters
+                    // shadow it and an enclosing function's are captured by
+                    // value.
                     cell: false,
                     mutable: param.mutable,
                 },
@@ -2349,9 +2372,9 @@ impl Lowerer<'_> {
             .find(|child| cst::is_expr(self.tree.kind(**child)))
             .copied();
 
-        // §5: a lambda's parameter and return types come from context, unlike a
-        // named `fn`. A `fn` is a declaration others read; a lambda is an
-        // argument read in place.
+        // §functions: a lambda's parameter and return types come from context,
+        // unlike a named `fn`. A `fn` is a declaration others read; a lambda
+        // is an argument read in place.
         let expected = expect.and_then(|ty| self.program.types.fn_sig(ty));
         let mut params = Vec::with_capacity(param_nodes.len());
         for (index, param) in param_nodes.iter().enumerate() {

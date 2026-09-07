@@ -1,4 +1,4 @@
-# §1 — Lexical Structure
+# §lexical — Lexical Structure
 
 > Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
 
@@ -14,9 +14,9 @@ number form `DIGIT+ ("." DIGIT+)?`, double-quoted strings with no interpolation,
 comments, insignificant whitespace, explicit `;`, and the literals `true` / `false` /
 `nil`.
 
-Two goals pull hardest here. §2.1 of the goals (one language from one-liner to module)
-wants terse, low-ceremony surface syntax; §2.3 (boring syntax) wants conventional
-spellings for everything, since the novelty budget is committed elsewhere.
+Two goals pull hardest here. §one-language of the goals (one language from one-liner to
+module) wants terse, low-ceremony surface syntax; §boring (boring syntax) wants
+conventional spellings for everything, since the novelty budget is committed elsewhere.
 
 ## Checklist
 
@@ -83,25 +83,25 @@ DIGIT → "0" … "9"
   identifiers do not.
 - No sigils. `!`, `?`, `'`, and `-` carry no meaning inside an identifier.
 - Keywords are **reserved**, not contextual. Contextual keywords buy source compatibility
-  Glue doesn't need yet (goal §3: no stability obligations) and cost parser complexity
-  against goal §2.2.
+  Glue doesn't need yet (§non-goals: no stability obligations) and cost parser complexity
+  against goal §both-modes.
 - Provisional reserved set, to be settled section by section as each is designed:
   `as let mut fn struct type return if else while for in break continue match import
   export true false`
 
-  `as` joins the list because §2 made it the conversion operator. `for` and `in` are
-  reserved despite §4 declining every loop but `while`, since a reserved word costs
-  nothing to hold and an unreserved one is expensive to take back.
+  `as` joins the list because §expressions made it the conversion operator. `for` and `in`
+  are reserved despite §control declining every loop but `while`, since a reserved word
+  costs nothing to hold and an unreserved one is expensive to take back.
 - **Type names are not keywords.** `u64`, `f32`, `bool`, `Str`, and `char` are ordinary
-  identifiers that §6 happens to have bound. Reserving them would foreclose shadowing and
-  buy nothing the name resolver doesn't already do.
+  identifiers that §types happens to have bound. Reserving them would foreclose shadowing
+  and buy nothing the name resolver doesn't already do.
 
 ### Comments
 
 ```
 // line comment
 /* block comment, /* which nests */ to here */
-/// doc comment — a distinct token, attaches to the following declaration (§14)
+/// doc comment — a distinct token, attaches to the following declaration (§comptime)
 //// four or more slashes — an ordinary line comment again
 ```
 
@@ -110,7 +110,7 @@ comment, so a row of slashes used as a section divider isn't a doc comment attac
 nothing. There is no block form of a doc comment; `/** … */` is a block comment.
 
 > **Cut from the core.** Doc comments are not implemented: `///` is an ordinary line
-> comment, and nothing reads documentation until §14 exists. See
+> comment, and nothing reads documentation until §comptime exists. See
 > [Deferred decisions](deferred.md#doc-comments).
 
 ### Terminators and blocks
@@ -153,10 +153,10 @@ SUFFIX  → "u8" | "u16" | "u32" | "u64"
 - **A `.` is what makes it a float.** `1` is an integer literal, `1.0` is a float literal.
 - A **trailing** `.` is not part of a literal: `1.` is not a float. This keeps
   `1.method()` unambiguous with no lookahead, and keeps `..` available as an operator for
-  whatever §2 eventually decides about ranges.
+  whatever §expressions eventually decides about ranges.
 - A **leading** `.` is: `.5` is a valid float literal, equivalent to `0.5`. It needs one
   token of left context to lex — see *Lexing and left context* below — and it forecloses
-  numeric field access (`pair.0`) unless that rule is applied. §6 inherits that
+  numeric field access (`pair.0`) unless that rule is applied. §types inherits that
   constraint when it designs tuples.
 - `_` may separate digits; it may not lead or trail a digit run. The rule is about the
   boundaries only, so `1__0` is legal — banning repeats would be a second rule for no gain.
@@ -213,11 +213,11 @@ r"…"       raw string; no escapes
 
 ### Collection literals
 
-§6 has no collection types yet — a `List` or `Map` would be generic, and generics are §8.
-So there are no collection literals, and `[` and `{` are free.
+§types has no collection types yet — a `List` or `Map` would be generic, and generics are
+§generics. So there are no collection literals, and `[` and `{` are free.
 
 This is worth stating rather than merely omitting, because of what it buys. With no map
-literal, **`{` in expression position is unconditionally a block** (§2), and the
+literal, **`{` in expression position is unconditionally a block** (§expressions), and the
 lookahead rule that would otherwise be needed — parse an expression, peek for `:` —
 does not exist. When collections arrive, that rule arrives with them, and the choice of
 delimiter can be revisited then knowing what it costs.
@@ -225,8 +225,8 @@ delimiter can be revisited then knowing what it costs.
 ### Boolean and absence
 
 - `true` and `false` are keywords.
-- **There is no `nil` token.** How absence is spelled is deferred to §7, where unions and
-  `Option` are designed; §1 only records that the lexer reserves nothing for it.
+- **There is no `nil` token.** How absence is spelled is deferred to §unions, where unions
+  and `Option` are designed; §lexical only records that the lexer reserves nothing for it.
 
 ---
 
@@ -274,25 +274,26 @@ both of these hold, and pins at its declaration otherwise:
 2. it is never the target of an assignment anywhere in its scope.
 
 So `let n = 3; n - 5` is `-2`, not an underflow — while `let n = 3; n = read(); n - 5`
-pins `n` at `u64` and underflows. Both conditions are syntactic, which matters: goal §2.2
-requires the interpreter and the compiler to agree on exactly how far constness
-propagates, and a rule needing type inference or dataflow to answer is a rule the two
-back ends will eventually disagree about. Scanning a scope for assignments to a name is
-not.
+pins `n` at `u64` and underflows. Both conditions are syntactic, which matters: goal
+§both-modes requires the interpreter and the compiler to agree on exactly how far
+constness propagates, and a rule needing type inference or dataflow to answer is a rule
+the two back ends will eventually disagree about. Scanning a scope for assignments to a
+name is not.
 
-Every binding is rebindable (§3), so the keyword cannot carry this the way `let`-versus-
-`var` would in another language — condition 2 does the work instead. Across REPL lines,
-a scope is the session, so restating `n` later pins it retroactively for subsequent lines
-only; each line is compiled against the bindings that existed when it was entered.
+Every binding is rebindable (§statements), so the keyword cannot carry this the way
+`let`-versus- `var` would in another language — condition 2 does the work instead. Across
+REPL lines, a scope is the session, so restating `n` later pins it retroactively for
+subsequent lines only; each line is compiled against the bindings that existed when it was
+entered.
 
-**No implicit conversion between pinned types.** `u64 + s64` is a type error; so is
-`u32 + u64`. Conversions are explicit, and §2 owns their spelling. This is the decision
+**No implicit conversion between pinned types.** `u64 + s64` is a type error; so is `u32 +
+u64`. Conversions are explicit, and §expressions owns their spelling. This is the decision
 that makes the rest of it safe — the alternative is C's promotion lattice, where mixed
 comparison silently does the wrong thing.
 
 **Runtime overflow and underflow trap.** Once values are pinned and runtime, exceeding a
 type's range is an error rather than a wrap. Whether that's a trap, a recoverable error,
-or something checked per-operation is §2's and §9's to settle.
+or something checked per-operation is §expressions' and §errors' to settle.
 
 The integer types are `u8 u16 u32 u64` and `s8 s16 s32 s64`; floats are `f32 f64`. The
 `s` prefix (rather than `i`) matches wasm's own `s`/`u` instruction suffixes, and reads
@@ -303,10 +304,10 @@ unambiguously against `i32` meaning "32 bits, sign unspecified" in the wasm spec
 for runtime values: `items.len() - 1` on an empty collection is still an underflow,
 because `len()` is not a constant. Trapping makes that loud instead of silent, which is
 the right trade, but the idiom still has to be exclusive ranges (`0..len`) and checked or
-saturating operations rather than `len - 1`. **Open for §6**, where collections are
+saturating operations rather than `len - 1`. **Open for §types**, where collections are
 designed: what integer type lengths and indices return. If it isn't `u64`, every array
 boundary reintroduces mixed-sign arithmetic — the friction Swift's API guidelines warn
-about — and §2 forbids the implicit conversion that would paper over it.
+about — and §expressions forbids the implicit conversion that would paper over it.
 
 **Constant division follows the operand kind.** Two integer constants divide as integers:
 `7 / 2` is `3`. Unbounded precision makes an exact rational representable, and it is
@@ -324,9 +325,9 @@ constant evaluation can do that the runtime can't.
 This follows from the rule that keeps folding honest: **constant arithmetic must produce
 exactly what the same operation would produce at runtime on the pinned type.** Unbounded
 intermediates are the single deliberate exception, and they only ever turn a runtime trap
-into a working program, never a different answer. §2 owns truncation and remainder-sign
-semantics for the runtime; whatever it decides, constant folding follows it rather than
-having rules of its own.
+into a working program, never a different answer. §expressions owns truncation and
+remainder-sign semantics for the runtime; whatever it decides, constant folding follows it
+rather than having rules of its own.
 
 ### Float literal typing
 
@@ -339,7 +340,7 @@ concession.
 Integer and float constants do not mix. `1 + 2.0` is a build error, exactly as `u64 + f64`
 is at runtime — the compile-time rule and the runtime rule are the same rule, and neither
 has an exception for constants. There is likewise no implicit widening between `f32` and
-`f64` (§2 owns conversions).
+`f64` (§expressions owns conversions).
 
 ### Strings
 
@@ -347,15 +348,15 @@ has an exception for constants. There is likewise no implicit widening between `
   of code points and not UTF-16.
 - `len` is a **byte** count. Iteration by character yields Unicode scalar values.
 - Slicing uses byte offsets. A slice that splits a multi-byte character is a runtime
-  failure, not a silently mangled string — which category of failure is §9's to name.
+  failure, not a silently mangled string — which category of failure is §errors' to name.
 - **This is the cheap answer at the boundary.** BSON strings are already UTF-8, so a
   string crossing to or from Othismo needs no re-encoding — it's a length and a pointer
-  into linear memory (§6, §16).
+  into linear memory (§types, §wasm).
 - A `char` is one Unicode scalar value, 32 bits wide. Surrogate code points are not
   scalar values and cannot be produced by `\u{…}`.
 - A string literal is a complete token. No construct nests an expression inside one —
   which is what interpolation would change, and part of why it's deferred rather than
-  bolted on: it is a *parser* feature, and it needs a conversion interface (§11) that
+  bolted on: it is a *parser* feature, and it needs a conversion interface (§objects) that
   doesn't exist yet.
 
 ### Comments and doc comments
@@ -369,7 +370,7 @@ has an exception for constants. There is likewise no implicit widening between `
   a test can check rather than a promise a reviewer has to keep.
 - A `///` run is a token, and is **not** trivia — the parser must see it. It attaches to
   the declaration that follows it; a doc comment attached to nothing is a warning, since
-  it almost always means a stray edit (§14). **Cut from the core** — see
+  it almost always means a stray edit (§comptime). **Cut from the core** — see
   [Deferred decisions](deferred.md#doc-comments). It is the only construct that would use
   `Severity::Warning`, which is why the parser has no warnings at all today.
 
@@ -393,7 +394,7 @@ pair.0      → DOT INT(0)      preceded by IDENT
 This is one token of left context, decidable mechanically, and unrelated to the parser's
 state — it is not the JavaScript regex-versus-division problem, which needs to know what
 the parser expects. It is still the only place two token streams differ by what came
-before, so it gets its own conformance tests (goal §2.2).
+before, so it gets its own conformance tests (goal §both-modes).
 
 Whitespace does not rescue an ambiguity: `pair. 0` and `pair .0` both follow the rule
 above, by the preceding *token*, not by adjacency. Nor do comments — `pair /* c */ .0` is
@@ -408,12 +409,13 @@ rule is phrased in terms of "could end an expression" rather than "is an express
 lexer cannot know which, and the two answers must not differ.
 
 **The cost — currently zero.** The rule exists so numeric field access (`pair.0`) can
-coexist with `.5`. §6 has no tuples, so nothing uses `.0` today and the rule costs
+coexist with `.5`. §types has no tuples, so nothing uses `.0` today and the rule costs
 nothing; it stays to keep the option open. If tuples never arrive, `.` followed by a digit
 could simply always be a float and the left-context check could be deleted.
 
 Otherwise the lexer is a plain scanner: no mode stack, no nesting, no shared mutable
-state. Both front ends goal §2.2 requires — interpreter and compiler — run the same one.
+state. Both front ends goal §both-modes requires — interpreter and compiler — run the same
+one.
 
 ---
 
@@ -431,7 +433,7 @@ are visible in the syntax but all of which constrain it:
   understood twice — once to size a token, once to produce a value — and both readings go
   through one function. Two implementations would drift, and the drift would appear as the
   interpreter and the compiler disagreeing about what a literal says, which is exactly the
-  risk goal §2.2 names.
+  risk goal §both-modes names.
 
 Two things above are *lexical* errors rather than type errors, which is worth noting since
 the boundary isn't obvious: a literal wider than 128 bits, and a float literal whose value

@@ -1,11 +1,11 @@
 //! Escape sequences, understood once.
 //!
 //! Both the lexer and the literal decoder need to know how far an escape
-//! reaches — the lexer to size the token and place a diagnostic, the decoder to
-//! produce the character. Two implementations of that would drift, and the
+//! reaches — the lexer to size the token and place a diagnostic, the decoder
+//! to produce the character. Two implementations of that would drift, and the
 //! drift would show up as the interpreter and the compiler disagreeing about
-//! what a string says, which is exactly what design goal §2.2 forbids. So it
-//! lives here, and both callers drive the same function.
+//! what a string says, which is exactly what design goal §both-modes forbids.
+//! So it lives here, and both callers drive the same function.
 
 use crate::cursor::Cursor;
 use crate::diagnostic::DiagnosticKind;
@@ -38,7 +38,7 @@ impl From<EscapeError> for DiagnosticKind {
 /// Consume one escape sequence. The cursor must sit on the backslash.
 ///
 /// Always consumes at least the backslash, so a caller looping over a string
-/// body cannot get stuck. The escapes are §1's, and there are no others.
+/// body cannot get stuck. The escapes are §lexical's, and there are no others.
 pub(crate) fn consume_escape(cursor: &mut Cursor<u8>) -> Result<char, EscapeError> {
     debug_assert_eq!(cursor.peek(0), Some(b'\\'));
     cursor.consume();
@@ -105,7 +105,7 @@ pub(crate) fn consume_escape(cursor: &mut Cursor<u8>) -> Result<char, EscapeErro
         return Err(EscapeError::TooLong);
     }
     // `char::from_u32` rejects surrogates and anything above 10FFFF, which is
-    // exactly §1's rule: a `\u{…}` cannot name a surrogate code point.
+    // exactly §lexical's rule: a `\u{…}` cannot name a surrogate code point.
     char::from_u32(value).ok_or(EscapeError::InvalidScalar)
 }
 

@@ -4,17 +4,18 @@
 //! child per line and the closing paren trailing the last of them. Four
 //! conventions keep it from drowning in parentheses:
 //!
-//! * **A slot in operand position is its bare name.** Anything parenthesized is
-//!   a form, so nothing is ambiguous. A temporary has no source name and is
-//!   written `t3`; a name that two slots share — which shadowing makes ordinary
-//!   (§3) — is disambiguated with its slot index.
+//! * **A slot in operand position is its bare name.** Anything parenthesized
+//!   is a form, so nothing is ambiguous. A temporary has no source name and is
+//!   written `t3`; a name that two slots share — which shadowing makes
+//!   ordinary (§statements) — is disambiguated with its slot index.
 //! * **A constant is `(const …)`**, carrying its suffix so its type shows.
 //! * **[`Rvalue::Use`] is elided.** A bare operand where an rvalue is expected
 //!   is a use.
 //! * **The integer after `slot`, `block`, `header`, `body`, `then`, and `else`
 //!   is the arena index**, so a dump can be read against the data.
-//! * **A slot that permits in-place mutation says `mut`** after its kind (§3).
-//!   A slot that does not says nothing, since that is the default.
+//! * **A slot that permits in-place mutation says `mut`** after its kind
+//!   (§statements). A slot that does not says nothing, since that is the
+//!   default.
 //!
 //! Blocks nest here rather than being listed flat and referenced by id. That is
 //! a property of the *rendering*, not of the data — [`Func`] holds a flat
@@ -55,7 +56,7 @@ pub fn dump(program: &Program) -> String {
     for (index, func) in program.funcs.iter().enumerate() {
         out.push_str(&func_sexp(program, func).render(0));
         if program.entry == Some(crate::program::FuncId(index as u32)) {
-            out.push_str("   ; the file's top level (§3)");
+            out.push_str("   ; the file's top level (§statements)");
         }
         out.push_str("\n\n");
     }
@@ -99,8 +100,8 @@ fn func_sexp(program: &Program, func: &Func) -> Sexp {
         .unwrap_or(0);
     for (index, slot) in func.slots.iter().enumerate() {
         let display = names.of(Slot(index as u32));
-        // §3's `mut` trails the kind, so a slot that permits in-place mutation
-        // reads as `param mut` and one that does not is unchanged.
+        // §statements' `mut` trails the kind, so a slot that permits in-place
+        // mutation reads as `param mut` and one that does not is unchanged.
         let mutable = if slot.mutable { " mut" } else { "" };
         children.push(Sexp::leaf(format!(
             "(slot {index} {display:width$} {} {}{mutable})",
@@ -119,9 +120,9 @@ struct Cx<'a> {
     names: &'a SlotNames,
 }
 
-/// A display name per slot: the source name where it is unique in the function,
-/// the name plus its index where §3's shadowing made it ambiguous, and `tN` for
-/// a temporary.
+/// A display name per slot: the source name where it is unique in the
+/// function, the name plus its index where §statements' shadowing made it
+/// ambiguous, and `tN` for a temporary.
 struct SlotNames {
     names: Vec<String>,
 }

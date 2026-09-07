@@ -38,9 +38,9 @@ impl Token {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TokenKind {
     // ---- Trivia -----------------------------------------------------------
-    // Emitted, but skipped by `Tokens::significant`. §1 says comments produce
-    // no tokens; the parser needs a lossless tree. Both hold if comments are
-    // tokens the grammar never sees.
+    // Emitted, but skipped by `Tokens::significant`. §lexical says comments
+    // produce no tokens; the parser needs a lossless tree. Both hold if
+    // comments are tokens the grammar never sees.
     /// Also covers a leading byte-order mark.
     Whitespace,
     LineComment,
@@ -50,8 +50,8 @@ pub enum TokenKind {
     Ident,
 
     // ---- Keywords ---------------------------------------------------------
-    // Reserved, not contextual (§1). `for` and `in` have no construct yet (§4
-    // declines every loop but `while`) and are reserved anyway.
+    // Reserved, not contextual (§lexical). `for` and `in` have no construct
+    // yet (§control declines every loop but `while`) and are reserved anyway.
     As,
     Break,
     Continue,
@@ -97,7 +97,7 @@ pub enum TokenKind {
     /// Annotates a binding, a parameter, a field, or a struct-literal field.
     Colon,
     Dot,
-    /// `->` — a function's return type, and a lambda's body (§5).
+    /// `->` — a function's return type, and a lambda's body (§functions).
     Arrow,
 
     // ---- Operators --------------------------------------------------------
@@ -109,7 +109,8 @@ pub enum TokenKind {
     /// `!` — logical, never bitwise; there is no bitwise complement.
     Bang,
     AmpAmp,
-    /// `||`. Also the operator that is *not* a lambda: `(x) -> …` is (§5).
+    /// `||`. Also the operator that is *not* a lambda: `(x) -> …` is
+    /// (§functions).
     PipePipe,
     Equals,
     EqualTo,
@@ -194,10 +195,10 @@ impl TokenKind {
 
     /// Whether a token of this kind could be the end of an expression.
     ///
-    /// The whole of §1's "lexing and left context": a `.` followed by a digit
-    /// begins a float literal *unless* the preceding significant token could
-    /// end an expression, in which case it's field access. This is the only
-    /// lexical decision that depends on anything but the cursor.
+    /// The whole of §lexical's "lexing and left context": a `.` followed by a
+    /// digit begins a float literal *unless* the preceding significant token
+    /// could end an expression, in which case it's field access. This is the
+    /// only lexical decision that depends on anything but the cursor.
     pub fn can_end_expression(&self) -> bool {
         use TokenKind::*;
         matches!(

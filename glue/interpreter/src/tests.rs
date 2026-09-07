@@ -7,9 +7,9 @@
 //!
 //! Two things about them read differently than they used to. First, most of
 //! what this crate once refused at run time is refused before it runs, so
-//! [`refused`] appears where [`trap`] used to. Second, §2 checks constant
-//! expressions at compile time, so a test that wants a *trap* has to route its
-//! operands through a function — `255u8 + 1` never runs at all.
+//! [`refused`] appears where [`trap`] used to. Second, §expressions checks
+//! constant expressions at compile time, so a test that wants a *trap* has to
+//! route its operands through a function — `255u8 + 1` never runs at all.
 
 use crate::error::TrapKind::{self, *};
 use crate::value::{IntTy, Value};
@@ -71,9 +71,9 @@ fn refused(source: &str) -> String {
 
 // ---- A program is a block --------------------------------------------------
 
-/// Goal §2.1: a bare expression is a valid program. Not a REPL special case —
-/// the block rule (§3) applied to the outermost block, and by now not even
-/// that: elaboration makes the file an ordinary function.
+/// Goal §one-language: a bare expression is a valid program. Not a REPL
+/// special case — the block rule (§statements) applied to the outermost block,
+/// and by now not even that: elaboration makes the file an ordinary function.
 #[test]
 fn a_file_is_worth_its_trailing_expression() {
     assert_eq!(int("42"), 42);
@@ -91,7 +91,7 @@ fn an_empty_file_is_worth_unit() {
     assert_eq!(value("// nothing but a comment\n"), Value::Unit);
 }
 
-// ---- Literals and their types (§1) -----------------------------------------
+// ---- Literals and their types (§lexical) -----------------------------------
 
 #[test]
 fn literals_decode() {
@@ -109,9 +109,9 @@ fn literals_decode() {
     assert_eq!(value("()"), Value::Unit);
 }
 
-/// §1: an unpinned constant takes its type from context; with none, the sign
-/// decides. This is the whole of what "there are types now" changed about a
-/// literal.
+/// §lexical: an unpinned constant takes its type from context; with none, the
+/// sign decides. This is the whole of what "there are types now" changed about
+/// a literal.
 #[test]
 fn an_unpinned_constant_pins_by_sign() {
     assert_eq!(value("1"), Value::u64(1));
@@ -129,7 +129,7 @@ fn a_suffix_pins_a_width() {
 }
 
 /// The annotation used to be read and dropped, because there was nothing to
-/// check it against. §10 arrived.
+/// check it against. §inference arrived.
 #[test]
 fn an_annotation_is_checked() {
     assert_eq!(
@@ -138,11 +138,11 @@ fn an_annotation_is_checked() {
     );
 }
 
-// ---- Arithmetic (§2) -------------------------------------------------------
+// ---- Arithmetic (§expressions) ---------------------------------------------
 
-/// Through a function, because §2 folds and checks a constant expression at
-/// compile time — so `2 + 3` never reaches the executor, and a test of the
-/// executor has to hand it something that isn't constant.
+/// Through a function, because §expressions folds and checks a constant
+/// expression at compile time — so `2 + 3` never reaches the executor, and a
+/// test of the executor has to hand it something that isn't constant.
 #[test]
 fn arithmetic_evaluates() {
     assert_eq!(int("fn f(a: u64, b: u64) -> u64 { a + b } f(2, 3)"), 5);
@@ -156,8 +156,8 @@ fn arithmetic_evaluates() {
     );
 }
 
-/// §2: division truncates toward zero and the remainder takes the dividend's
-/// sign — `div_s` and `rem_s`, which is what wasm does natively.
+/// §expressions: division truncates toward zero and the remainder takes the
+/// dividend's sign — `div_s` and `rem_s`, which is what wasm does natively.
 #[test]
 fn division_truncates_and_remainder_follows_the_dividend() {
     assert_eq!(int("fn f(a: s64, b: s64) -> s64 { a / b } f(-7, 2)"), -3);
@@ -165,9 +165,10 @@ fn division_truncates_and_remainder_follows_the_dividend() {
     assert_eq!(int("fn f(a: s64, b: s64) -> s64 { a % b } f(7, -2)"), 1);
 }
 
-/// §2: overflow is an error rather than a wrap — and §1's widths are what make
-/// the same addition an error at one type and an answer at another. The old
-/// interpreter, where every integer was an `i64`, could not tell these apart.
+/// §expressions: overflow is an error rather than a wrap — and §lexical's
+/// widths are what make the same addition an error at one type and an answer
+/// at another. The old interpreter, where every integer was an `i64`, could
+/// not tell these apart.
 #[test]
 fn overflow_traps_at_the_operands_width() {
     assert_eq!(
@@ -199,8 +200,8 @@ fn division_by_zero_traps() {
     );
 }
 
-/// §2: floats follow IEEE-754, and IEEE's answer to division by zero is an
-/// infinity. Trapping is for the operation with no representable answer.
+/// §expressions: floats follow IEEE-754, and IEEE's answer to division by zero
+/// is an infinity. Trapping is for the operation with no representable answer.
 #[test]
 fn float_division_by_zero_follows_ieee() {
     assert_eq!(
@@ -209,7 +210,7 @@ fn float_division_by_zero_follows_ieee() {
     );
 }
 
-/// §2: "constant expressions are checked at compile time rather than
+/// §expressions: "constant expressions are checked at compile time rather than
 /// trapping". The trap and the diagnostic are the same rule at two stages, and
 /// this is the stage that moved.
 #[test]
@@ -228,7 +229,7 @@ fn unary_operators_apply() {
     assert_eq!(value("fn f(a: f64) -> f64 { -a } f(1.5)"), Value::f64(-1.5));
 }
 
-// ---- Comparison and logic (§2) ---------------------------------------------
+// ---- Comparison and logic (§expressions) -----------------------------------
 
 #[test]
 fn comparison_evaluates() {
@@ -242,7 +243,8 @@ fn comparison_evaluates() {
     ));
 }
 
-/// §2: IEEE-754, so every ordering against NaN is false and `NaN != NaN`.
+/// §expressions: IEEE-754, so every ordering against NaN is false and `NaN !=
+/// NaN`.
 #[test]
 fn nan_compares_unequal_to_everything() {
     let nan = "let nan = 0.0 / 0.0;";
@@ -260,10 +262,10 @@ fn nan_compares_unequal_to_everything() {
     )));
 }
 
-/// §2: `&&` and `||` short-circuit, which makes them control flow wearing an
-/// operator's clothes — so the right operand's trap never happens. Elaboration
-/// lowers them to a branch, and there is no lazy operator in the IR for a back
-/// end to get wrong.
+/// §expressions: `&&` and `||` short-circuit, which makes them control flow
+/// wearing an operator's clothes — so the right operand's trap never happens.
+/// Elaboration lowers them to a branch, and there is no lazy operator in the
+/// IR for a back end to get wrong.
 #[test]
 fn logical_operators_short_circuit() {
     let and = "fn f(a: bool, n: u64) -> bool { a && 10 / n == 0 }";
@@ -285,7 +287,7 @@ fn strings_concatenate_with_plus() {
     );
 }
 
-/// §1: strings are UTF-8, so byte order is code-point order.
+/// §lexical: strings are UTF-8, so byte order is code-point order.
 #[test]
 fn strings_compare_by_bytes() {
     assert!(boolean(
@@ -296,36 +298,37 @@ fn strings_compare_by_bytes() {
     ));
 }
 
-// ---- Bindings (§3) ---------------------------------------------------------
+// ---- Bindings (§statements) ------------------------------------------------
 
 #[test]
 fn a_binding_holds_its_value() {
     assert_eq!(int("let x = 41; x + 1"), 42);
 }
 
-/// §3: `mut` gates in-place mutation only. Rebinding is unrestricted on every
-/// binding, so this needs no `mut` — which is the opposite of what this crate
-/// used to enforce.
+/// §statements: `mut` gates in-place mutation only. Rebinding is unrestricted
+/// on every binding, so this needs no `mut` — which is the opposite of what
+/// this crate used to enforce.
 #[test]
 fn assignment_needs_no_mut() {
     assert_eq!(int("let x = 1u64; x = 2; x"), 2);
 }
 
-/// §3: shadowing is allowed, including in the same scope — the natural way to
-/// write a narrowing pipeline without inventing `input2`.
+/// §statements: shadowing is allowed, including in the same scope — the
+/// natural way to write a narrowing pipeline without inventing `input2`.
 #[test]
 fn a_let_may_shadow_in_the_same_scope() {
     assert_eq!(int("let x = 1; let x = x + 1; x"), 2);
 }
 
-/// §1: a binding whose initializer is a constant expression and which is never
-/// assigned stays unpinned, so this is `-2` rather than an underflow of `u64`.
+/// §lexical: a binding whose initializer is a constant expression and which is
+/// never assigned stays unpinned, so this is `-2` rather than an underflow of
+/// `u64`.
 #[test]
 fn an_unassigned_constant_binding_stays_unpinned() {
     assert_eq!(value("let n = 3; n - 5"), Value::s64(-2));
 }
 
-// ---- Blocks (§2) -----------------------------------------------------------
+// ---- Blocks (§expressions) -------------------------------------------------
 
 #[test]
 fn a_block_is_worth_its_trailing_expression() {
@@ -346,7 +349,7 @@ fn a_block_scopes_its_bindings() {
     );
 }
 
-// ---- Control flow (§4) -----------------------------------------------------
+// ---- Control flow (§control) -----------------------------------------------
 
 #[test]
 fn if_is_an_expression() {
@@ -357,8 +360,8 @@ fn if_is_an_expression() {
     );
 }
 
-/// §2: with no `else` its value is unit, which is what makes it usable as a
-/// statement and not as a value.
+/// §expressions: with no `else` its value is unit, which is what makes it
+/// usable as a statement and not as a value.
 #[test]
 fn an_if_with_no_else_is_worth_unit() {
     assert_eq!(value("if false { 1 }"), Value::Unit);
@@ -378,7 +381,7 @@ fn while_loops() {
     );
 }
 
-/// §4: unlabelled, and applying to the innermost enclosing loop.
+/// §control: unlabelled, and applying to the innermost enclosing loop.
 #[test]
 fn break_and_continue_apply_to_the_nearest_loop() {
     assert_eq!(
@@ -403,8 +406,9 @@ fn break_and_continue_apply_to_the_nearest_loop() {
     );
 }
 
-/// §4: the header runs every iteration, because a condition is re-evaluated
-/// every iteration — so a condition with an effect has it every time round.
+/// §control: the header runs every iteration, because a condition is
+/// re-evaluated every iteration — so a condition with an effect has it every
+/// time round.
 #[test]
 fn a_condition_runs_every_iteration() {
     assert_eq!(int("let mut i = 0u64; while { i = i + 1; i < 3 } { } i"), 3);
@@ -423,7 +427,8 @@ fn a_jump_in_a_condition_leaves_its_loop() {
     );
 }
 
-/// §4: a jump needs a loop, and elaboration is where that is settled now.
+/// §control: a jump needs a loop, and elaboration is where that is settled
+/// now.
 #[test]
 fn a_jump_outside_a_loop_is_refused() {
     assert_eq!(
@@ -432,15 +437,15 @@ fn a_jump_outside_a_loop_is_refused() {
     );
 }
 
-// ---- Functions (§5) --------------------------------------------------------
+// ---- Functions (§functions) ------------------------------------------------
 
 #[test]
 fn a_function_is_declared_and_called() {
     assert_eq!(int("fn double(n: u64) -> u64 { n * 2 } double(21)"), 42);
 }
 
-/// §5: a body is a block, so its value is its trailing expression; `return` is
-/// the early exit a well-shaped function often has none of.
+/// §functions: a body is a block, so its value is its trailing expression;
+/// `return` is the early exit a well-shaped function often has none of.
 #[test]
 fn a_body_is_a_block_and_return_is_the_early_exit() {
     assert_eq!(
@@ -453,14 +458,14 @@ fn a_body_is_a_block_and_return_is_the_early_exit() {
     );
 }
 
-/// §5: unit is a real value with one inhabitant, not an absence.
+/// §functions: unit is a real value with one inhabitant, not an absence.
 #[test]
 fn a_function_with_no_return_type_returns_unit() {
     assert_eq!(value("fn nothing() { } nothing()"), Value::Unit);
 }
 
-/// §5: mutual recursion needs declarations to be order-independent, which is
-/// what hoisting them per block buys.
+/// §functions: mutual recursion needs declarations to be order-independent,
+/// which is what hoisting them per block buys.
 #[test]
 fn functions_recurse_and_see_each_other() {
     assert_eq!(
@@ -477,9 +482,9 @@ fn functions_recurse_and_see_each_other() {
     ));
 }
 
-/// §5: there is no tail-call guarantee, so an unbounded recursion traps —
-/// raised at a depth the host stack still has room for rather than by falling
-/// off it.
+/// §functions: there is no tail-call guarantee, so an unbounded recursion
+/// traps — raised at a depth the host stack still has room for rather than by
+/// falling off it.
 #[test]
 fn runaway_recursion_traps() {
     assert_eq!(
@@ -488,7 +493,7 @@ fn runaway_recursion_traps() {
     );
 }
 
-/// §5 checks arity statically, and now something does.
+/// §functions checks arity statically, and now something does.
 #[test]
 fn arity_is_checked_before_it_runs() {
     assert_eq!(
@@ -497,11 +502,11 @@ fn arity_is_checked_before_it_runs() {
     );
 }
 
-// ---- Functions as values, and lambdas (§5) ---------------------------------
+// ---- Functions as values, and lambdas (§functions) -------------------------
 
-/// §5: a function is a value. Every function value is a closure, and a plain
-/// `fn` is one with an empty environment — so a name and a lambda are called
-/// the same way, indirectly.
+/// §functions: a function is a value. Every function value is a closure, and a
+/// plain `fn` is one with an empty environment — so a name and a lambda are
+/// called the same way, indirectly.
 #[test]
 fn a_function_is_a_value() {
     assert_eq!(
@@ -528,9 +533,9 @@ fn a_lambda_is_a_value_and_calls() {
     );
 }
 
-/// §5: a lambda captures by reference, so mutation through one holder is
-/// visible to every other. A binding that is captured *and* assigned is a cell,
-/// which is where that sharing lives.
+/// §functions: a lambda captures by reference, so mutation through one holder
+/// is visible to every other. A binding that is captured *and* assigned is a
+/// cell, which is where that sharing lives.
 #[test]
 fn a_lambda_captures_by_reference() {
     assert_eq!(
@@ -544,9 +549,9 @@ fn a_lambda_captures_by_reference() {
     );
 }
 
-/// §5: a captured binding outlives the frame that created it. The cell is
-/// heap-allocated and the closure holds it, so returning the lambda keeps the
-/// binding alive after `counter` has returned.
+/// §functions: a captured binding outlives the frame that created it. The cell
+/// is heap-allocated and the closure holds it, so returning the lambda keeps
+/// the binding alive after `counter` has returned.
 #[test]
 fn a_capture_outlives_its_frame() {
     assert_eq!(
@@ -562,11 +567,11 @@ fn a_capture_outlives_its_frame() {
     );
 }
 
-/// §5's per-iteration promise: a `let` in a loop body is a fresh binding each
-/// time round, captured separately — the classic loop-variable trap, absent by
-/// construction. `snapshot` is never assigned, so each iteration's value is
-/// copied into the closure rather than shared through a cell, and the lambda
-/// made on the second iteration still says `1`.
+/// §functions' per-iteration promise: a `let` in a loop body is a fresh
+/// binding each time round, captured separately — the classic loop-variable
+/// trap, absent by construction. `snapshot` is never assigned, so each
+/// iteration's value is copied into the closure rather than shared through a
+/// cell, and the lambda made on the second iteration still says `1`.
 #[test]
 fn a_binding_in_a_loop_is_captured_per_iteration() {
     assert_eq!(
@@ -582,9 +587,9 @@ fn a_binding_in_a_loop_is_captured_per_iteration() {
     );
 }
 
-/// §5: a `fn` captures nothing — it is an ordinary function that happens to be
-/// private to its block, and every one of them compiles to a plain wasm
-/// function with no environment.
+/// §functions: a `fn` captures nothing — it is an ordinary function that
+/// happens to be private to its block, and every one of them compiles to a
+/// plain wasm function with no environment.
 #[test]
 fn a_fn_captures_nothing() {
     assert_eq!(
@@ -593,8 +598,8 @@ fn a_fn_captures_nothing() {
     );
 }
 
-/// §5: a lambda's types come from context, unlike a named `fn` — a `fn` is a
-/// declaration others read, a lambda is an argument read in place.
+/// §functions: a lambda's types come from context, unlike a named `fn` — a
+/// `fn` is a declaration others read, a lambda is an argument read in place.
 #[test]
 fn a_lambda_needs_context() {
     assert_eq!(
@@ -604,8 +609,8 @@ fn a_lambda_needs_context() {
     );
 }
 
-/// §2 defines equality on values and identity on instance references, and says
-/// nothing about functions.
+/// §expressions defines equality on values and identity on instance
+/// references, and says nothing about functions.
 #[test]
 fn functions_do_not_compare() {
     assert_eq!(
@@ -650,7 +655,7 @@ fn a_program_that_did_not_elaborate_does_not_run() {
     );
 }
 
-// ---- Structs (§6) ----------------------------------------------------------
+// ---- Structs (§types) ------------------------------------------------------
 
 #[test]
 fn a_struct_is_built_and_read() {
@@ -664,10 +669,10 @@ fn a_struct_is_built_and_read() {
     );
 }
 
-/// §6: reference semantics. Binding an instance to a second name copies the
-/// reference, so a mutation through one is visible through the other — which
-/// §3 warns about in as many words: `let` means "you cannot mutate through
-/// *this* name", not "this value will not change".
+/// §types: reference semantics. Binding an instance to a second name copies
+/// the reference, so a mutation through one is visible through the other —
+/// which §statements warns about in as many words: `let` means "you cannot
+/// mutate through *this* name", not "this value will not change".
 #[test]
 fn structs_have_reference_semantics() {
     assert_eq!(
@@ -680,8 +685,8 @@ fn structs_have_reference_semantics() {
     );
 }
 
-/// §2: equality is on values and identity on instance references. Two
-/// instances with equal fields are two instances.
+/// §expressions: equality is on values and identity on instance references.
+/// Two instances with equal fields are two instances.
 #[test]
 fn struct_equality_is_identity() {
     assert!(!boolean(
@@ -692,9 +697,9 @@ fn struct_equality_is_identity() {
     ));
 }
 
-/// §5's own example, end to end. `mut` on a parameter is permission to mutate
-/// the argument in place; what carries the change back to the caller is §6's
-/// reference semantics, not a write-back at the call.
+/// §functions' own example, end to end. `mut` on a parameter is permission to
+/// mutate the argument in place; what carries the change back to the caller is
+/// §types' reference semantics, not a write-back at the call.
 #[test]
 fn a_mut_parameter_mutates_the_callers_instance() {
     assert_eq!(
@@ -708,8 +713,9 @@ fn a_mut_parameter_mutates_the_callers_instance() {
     );
 }
 
-/// §6: field mutability follows the binding, and §5's call-site rule is the
-/// same rule one step out. Both are settled before the program runs.
+/// §types: field mutability follows the binding, and §functions' call-site
+/// rule is the same rule one step out. Both are settled before the program
+/// runs.
 #[test]
 fn mutating_needs_a_mut_binding() {
     assert_eq!(
@@ -727,10 +733,10 @@ fn mutating_needs_a_mut_binding() {
     );
 }
 
-// ---- Conversions (§2) ------------------------------------------------------
+// ---- Conversions (§expressions) --------------------------------------------
 
-/// §2: `as` is explicit and trapping. Exact, or no answer — there is no
-/// wrapping here any more than there is in `+`.
+/// §expressions: `as` is explicit and trapping. Exact, or no answer — there is
+/// no wrapping here any more than there is in `+`.
 #[test]
 fn an_integer_conversion_is_exact_or_a_trap() {
     assert_eq!(int("fn f(n: u64) -> u8 { n as u8 } f(255)"), 255);
@@ -743,8 +749,9 @@ fn an_integer_conversion_is_exact_or_a_trap() {
     );
 }
 
-/// §2: truncation toward zero is defined behaviour rather than a trap, and the
-/// edges — where there is no representable answer at all — are the trap.
+/// §expressions: truncation toward zero is defined behaviour rather than a
+/// trap, and the edges — where there is no representable answer at all — are
+/// the trap.
 #[test]
 fn a_float_to_integer_conversion_truncates_and_traps_at_the_edges() {
     assert_eq!(int("fn f(x: f64) -> s64 { x as s64 } f(1.9)"), 1);
@@ -802,7 +809,7 @@ fn values_display_as_they_are_echoed() {
         "<fn <file>.\u{3bb}0>"
     );
     // A struct shows its fields in declaration order, whatever order they were
-    // written in (§2, §6).
+    // written in (§expressions, §types).
     assert_eq!(
         value(r#"struct P { x: u64, y: Str } P { y: "b", x: 1 }"#).to_string(),
         r#"P { x: 1, y: "b" }"#

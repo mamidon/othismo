@@ -5,13 +5,13 @@
 //! for "expected `;` after *this*" diagnostics. One data structure, two
 //! instantiations.
 //!
-//! The tokenizer instantiates it over `u8`, so `index()` *is* a byte offset and
-//! `peek`/`trail` are slice indexing. Scanning bytes is safe for a language
-//! whose identifiers are ASCII (§1): every UTF-8 continuation byte is ≥ 0x80,
-//! so it can never equal `"` or `*` or `/`, and any position the lexer stops at
-//! is therefore a character boundary. The two places a `char` is genuinely
-//! observable — a character literal, and an error pointing at a stray `é` — use
-//! [`Cursor::consume_utf8`].
+//! The tokenizer instantiates it over `u8`, so `index()` *is* a byte offset
+//! and `peek`/`trail` are slice indexing. Scanning bytes is safe for a
+//! language whose identifiers are ASCII (§lexical): every UTF-8 continuation
+//! byte is ≥ 0x80, so it can never equal `"` or `*` or `/`, and any position
+//! the lexer stops at is therefore a character boundary. The two places a
+//! `char` is genuinely observable — a character literal, and an error pointing
+//! at a stray `é` — use [`Cursor::consume_utf8`].
 
 #[derive(Clone, Copy)]
 pub struct Cursor<'a, T> {

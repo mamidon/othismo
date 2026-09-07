@@ -4,8 +4,8 @@
 //! interpreter used to walk the concrete syntax tree instead; that was a
 //! bring-up artifact, and it sat at the wrong end of the pipeline — name
 //! resolution, coercion, and evaluation order accumulated in it and lived
-//! nowhere else, which is exactly the divergence goal §2.2 names. They live in
-//! elaboration now, where the wasm back end will read them too.
+//! nowhere else, which is exactly the divergence goal §both-modes names. They
+//! live in elaboration now, where the wasm back end will read them too.
 //!
 //! ```
 //! use interpreter::{Value, run};
@@ -15,32 +15,32 @@
 //!
 //! # What runs today
 //!
-//! Expressions, `let`, assignment, blocks, `if`, `while`, and §5's functions —
+//! Expressions, `let`, assignment, blocks, `if`, `while`, and §functions —
 //! declarations, calls, `return`, functions as values, and lambdas with
-//! capture. A file is a block (§3), so its value is its trailing expression,
-//! and `let x = 2; x * 21` and `42` are both whole programs.
+//! capture. A file is a block (§statements), so its value is its trailing
+//! expression, and `let x = 2; x * 21` and `42` are both whole programs.
 //!
-//! §6's structs run too — construction, field access, and assignment through a
-//! field, with the reference semantics that makes a mutation visible to every
-//! holder — along with §2's `as`. There is no core IR node the executor does
-//! not run; what the language is still missing is missing from the IR first,
-//! and `ir`'s documentation is where that list lives.
+//! §types' structs run too — construction, field access, and assignment
+//! through a field, with the reference semantics that makes a mutation visible
+//! to every holder — along with §expressions' `as`. There is no core IR node
+//! the executor does not run; what the language is still missing is missing
+//! from the IR first, and `ir`'s documentation is where that list lives.
 //!
 //! # What changed when the IR arrived
 //!
-//! **There are types.** §1's numeric tower is real: a literal is pinned to a
-//! width, `255u8 + 1` traps where `255u16 + 1` does not, and an annotation is
-//! checked rather than read past. See [`Value`].
+//! **There are types.** §lexical's numeric tower is real: a literal is pinned
+//! to a width, `255u8 + 1` traps where `255u16 + 1` does not, and an
+//! annotation is checked rather than read past. See [`Value`].
 //!
 //! **Most of what used to be a runtime error is a compile error.** An unbound
 //! name, a condition that isn't `bool`, the wrong number of arguments, `1 +
 //! 1.5` — all of them are [`ir::Diagnostic`]s now, reported before anything
-//! runs. §2's "constant expressions are checked at compile time rather than
-//! trapping" moves further still: `1 / 0` is a diagnostic, and the trap needs a
-//! value that isn't constant.
+//! runs. §expressions' "constant expressions are checked at compile time
+//! rather than trapping" moves further still: `1 / 0` is a diagnostic, and the
+//! trap needs a value that isn't constant.
 //!
-//! What is left at run time is §2's traps: overflow, division by zero, and the
-//! recursion limit.
+//! What is left at run time is §expressions' traps: overflow, division by
+//! zero, and the recursion limit.
 
 mod error;
 mod exec;
@@ -67,7 +67,8 @@ use tokenizer::{Severity, Span};
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Error {
     Syntax(Vec<SyntaxError>),
-    /// Name resolution and type checking (§10, §12), in source order.
+    /// Name resolution and type checking (§inference, §scope), in source
+    /// order.
     Elaboration(Vec<ir::Diagnostic>),
     Runtime(RuntimeError),
 }
@@ -166,10 +167,10 @@ pub fn syntax_errors(source: &str) -> Vec<SyntaxError> {
 
 /// Runs an already-elaborated program.
 ///
-/// The seam goal §2.2 asks for: this takes core IR and nothing else, so what it
-/// computes is what a wasm back end reading the same IR has to compute. A trap
-/// carries the IR node it happened at rather than a span, because the IR is all
-/// this side of the seam can see.
+/// The seam goal §both-modes asks for: this takes core IR and nothing else, so
+/// what it computes is what a wasm back end reading the same IR has to
+/// compute. A trap carries the IR node it happened at rather than a span,
+/// because the IR is all this side of the seam can see.
 pub fn eval(program: &Program) -> Result<Value, Trap> {
     exec::Machine::new(program).run()
 }

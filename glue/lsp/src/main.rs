@@ -1,9 +1,9 @@
 //! Glue language server.
 //!
-//! Deliberately thin: it owns the protocol, the document store, and the mapping
-//! between byte offsets and LSP positions. Everything about the *language* lives
-//! in `parser` and `tokenizer`, so the same front end can serve the compiler and
-//! the interpreter (design goal §2.2).
+//! Deliberately thin: it owns the protocol, the document store, and the
+//! mapping between byte offsets and LSP positions. Everything about the
+//! *language* lives in `parser` and `tokenizer`, so the same front end can
+//! serve the compiler and the interpreter (design goal §both-modes).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -25,9 +25,9 @@ struct Backend {
     /// buffer on every keystroke and reparse it. Files are small; revisit only
     /// when there's evidence this matters.
     documents: Mutex<HashMap<Url, String>>,
-    /// Negotiated during `initialize`. UTF-8 is what we ask for — spans are byte
-    /// offsets into UTF-8 source (§1), so anything else means converting on every
-    /// diagnostic.
+    /// Negotiated during `initialize`. UTF-8 is what we ask for — spans are
+    /// byte offsets into UTF-8 source (§lexical), so anything else means
+    /// converting on every diagnostic.
     encoding: Mutex<PositionEncodingKind>,
 }
 

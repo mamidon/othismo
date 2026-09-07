@@ -43,8 +43,9 @@ pub struct Closed {
 
 impl Closed {
     /// What was just built. The grammar asks in two places: whether a
-    /// statement's expression was block-shaped, and so needs no `;` (§3), and
-    /// whether a `{` follows a name and so opens a struct literal (§6).
+    /// statement's expression was block-shaped, and so needs no `;`
+    /// (§statements), and whether a `{` follows a name and so opens a struct
+    /// literal (§types).
     pub fn kind(&self) -> NodeKind {
         self.kind
     }

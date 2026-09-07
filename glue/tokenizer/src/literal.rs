@@ -14,9 +14,9 @@ use crate::token::{Token, TokenKind};
 /// The value a literal token names.
 ///
 /// An integer arrives as a `u128` and a float as an `f64`, with the suffix, if
-/// any, alongside. Neither is the literal's *type*: §1 makes an unsuffixed
-/// literal an unpinned constant that acquires a type from context, and pinning
-/// is the type checker's job, not the tokenizer's.
+/// any, alongside. Neither is the literal's *type*: §lexical makes an
+/// unsuffixed literal an unpinned constant that acquires a type from context,
+/// and pinning is the type checker's job, not the tokenizer's.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Literal<'src> {
     Int {
@@ -34,8 +34,8 @@ pub enum Literal<'src> {
     Bool(bool),
 }
 
-/// The types a numeric suffix can name (§1). `s` rather than `i` for signed,
-/// matching wasm's own `s`/`u` instruction suffixes.
+/// The types a numeric suffix can name (§lexical). `s` rather than `i` for
+/// signed, matching wasm's own `s`/`u` instruction suffixes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NumericType {
     U8,
@@ -145,9 +145,10 @@ fn body<'src>(text: &'src str, open: usize, close: &str) -> &'src str {
 
 /// Process escapes.
 ///
-/// §1 also asks for CRLF to be normalized to LF, and there is nowhere left for
-/// that to happen: a string stops at a newline, so no literal can contain a
-/// raw one. Normalization comes back with whatever multi-line form does.
+/// §lexical also asks for CRLF to be normalized to LF, and there is nowhere
+/// left for that to happen: a string stops at a newline, so no literal can
+/// contain a raw one. Normalization comes back with whatever multi-line form
+/// does.
 fn decode(inner: &str) -> Cow<'_, str> {
     if !inner.contains('\\') {
         return Cow::Borrowed(inner);
@@ -182,6 +183,6 @@ fn decode_char(inner: &str) -> Option<char> {
             inner[start..cursor.index()].chars().next()?
         }
     };
-    // Exactly one character, or it isn't a `char` (§1).
+    // Exactly one character, or it isn't a `char` (§lexical).
     cursor.at_end().then_some(character)
 }

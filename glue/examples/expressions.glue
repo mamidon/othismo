@@ -1,4 +1,4 @@
-// §2 — every expression form, and the whole precedence ladder.
+// §expressions — every expression form, and the whole precedence ladder.
 //
 // Background tint runs by nesting depth — deeper is darker, so the shape on
 // screen is the shape of the tree. Text colour cycles per token, so you can
@@ -6,10 +6,10 @@
 // the Explorer follows the cursor.
 
 // ---- What the expressions below are written against -----------------------
-// Every expression needs something to name. §13 has no answer yet for how a
-// program reaches its host, so the functions here compute and do nothing else.
-// Declarations are hoisted within their block (§5, §12), so the structs at the
-// bottom of the file are in scope up here.
+// Every expression needs something to name. §modules has no answer yet for how
+// a program reaches its host, so the functions here compute and do nothing
+// else. Declarations are hoisted within their block (§functions, §scope), so
+// the structs at the bottom of the file are in scope up here.
 
 fn f(a: u64, b: u64) -> u64 { a + b }
 fn nothing_at_all() { }
@@ -28,15 +28,15 @@ let point = Point { x: 1, y: 2 };
 let literal = 42;
 let name = literal;
 // `( … )` groups and nothing else — it does not change a value's type,
-// meaning, or evaluation (§2).
+// meaning, or evaluation (§expressions).
 let grouped = (1 + 2) * 3;
 // `()` is the unit value, not an empty grouping.
 let unit = ();
 
 // ---- Prefix ---------------------------------------------------------------
 // Two of them. Unary `-` is defined on signed and float types only; negating
-// an unsigned value is a type error, not a runtime trap (§2). There is no `~`,
-// because the core has no bitwise operators to complement with.
+// an unsigned value is a type error, not a runtime trap (§expressions). There
+// is no `~`, because the core has no bitwise operators to complement with.
 
 let negated = -1;
 let inverted = !true;
@@ -51,9 +51,9 @@ let quotient = 7 / 8;
 let remainder = 9 % 10;
 
 // ---- Comparison -----------------------------------------------------------
-// Non-associative (§2): `a < b < c` is a parse error rather than a type error,
-// because a parse error names the actual mistake. So each of these holds
-// exactly one comparison.
+// Non-associative (§expressions): `a < b < c` is a parse error rather than a
+// type error, because a parse error names the actual mistake. So each of these
+// holds exactly one comparison.
 
 let equal = 1 == 2;
 let unequal = 1 != 2;
@@ -66,14 +66,14 @@ let between = 0 < n && n < 10;
 
 // ---- Logical --------------------------------------------------------------
 // `bool` only, short-circuiting — which makes them control flow wearing an
-// operator's clothes (§2).
+// operator's clothes (§expressions).
 
 let both = true && false;
 let either = true || false;
 
 // ---- Conversion -----------------------------------------------------------
 // `as` is explicit and trapping, deliberately unlike Rust's, which truncates
-// silently. Lossy conversions exist but have names (§2).
+// silently. Lossy conversions exist but have names (§expressions).
 
 let narrowed = 300 as u32;
 let to_float = 300 as f64;
@@ -86,7 +86,7 @@ let with_args = f(1, 2);
 let trailing_comma = f(1, 2,);
 let indexed = items[0];
 let field = point.x;
-// A method call is `.name(…)`, with the parens (§2).
+// A method call is `.name(…)`, with the parens (§expressions).
 let method = counter.next();
 let chained = lookup(1).result[0].value;
 
@@ -114,7 +114,7 @@ let no_fields = Empty { };
 
 // ---- Block expressions ----------------------------------------------------
 // A block's value is its trailing expression, written without a `;`. A `;`
-// discards (§2).
+// discards (§expressions).
 
 let from_block = {
   let t = f(1, 2);
@@ -124,8 +124,9 @@ let from_block = {
 let discarded = { f(1, 2); 42; };
 
 // ---- Conditionals ---------------------------------------------------------
-// `if` is an expression (§2). Braces are mandatory and the condition is
-// unparenthesized (§4), which together delete the dangling-else problem.
+// `if` is an expression (§expressions). Braces are mandatory and the condition
+// is unparenthesized (§control), which together delete the dangling-else
+// problem.
 
 let branch = if ok { 42 } else { 0 };
 // `else if` is `else` followed by another `if`, not a keyword of its own.
@@ -133,7 +134,8 @@ let chain = if ok { 1 } else if ready { 2 } else { 3 };
 
 // ---- Lambdas --------------------------------------------------------------
 // `(params) -> body`. Parameter and return types come from context, unlike a
-// `fn`: a declaration is read by others, a lambda is read in place (§5).
+// `fn`: a declaration is read by others, a lambda is read in place
+// (§functions).
 //
 // The parameter list is spelled exactly like a parenthesized expression, so
 // the `->` after the `)` is the only thing that tells the two apart — which is
@@ -150,8 +152,9 @@ let with_block: fn(u64) -> u64 = (x) -> {
 
 // ---- Precedence -----------------------------------------------------------
 // Tightest to loosest, each line pinned against the one below it. The comment
-// beside each is the grouping §2's table gives it. §1 has no promotion, so the
-// operands are chosen to have one type each rather than to read prettily.
+// beside each is the grouping §expressions' table gives it. §lexical has no
+// promotion, so the operands are chosen to have one type each rather than to
+// read prettily.
 
 let a = 9u64;
 let b = 3u64;
@@ -169,5 +172,5 @@ let l7 = ok || ready && ok;    // (ok || (ready && ok))  `&&` over `||`
 // Every binary operator is left-associative.
 let leans_left = a - b - c;    // ((a - b) - c)
 
-// A file may end in an expression with no `;` (§3).
+// A file may end in an expression with no `;` (§statements).
 sum + difference

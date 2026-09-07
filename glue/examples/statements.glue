@@ -1,10 +1,10 @@
-// §3 and §4 — every statement, and all the control flow.
+// §statements and §control — every statement, and all the control flow.
 
 // ---- What the statements below are written against ------------------------
-// §13 has no answer yet for how a program reaches its host, so a function here
-// that would print or fetch something computes and does nothing else.
-// Declarations are hoisted within their block (§5, §12), so the structs are in
-// scope above where they are written.
+// §modules has no answer yet for how a program reaches its host, so a function
+// here that would print or fetch something computes and does nothing else.
+// Declarations are hoisted within their block (§functions, §scope), so the
+// structs are in scope above where they are written.
 
 fn read() -> u64 { 42 }
 fn parse(raw: u64) -> u64 { raw }
@@ -42,7 +42,7 @@ let mut outer = Outer { inner: Inner { value: 0 } };
 
 // ---- Bindings -------------------------------------------------------------
 // One keyword: there is no `var` and no `const`. `mut` gates mutation, not
-// rebinding — every binding is rebindable regardless (§3).
+// rebinding — every binding is rebindable regardless (§statements).
 
 let plain = 42;
 let annotated: u32 = 42;
@@ -50,7 +50,7 @@ let mut counter = 0;
 let mut tally: s64 = 0;
 
 // An initializer is always required. There is no declare-then-assign, and so
-// no definite-assignment analysis to specify or implement (§3).
+// no definite-assignment analysis to specify or implement (§statements).
 let from_block = {
   let t = read();
   t * 2
@@ -59,17 +59,18 @@ let from_if = if verbose { 1 } else { 0 };
 
 // A new `let` may shadow an existing binding, including in the same scope.
 // It's the natural way to write a narrowing pipeline without inventing
-// `input2`, and it is what makes restating a binding at a prompt work (§3).
+// `input2`, and it is what makes restating a binding at a prompt work
+// (§statements).
 let input = read();
 let input = parse(input);
 
 // ---- Assignment -----------------------------------------------------------
 // A statement, not an expression, so `if x = 1 { … }` does not compile — the
-// typo class is gone by construction rather than by lint (§3).
+// typo class is gone by construction rather than by lint (§statements).
 
 // `=` is the only assignment operator in the core. The compound forms —
 // `+=` and the rest — come back when there is a reason for them; each is
-// exactly `a = a op b` with the place evaluated once (§3).
+// exactly `a = a op b` with the place evaluated once (§statements).
 counter = counter + 1;
 counter = counter * 2;
 counter = counter % 3;
@@ -82,7 +83,7 @@ outer.inner.value = 2;
 
 // ---- Expression statements ------------------------------------------------
 // Evaluates its expression and discards the value. No rule requires the value
-// to be unit, and nothing marks a discard as deliberate (§3).
+// to be unit, and nothing marks a discard as deliberate (§statements).
 
 log("hello");
 counter.next();
@@ -94,14 +95,15 @@ if ready { log("go"); }
 // ---- Loops ----------------------------------------------------------------
 // `while` is the only loop, and a statement, so its value is unit. There is no
 // `loop` keyword and no `break` with a value: those exist to make an infinite
-// loop produce something, and `while true { … }` covers the control flow (§4).
+// loop produce something, and `while true { … }` covers the control flow
+// (§control).
 
 while counter < 10 {
   counter = counter + 1;
 }
 
 // `break` and `continue` apply to the innermost enclosing loop. Unlabelled
-// only, for now (§4).
+// only, for now (§control).
 while true {
   if done { break; }
   if skip { continue; }
@@ -124,7 +126,8 @@ while (Point { x: 0, y: 0 }) == target {
 }
 
 // The body introduces a scope, so a binding made here is fresh each iteration
-// — which is why the classic loop-variable capture trap is absent (§5).
+// — which is why the classic loop-variable capture trap is absent
+// (§functions).
 while counter > 0 {
   let step = counter * 2;
   observe(step);
@@ -134,7 +137,7 @@ while counter > 0 {
 // ---- Early exit -----------------------------------------------------------
 // `return` exits the enclosing function, not the block. It is for *early*
 // exit: a body is a block, so its ordinary result is the trailing expression,
-// and a well-shaped function often has no `return` at all (§4).
+// and a well-shaped function often has no `return` at all (§control).
 
 fn clamp(n: u64, limit: u64) -> u64 {
   if n > limit {
@@ -149,8 +152,8 @@ fn nothing_to_say() {
 
 // ---- The top level --------------------------------------------------------
 // A file is a block: statements, then an optional trailing expression with no
-// `;`, which is the file's value. That is the whole of goal §2.1's "a bare
-// expression is a valid program" — not a REPL special case, just the block
-// rule applied to the outermost block (§3).
+// `;`, which is the file's value. That is the whole of goal §one-language's "a
+// bare expression is a valid program" — not a REPL special case, just the
+// block rule applied to the outermost block (§statements).
 
 counter

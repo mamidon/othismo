@@ -1,10 +1,10 @@
 //! `glue` — run a file, print what it came to.
 //!
-//! A file is a block (§3), so its value is its trailing expression, and the
-//! whole of goal §2.1's "a bare expression is a valid program" is that a file
-//! containing `42` prints `42`. The value is echoed unconditionally, unit
-//! included: `()` is a real value (§5), and a program that produced one has not
-//! failed.
+//! A file is a block (§statements), so its value is its trailing expression,
+//! and the whole of goal §one-language's "a bare expression is a valid
+//! program" is that a file containing `42` prints `42`. The value is echoed
+//! unconditionally, unit included: `()` is a real value (§functions), and a
+//! program that produced one has not failed.
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -43,9 +43,10 @@ fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
-        // §10 and §12's, and the reason a program can now fail without having
-        // run at all. Every one of them, in source order, because a person
-        // fixing a file wants the list rather than the first line of it.
+        // §inference and §scope's, and the reason a program can now fail
+        // without having run at all. Every one of them, in source order,
+        // because a person fixing a file wants the list rather than the first
+        // line of it.
         Err(Error::Elaboration(diagnostics)) => {
             for diagnostic in diagnostics {
                 report(&name, &source, diagnostic.span.start, &diagnostic.message());

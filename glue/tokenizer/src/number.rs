@@ -25,7 +25,7 @@ pub(crate) enum NumberValue {
 }
 
 pub(crate) struct NumberScan {
-    /// A `.` or an exponent is what makes it a float (§1).
+    /// A `.` or an exponent is what makes it a float (§lexical).
     pub is_float: bool,
     /// `None` when the literal is malformed, or the suffix is unrecognized.
     pub suffix: Option<NumericType>,
@@ -35,8 +35,8 @@ pub(crate) struct NumberScan {
 }
 
 /// Consume one numeric literal. The cursor must sit on a digit, or on the `.`
-/// of a leading-dot float — the caller has already applied §1's left-context
-/// rule to decide which.
+/// of a leading-dot float — the caller has already applied §lexical's
+/// left-context rule to decide which.
 pub(crate) fn consume_number(cursor: &mut Cursor<u8>, source: &str) -> NumberScan {
     let start = cursor.index();
     let mut errors = Vec::new();
@@ -48,7 +48,7 @@ pub(crate) fn consume_number(cursor: &mut Cursor<u8>, source: &str) -> NumberSca
     let mut digits_start = start;
 
     if cursor.peek(0) == Some(b'.') {
-        // `.5` — a float with no integer part (§1).
+        // `.5` — a float with no integer part (§lexical).
         is_float = true;
         cursor.consume();
         consume_digit_run(cursor, 10, &mut errors);
@@ -71,13 +71,13 @@ pub(crate) fn consume_number(cursor: &mut Cursor<u8>, source: &str) -> NumberSca
         if consume_digit_run(cursor, radix, &mut errors) == 0 {
             errors.push((start..cursor.index(), DiagnosticKind::MissingDigits));
         }
-        // Hex, octal, and binary are integer-only (§1). A `.` after one is
-        // field access, and the caller will lex it as such.
+        // Hex, octal, and binary are integer-only (§lexical). A `.` after one
+        // is field access, and the caller will lex it as such.
     } else {
         consume_digit_run(cursor, 10, &mut errors);
 
         // A *trailing* `.` is not part of a literal: `1.` is `1` then `.`, so
-        // that `1.method()` needs no lookahead (§1).
+        // that `1.method()` needs no lookahead (§lexical).
         if cursor.peek(0) == Some(b'.') && cursor.peek(1).is_some_and(|b| b.is_ascii_digit()) {
             is_float = true;
             cursor.consume();
@@ -139,8 +139,9 @@ fn radix_marker(cursor: &Cursor<u8>) -> Option<u8> {
 
 /// Consume digits and separators, and return how many *digits* there were.
 ///
-/// `_` may separate digits; it may not lead or trail a digit run (§1). A run of
-/// several between digits is allowed — the rule is about the boundaries.
+/// `_` may separate digits; it may not lead or trail a digit run (§lexical). A
+/// run of several between digits is allowed — the rule is about the
+/// boundaries.
 fn consume_digit_run(
     cursor: &mut Cursor<u8>,
     radix: u32,
@@ -174,7 +175,8 @@ fn consume_digit_run(
     digits
 }
 
-/// An exponent makes a literal a float even with no `.`: `1e10` is a float (§1).
+/// An exponent makes a literal a float even with no `.`: `1e10` is a float
+/// (§lexical).
 ///
 /// Three bytes of lookahead, and no backtracking: if what follows `e` isn't an
 /// exponent, the `e` is left where it is and becomes the first character of the
@@ -227,9 +229,9 @@ fn parse_int(
     }
     match u128::from_str_radix(&cleaned, radix) {
         Ok(value) => Some(NumberValue::Int(value)),
-        // §1 makes an unsuffixed integer an unbounded constant, but only in
-        // arithmetic — a *literal* wider than 128 bits has no representation to
-        // start from, and pinning it could only ever fail.
+        // §lexical makes an unsuffixed integer an unbounded constant, but only
+        // in arithmetic — a *literal* wider than 128 bits has no
+        // representation to start from, and pinning it could only ever fail.
         Err(_) => {
             errors.push((body.clone(), DiagnosticKind::IntegerTooLarge));
             None
@@ -245,8 +247,8 @@ fn parse_float(
     let cleaned = strip_separators(text);
     match cleaned.parse::<f64>() {
         Ok(value) if value.is_finite() => Some(NumberValue::Float(value)),
-        // Rust parses `1e400` as infinity rather than failing. §1 says an
-        // inexact float constant rounds rather than erroring, but infinity
+        // Rust parses `1e400` as infinity rather than failing. §lexical says
+        // an inexact float constant rounds rather than erroring, but infinity
         // isn't rounding — it's a value the literal doesn't name.
         Ok(_) => {
             errors.push((body.clone(), DiagnosticKind::FloatOutOfRange));
