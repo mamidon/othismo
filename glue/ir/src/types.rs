@@ -64,6 +64,12 @@ pub enum TypeDef {
     /// captured by a lambda and assigned, so that §functions' promise that
     /// captured bindings outlive their frame has somewhere to be true.
     Cell(TypeId),
+    /// §comptime: the type whose values are types. The only type with **no
+    /// runtime representation** — a value of it may be computed, bound, and
+    /// passed during elaboration, and may not cross into a running program.
+    /// Nothing in core IR is ever typed with it, which is the invariant
+    /// `elab` enforces by refusing to pin one.
+    Type,
     /// Poison. Produced where a diagnostic has already been reported, and
     /// compatible with everything, so one mistake yields one message.
     Error,
@@ -71,8 +77,9 @@ pub enum TypeDef {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct StructDef {
-    /// For diagnostics and dumps. `None` for the anonymous `struct { … }` that
-    /// §comptime adds and lowering cannot produce yet.
+    /// For diagnostics and dumps, never for identity. `None` until something
+    /// gives the type a name — the anonymous `struct { … }` expression
+    /// (§comptime) has none until a `let` binds it.
     pub name: Option<Sym>,
     pub fields: Vec<FieldDef>,
     /// §types: identity is the site that constructed it.
@@ -131,6 +138,22 @@ impl Types {
         id
     }
 
+    /// Names a struct that has none.
+    ///
+    /// §comptime makes `struct Point { … }` sugar for
+    /// `let Point = struct { … };`, and a name is for diagnostics and dumps
+    /// rather than for identity ([`StructDef::name`]) — so the sugar holds
+    /// exactly when the binding lends its name to the type it binds. An
+    /// already-named struct keeps its name: `let A = Point;` is a second name
+    /// for one type (§types), not a rename.
+    pub fn name_struct(&mut self, id: TypeId, name: Sym) {
+        if let TypeDef::Struct(def) = &mut self.defs[id.index()]
+            && def.name.is_none()
+        {
+            def.name = Some(name);
+        }
+    }
+
     pub fn set_fields(&mut self, id: TypeId, fields: Vec<FieldDef>) {
         match &mut self.defs[id.index()] {
             TypeDef::Struct(def) => def.fields = fields,
@@ -166,6 +189,12 @@ impl Types {
 
     pub fn is_error(&self, id: TypeId) -> bool {
         matches!(self.get(id), TypeDef::Error)
+    }
+
+    /// §comptime's boundary: everything but [`TypeDef::Type`] may become a
+    /// runtime value.
+    pub fn has_runtime_representation(&self, id: TypeId) -> bool {
+        !matches!(self.get(id), TypeDef::Type)
     }
 
     pub fn is_numeric(&self, id: TypeId) -> bool {

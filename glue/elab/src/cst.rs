@@ -73,6 +73,7 @@ pub fn is_expr(kind: NodeKind) -> bool {
             | UnitExpr
             | UnaryExpr
             | ComptimeExpr
+            | StructExpr
             | BinaryExpr
             | CastExpr
             | CallExpr
@@ -87,7 +88,7 @@ pub fn is_expr(kind: NodeKind) -> bool {
 pub fn is_type(kind: NodeKind) -> bool {
     matches!(
         kind,
-        NodeKind::NameType | NodeKind::FnType | NodeKind::UnitType
+        NodeKind::NameType | NodeKind::CallType | NodeKind::FnType | NodeKind::UnitType
     )
 }
 

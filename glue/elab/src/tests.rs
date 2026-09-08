@@ -677,6 +677,113 @@ fn the_examples_elaborate() {
     }
 }
 
+// ---- §comptime: a type is a value ------------------------------------------
+
+/// The stage-1 claim, in one program: `Type` is a predeclared name, a type is
+/// an ordinary binding, and an annotation resolves through the same lookup as
+/// an expression. There is one namespace, not two.
+#[test]
+fn a_type_is_an_ordinary_binding() {
+    // A type binds like anything else, and the binding is then a type name.
+    assert_eq!(
+        ir("let Word = u64; let n: Word = 7; n"),
+        ir("let n: u64 = 7; n")
+    );
+    // Including through an alias of an alias, which needs no rule of its own.
+    assert_eq!(
+        ir("let A = u64; let B = A; let n: B = 7; n"),
+        ir("let n: u64 = 7; n")
+    );
+    // `Type` is a name in the same prelude as `u64`, so a program may shadow
+    // it (§lexical) — this checks it is there, not that shadowing is wise.
+    assert_eq!(
+        only_error("let T: Type = u64; T"),
+        "`u64` has no runtime representation — types exist only during compilation"
+    );
+}
+
+/// §comptime, jointly with §types: `struct Point { … }` is sugar for
+/// `let Point = struct { … };`. Not asserted in prose — the two programs lower
+/// to the same IR.
+#[test]
+fn the_named_struct_form_is_sugar() {
+    assert_eq!(
+        ir("let Point = struct { x: s64, y: s64 }; Point { x: 1, y: 2 }"),
+        ir("struct Point { x: s64, y: s64 } Point { x: 1, y: 2 }")
+    );
+}
+
+/// The one way the two forms still differ, written down rather than left to be
+/// discovered. `struct Point { … }` is a declaration and hoists to the top of
+/// its block (§scope, §functions), so a `fn` above it may name it. A `let`
+/// does not — §statements runs initializers in order — so the sugar is
+/// equivalent in *meaning* and not in *position*.
+#[test]
+fn a_let_bound_type_does_not_hoist() {
+    assert_eq!(
+        only_error("fn zero() -> Point { Point { x: 0 } } let Point = struct { x: s64 };"),
+        "no type named `Point` is in scope"
+    );
+}
+
+/// §types: identity is the *allocation site*, so every evaluation of a
+/// `struct { … }` expression produces a fresh type. Two written out with
+/// identical fields are two types, and structural interning would be wrong.
+#[test]
+fn each_anonymous_struct_is_its_own_type() {
+    let source = "let A = struct { x: s64 }; let B = struct { x: s64 }; let a: A = B { x: 1 }; a";
+    assert_eq!(only_error(source), "expected `A`, found `B`");
+}
+
+const MISSING_RUNTIME_VALUE: &str =
+    "`Type` has no runtime representation — types exist only during compilation";
+
+/// §comptime's boundary: everything crosses from comptime to runtime except a
+/// `Type`, which has no representation to cross as. Every position that would
+/// put one in core IR is refused, which is what makes "core IR is free of
+/// `Type`" true of the code rather than of a comment.
+#[test]
+fn a_type_has_no_runtime_value() {
+    // A binding that would need a slot or a global.
+    assert_eq!(
+        only_error("let x: u64 = u64;"),
+        "expected `u64`, found `Type`"
+    );
+    // A parameter and a return, in a `fn` that is not a generic.
+    assert_eq!(only_error("fn f(t: Type) { }"), MISSING_RUNTIME_VALUE);
+    // The body is empty on purpose: `{ u64 }` would report the return type
+    // *and* the type value being returned, which are two different mistakes.
+    assert_eq!(only_error("fn f() -> Type { }"), MISSING_RUNTIME_VALUE);
+    // A struct field.
+    assert_eq!(
+        only_error("struct Holder { t: Type }"),
+        MISSING_RUNTIME_VALUE
+    );
+    // An operand. §comptime leaves it open whether `Type` values support any
+    // operator at all; until it says otherwise, none of them do. The message
+    // names the type that *is* the value rather than `Type` itself, which is
+    // the more useful half to hear.
+    assert_eq!(
+        only_error("u64 as u64"),
+        "`u64` has no runtime representation — types exist only during compilation"
+    );
+}
+
+/// A `fn` with a comptime parameter is a generic, and unbuilt. Its signature
+/// is poisoned rather than separately complained about, so one declaration
+/// yields one diagnostic per comptime parameter and no cascade — and in
+/// particular no slot typed `Type`.
+#[test]
+fn a_generic_signature_is_poisoned_not_double_reported() {
+    assert_eq!(
+        errors("fn Pair(comptime A: Type, comptime B: Type) -> Type { }"),
+        [
+            "comptime is not supported yet",
+            "comptime is not supported yet"
+        ]
+    );
+}
+
 // ---- Not yet ---------------------------------------------------------------
 
 /// A construct the parser accepts and elaboration has no answer for says so,

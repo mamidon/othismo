@@ -467,6 +467,30 @@ fn declarations() {
         skeleton("struct Point {\n  x: s64,\n  y: s64,\n}"),
         "(SourceFile (StructDecl (FieldDeclList (FieldDecl (NameType)) (FieldDecl (NameType)))))"
     );
+    // §comptime: the named form is sugar for a `let` over the anonymous one,
+    // so both carry the same `FieldDeclList` and only the name differs.
+    assert_eq!(
+        skeleton("let Pixel = struct { on: bool };"),
+        "(SourceFile (LetStmt (NamePat) (StructExpr (FieldDeclList (FieldDecl (NameType))))))"
+    );
+    // A `struct` with no name is an expression, so it is not a declaration and
+    // does not hoist. One token of lookahead tells the two apart.
+    assert_eq!(
+        skeleton("struct Named { x: s64 }"),
+        "(SourceFile (StructDecl (FieldDeclList (FieldDecl (NameType)))))"
+    );
+    // §comptime: an instantiation is a call, and its arguments are ordinary
+    // expressions — a comptime argument need not be a type.
+    assert_eq!(
+        skeleton("fn f(p: Pair(u64, Str)) { }"),
+        "(SourceFile (FnDecl (ParamList (Param (CallType (NameType) \
+         (ArgList (NameExpr) (NameExpr))))) (BlockExpr)))"
+    );
+    assert_eq!(
+        skeleton("fn g(f: Fixed(u64, 8)) { }"),
+        "(SourceFile (FnDecl (ParamList (Param (CallType (NameType) \
+         (ArgList (NameExpr) (LiteralExpr))))) (BlockExpr)))"
+    );
     assert_eq!(
         skeleton("type InstanceId = u64;"),
         "(SourceFile (TypeAliasDecl (NameType)))"

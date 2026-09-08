@@ -67,9 +67,13 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Checking an uninstantiated generic | — | — | — |
 
 The first three rows were decided in §comptime rather than here, which is why this
-section has no syntax of its own. None of it is implemented. `comptime` became a token on
-2026-09-07 and both of its positions parse, but elaboration refuses them, so there is
-still no `Type`, no instantiation, and no cache.
+section has no syntax of its own. As of **2026-09-07** the spellings all parse — a
+comptime parameter, an anonymous `struct { … }`, and a call in type position — and `Type`
+is a real value that a binding can hold. What is not built is the *calling*: elaboration
+answers an instantiation with "generic instantiation is not supported yet", because
+evaluating one needs the comptime configuration of the evaluator and a cache keyed on
+`(declaration, comptime arguments)`. A generic can be written and not instantiated, so
+none of the rows above moves.
 
 ---
 

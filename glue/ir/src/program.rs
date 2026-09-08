@@ -413,6 +413,7 @@ pub fn type_name(types: &Types, syms: &Interner, ty: TypeId) -> String {
             None => "struct".to_string(),
         },
         TypeDef::Cell(inner) => format!("(cell {})", type_name(types, syms, *inner)),
+        TypeDef::Type => "Type".to_string(),
         TypeDef::Error => "?".to_string(),
     }
 }

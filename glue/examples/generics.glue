@@ -1,22 +1,25 @@
 // §comptime and §generics — types are values, and a generic is a function.
 //
-// **None of this runs, and most of it does not parse.** As of 2026-09-07
-// `comptime` is a token, so every signature below reads as intended and
-// `comptime checksum(256u64)` is a real expression — but elaboration answers
-// both with "comptime is not supported yet", because there is no `Type` in the
-// value domain, no instantiation cache, and no second configuration of the
-// evaluator behind them.
+// **All of this parses, and none of it runs.** As of 2026-09-07 the spellings
+// are all real: `comptime` is a token in both of its positions, `struct { … }`
+// is an expression, a call is a type, and `Type` is a predeclared name holding
+// the type of types. A type is an ordinary value that a `let` can bind and an
+// annotation can name — so the lines below that only need *that* much already
+// work, and `let Coord = …` is a binding like any other.
 //
-// Two spellings this file needs are still not in the grammar, and they are
-// where the syntax errors come from:
+// What is missing is the evaluation. `Pair(u64, Str)` has to be *called* at
+// compile time, which needs the comptime configuration of the evaluator and a
+// cache keyed on `(declaration, comptime arguments)`, and neither exists. So
+// elaboration answers with "comptime is not supported yet" and "generic
+// instantiation is not supported yet", and the errors downstream of those —
+// `T` not in scope, arguments that are types where runtime values are wanted —
+// are that one gap seen from further along.
 //
-//   * the anonymous `struct { … }` **expression** that every generic here
-//     returns — "expected a name" after `struct`;
-//   * a **call in type position**, `p: Pair(s64, s64)` — the type grammar has
-//     names, `fn(…) -> …`, and `()`, and no postfix rung.
-//
-// So `glue-ir` reports a good deal about this file, which is the correct
-// answer to it today.
+// Nothing here reaches core IR. `Type` has no runtime representation, and
+// every position that would put one in a slot, a global, a field, a parameter,
+// or a return is refused — which is how "core IR is free of comptime,
+// generics, and `Type`" stays true while the front of the pipeline learns to
+// talk about them.
 //
 // It is here as a target. §comptime decided this design on 2026-08-18 and
 // implemented none of it, and the gap between those two facts is the widest in

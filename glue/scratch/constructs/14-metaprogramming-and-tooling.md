@@ -24,10 +24,10 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Area | Syntax | Semantics | Implementation |
 | --- | --- | --- | --- |
 | `comptime` — a parameter position and an expression prefix | ✓ | ✓ | ◑ |
-| `Type` as a value with no runtime representation | ✓ | ✓ | — |
+| `Type` as a value with no runtime representation | ✓ | ✓ | ✓ |
 | Generics as functions over `Type` | ✓ | ✓ | — |
 | Instantiation memoized on `(declaration, arguments)` | · | ✓ | — |
-| Declaration forms as sugar — `struct`, `type` | ✓ | ✓ | ◑ |
+| Declaration forms as sugar — `struct`, `type` | ✓ | ✓ | ✓ |
 | Comptime is hermetic | · | ✓ | · |
 | Comptime evaluation is bounded by fuel | · | ✓ | — |
 | Macros — declined | · | ✓ | · |
@@ -42,17 +42,28 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 **The widest gap between decided and built in the whole checklist.** The compile-time
 evaluation rows are settled in detail and implemented almost nowhere.
 
-The first row is ◑ as of **2026-09-07**: `comptime` is a token, it parses in both of its
-positions, and elaboration answers either one with "comptime is not supported yet". That
-is a spelling and a refusal — behind it there is no `Type`, no instantiation cache, and no
-second configuration of the evaluator. It was built ahead of the semantics on purpose, so
-that these programs have a settled shape and the language server has something to colour
-before there is anything to run.
+**2026-09-07 closed two rows.** `Type` is a predeclared name holding a value of type
+`Type`, and every type name is an ordinary binding — so a type annotation and an
+expression are one lookup, and the separate resolver types used to have is gone. The
+anonymous `struct { … }` expression exists, and a `let` lends its name to the type it
+binds, which makes `struct Point { … }` ≡ `let Point = struct { … };` hold as *the same
+IR* rather than as the same meaning. The one difference left is position: a declaration
+hoists (§scope) and a `let` runs in order.
 
-What *is* built is the thing those decisions were made for — core IR, specified in
-[`../core-ir.md`](../core-ir.md) and implemented in `glue/ir`. The sugar row is ◑ because
-`struct Point { … }` and `type X = …` both work while the anonymous `struct { … }`
-expression they desugar to does not.
+**§comptime's boundary is where that is paid for, and it is enforced in one place.** A
+value crosses from comptime to runtime when its type has a runtime representation, and
+`Type` is the only type with none — so pinning a value refuses it, and so does every
+position that would name it: a parameter, a return, a struct field. Core IR therefore
+still contains no `Type`, which is the invariant the whole arrangement exists to keep.
+
+The first row stays ◑ because a spelling is not an evaluation. `comptime` parses in both
+positions and elaboration answers either with "comptime is not supported yet": there is no
+instantiation cache and no second configuration of the evaluator, so a generic can be
+*written* and not *called*. That is the next thing, and it is where `elab`'s dependency on
+`eval` stops being decorative.
+
+What was built first is the thing those decisions were made for — core IR, specified in
+[`../core-ir.md`](../core-ir.md) and implemented in `glue/ir`.
 
 ---
 

@@ -365,11 +365,24 @@ fn primary(cursor: &mut Cursor) -> Closed {
         }
         TokenKind::BraceLeft => block(cursor),
         TokenKind::If => if_expr(cursor),
+        TokenKind::Struct => struct_expr(cursor),
         // Nothing is consumed. The caller's loop then finds no operator and
         // stops, or finds one and consumes it — either way the parse advances,
         // and whatever is really here is swept up by the enclosing construct.
         _ => cursor.error_node(DiagnosticKind::ExpectedExpression),
     }
+}
+
+/// `struct { x: T }` — an anonymous struct, as an expression (§comptime).
+///
+/// Its value is a type, which is the thing a generic has to return and cannot
+/// name in advance. The named form is sugar over this one (§comptime, jointly
+/// with §types), so both read their body with `field_decl_list`.
+fn struct_expr(cursor: &mut Cursor) -> Closed {
+    let mark = cursor.open(NodeKind::StructExpr);
+    cursor.bump(); // `struct`
+    crate::stmt::field_decl_list(cursor);
+    cursor.close(mark)
 }
 
 /// Types, to the extent `as` needs them.
@@ -381,7 +394,17 @@ pub fn ty(cursor: &mut Cursor) -> Closed {
         TokenKind::Ident => {
             let mark = cursor.open(NodeKind::NameType);
             cursor.bump();
-            cursor.close(mark)
+            let mut lhs = cursor.close(mark);
+            // §comptime: an instantiation is a call, so a type may be one —
+            // `Pair(u64, Str)`. The loop rather than a single step because a
+            // generic may return a generic, and one postfix rung handles both
+            // without a rule for the second.
+            while cursor.at(TokenKind::ParenLeft) {
+                let mark = cursor.open_before(lhs, NodeKind::CallType);
+                arg_list(cursor);
+                lhs = cursor.close(mark);
+            }
+            lhs
         }
         TokenKind::ParenLeft if cursor.nth(1) == TokenKind::ParenRight => {
             let mark = cursor.open(NodeKind::UnitType);

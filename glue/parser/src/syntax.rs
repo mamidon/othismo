@@ -134,6 +134,13 @@ pub enum NodeKind {
     /// [`NodeKind::Param`] rather than a node, since it modifies a parameter
     /// that already has one.
     ComptimeExpr,
+    /// `struct { x: T }` with no name, as an **expression** whose value is a
+    /// type (§comptime). [`NodeKind::StructDecl`] is the sugared form —
+    /// `struct Point { … }` ≡ `let Point = struct { … };` — and the two share
+    /// a [`NodeKind::FieldDeclList`], which is why the named one keeps its
+    /// shape. A generic returns one of these, because it has a type to produce
+    /// and no name to give it in advance.
+    StructExpr,
     BinaryExpr,
     /// `x as T` (§expressions) — explicit and trapping.
     CastExpr,
@@ -167,8 +174,14 @@ pub enum NodeKind {
     NamePat,
 
     // ---- Types ------------------------------------------------------------
-    /// `u64`, `Str`, `Point`. Generic arguments arrive with §generics.
+    /// `u64`, `Str`, `Point`.
     NameType,
+    /// `Pair(u64, Str)` — an instantiation (§comptime, §generics), which is a
+    /// call and nothing else, so its arguments are an ordinary
+    /// [`NodeKind::ArgList`] of *expressions* rather than a list of types. A
+    /// comptime argument need not be a type — `Fixed(u64, 8)` passes one of
+    /// each — and that is why this cannot be a list of types.
+    CallType,
     /// `fn(u64) -> u64` (§functions). Parameter types are bare children; the
     /// return is a [`NodeKind::RetType`], which is what tells them apart.
     FnType,
@@ -186,7 +199,7 @@ impl NodeKind {
     /// Every variant. Rust has no reflection, so this is written out — and
     /// kept honest by `every_kind_has_an_example`, which fails if a kind here
     /// never appears in `examples/`, and won't compile if one is missing.
-    pub const ALL: [NodeKind; 42] = {
+    pub const ALL: [NodeKind; 44] = {
         use NodeKind::*;
         [
             SourceFile,
@@ -213,6 +226,7 @@ impl NodeKind {
             UnitExpr,
             UnaryExpr,
             ComptimeExpr,
+            StructExpr,
             BinaryExpr,
             CastExpr,
             CallExpr,
@@ -228,6 +242,7 @@ impl NodeKind {
             LambdaParam,
             NamePat,
             NameType,
+            CallType,
             FnType,
             UnitType,
             Error,

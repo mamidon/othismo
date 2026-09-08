@@ -40,7 +40,10 @@ fn statement(cursor: &mut Cursor, terminator: TokenKind) {
     match cursor.peek() {
         TokenKind::Let => let_stmt(cursor),
         TokenKind::Fn => fn_decl(cursor),
-        TokenKind::Struct => struct_decl(cursor),
+        // Only the *named* form is a declaration. `struct { … }` with no name
+        // is an expression whose value is a type (§comptime), so it falls
+        // through to `expr_or_assign` like any other.
+        TokenKind::Struct if cursor.nth(1) == TokenKind::Ident => struct_decl(cursor),
         TokenKind::Type => type_alias(cursor),
         TokenKind::While => while_stmt(cursor),
         TokenKind::Break => jump(cursor, NodeKind::BreakStmt),
@@ -182,11 +185,20 @@ fn fn_decl(cursor: &mut Cursor) {
 }
 
 /// `struct Name { x: T, y: U, }` (§types).
+///
+/// The sugared form. §comptime makes it equivalent to `let Name = struct { …
+/// };`, and the anonymous half of that is [`crate::expr::struct_expr`] — so
+/// the two share [`field_decl_list`] and this keeps the shape it always had.
 fn struct_decl(cursor: &mut Cursor) {
     let mark = cursor.open(NodeKind::StructDecl);
     cursor.bump(); // `struct`
     cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
+    field_decl_list(cursor);
+    cursor.close(mark);
+}
 
+/// `{ x: T, y: U, }` — the body of a struct, named or not (§types).
+pub(crate) fn field_decl_list(cursor: &mut Cursor) {
     let fields = cursor.open(NodeKind::FieldDeclList);
     cursor.expect(TokenKind::BraceLeft, DiagnosticKind::ExpectedOpeningBrace);
     while !cursor.at(TokenKind::BraceRight) && !cursor.at_eof() {
@@ -203,7 +215,6 @@ fn struct_decl(cursor: &mut Cursor) {
     }
     cursor.expect(TokenKind::BraceRight, DiagnosticKind::ExpectedClosingBrace);
     cursor.close(fields);
-    cursor.close(mark);
 }
 
 /// `type Name = T ;` — a second name for one type, not a new one (§types).

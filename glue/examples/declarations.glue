@@ -139,6 +139,32 @@ let diagonal = Line {
   label: "diagonal",
 };
 
+// The named form is sugar, and works. §comptime makes a type a value, so
+// `struct Point { … }` above means `let Point = struct { … };` — the same
+// declaration, and a reader who never needs to know that never has to see it.
+//
+// The anonymous half is what a generic returns, since it has a type to produce
+// and no name to give it in advance. The binding lends its name to the type,
+// so the two forms produce the same IR and not merely the same meaning. The
+// one thing they do not share is position: a `struct` declaration hoists
+// (§scope) and a `let` runs in order, so only the named form can be used above
+// where it is written.
+let Pixel = struct { on: bool };
+let dark = Pixel { on: false };
+
+// An instantiation is a call, in a type position as anywhere else (§comptime,
+// §generics) — no angle brackets, and nothing for `<` to be ambiguous about.
+// Elaboration says "generic instantiation is not supported yet": evaluating
+// one needs a comptime call and a cache keyed on its arguments.
+//
+// `Pair` here is a stand-in with the wrong signature, because the right one —
+// `fn Pair(comptime A: Type, comptime B: Type) -> Type` — names two things
+// that do not exist yet. What the line below demonstrates is the *grammar*: a
+// call is a type. See `generics.glue` for what it is for.
+fn Pair(a: u64, b: u64) -> u64 { a + b }
+
+fn first_of(p: Pair(1, 2)) -> u64 { 0 }
+
 // ---- Type aliases ---------------------------------------------------------
 // An alias is a second name for one type, not a new one — `InstanceId` and
 // `u64` are interchangeable everywhere. A distinct type sharing a

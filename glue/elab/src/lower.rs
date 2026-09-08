@@ -62,6 +62,12 @@ enum Checked {
     /// is a smaller lie than wrapping would be.
     Int(i128),
     Float(f64),
+    /// §comptime: a type, as a value. Its own type is `Type`, and `Type` has no
+    /// runtime representation — so unlike the two constants above, this one
+    /// never pins. It is the second of the two variants `core-ir.md` names as
+    /// existing only in the comptime configuration; the unpinned integer is
+    /// the first, and it was here from the start.
+    Type(TypeId),
     /// A diagnostic has already been reported here. Poison, so that one mistake
     /// produces one message.
     Error,
@@ -77,8 +83,14 @@ enum Binding {
         cell: bool,
         mutable: bool,
     },
-    /// A binding whose initializer was an unpinned constant and which is never
-    /// assigned (§lexical). It has no slot and no type until it is used.
+    /// A binding with no storage: an unpinned constant that is never assigned
+    /// (§lexical), or a type (§comptime). Neither is a location, so neither
+    /// needs a slot, and a lambda naming one is not capturing anything.
+    ///
+    /// §comptime folds the two together on purpose. There used to be a
+    /// separate `Type` binding and a separate resolver for it, which is what
+    /// "types are values" removes: one namespace, one lookup, and a type
+    /// annotation is an expression that happens to evaluate to a `Type`.
     Const(Checked),
     /// §statements' top-level binding. Storage that outlives every frame, so
     /// reading one from inside a `fn` is not a capture and needs no
@@ -92,7 +104,6 @@ enum Binding {
         id: FuncId,
         ty: TypeId,
     },
-    Type(TypeId),
 }
 
 struct Scope {
@@ -147,6 +158,9 @@ struct Lowerer<'a> {
     t_u64: TypeId,
     t_s64: TypeId,
     t_f64: TypeId,
+    /// §comptime: the type of a type. Never reaches core IR — [`Lowerer::pin`]
+    /// is the one place that would let it, and refuses.
+    t_type: TypeId,
     t_error: TypeId,
     c_unit: ConstId,
 }
@@ -167,6 +181,7 @@ impl<'a> Lowerer<'a> {
             bits: 64,
         });
         let t_f64 = types.intern(TypeDef::Float { bits: 64 });
+        let t_type = types.intern(TypeDef::Type);
         let t_error = types.intern(TypeDef::Error);
 
         let mut consts = ir::consts::ConstPool::new();
@@ -195,6 +210,7 @@ impl<'a> Lowerer<'a> {
             t_u64,
             t_s64,
             t_f64,
+            t_type,
             t_error,
             c_unit,
         }
@@ -244,23 +260,29 @@ impl<'a> Lowerer<'a> {
 
     /// §lexical: type names are ordinary identifiers, not keywords, so they
     /// live in the outermost scope and a program may shadow them.
+    ///
+    /// §comptime: and they are ordinary *bindings*, holding a value of type
+    /// `Type`. `Type` itself is one of them — a predeclared name, not a
+    /// keyword, exactly as `u64` and `Str` are — which is the whole of what it
+    /// takes to add it.
     fn declare_prelude(&mut self) {
         let scalars: Vec<(String, TypeId)> = vec![
             ("bool".into(), self.t_bool),
             ("char".into(), self.t_char),
             ("Str".into(), self.t_str),
             ("f64".into(), self.t_f64),
+            ("Type".into(), self.t_type),
         ];
         for (name, ty) in scalars {
-            self.bind(name, Binding::Type(ty));
+            self.bind(name, Binding::Const(Checked::Type(ty)));
         }
         let f32 = self.program.types.intern(TypeDef::Float { bits: 32 });
-        self.bind("f32".into(), Binding::Type(f32));
+        self.bind("f32".into(), Binding::Const(Checked::Type(f32)));
         for bits in [8u8, 16, 32, 64] {
             for signed in [false, true] {
                 let ty = self.program.types.intern(TypeDef::Int { signed, bits });
                 let name = format!("{}{}", if signed { "s" } else { "u" }, bits);
-                self.bind(name, Binding::Type(ty));
+                self.bind(name, Binding::Const(Checked::Type(ty)));
             }
         }
     }
@@ -541,6 +563,15 @@ impl<'a> Lowerer<'a> {
     fn pin(&mut self, value: Checked, expect: Option<TypeId>, at: NodeId) -> (Operand, TypeId) {
         match value {
             Checked::Val(operand, ty) => {
+                // §comptime's boundary again, from the other side. A call may
+                // *return* a `Type` — that is what a generic is — so a value
+                // can carry a type with no runtime representation without ever
+                // having been a `Checked::Type`.
+                if !self.program.types.has_runtime_representation(ty) {
+                    let name = self.type_name(ty);
+                    self.error(DiagnosticKind::TypeIsNotARuntimeValue(name), at);
+                    return self.pinned_error();
+                }
                 if let Some(want) = expect
                     && !self.program.types.compatible(ty, want)
                 {
@@ -604,6 +635,18 @@ impl<'a> Lowerer<'a> {
                 };
                 (self.float_const(v, ty), ty)
             }
+            // §comptime's boundary, and the only place it is enforced. A
+            // comptime value crosses into a running program when its type has
+            // a runtime representation; `Type` is the one type that has none,
+            // so a type that reaches here was about to be stored in a slot,
+            // passed to a function, or returned — and there is nothing to put
+            // there. Refusing in `pin` covers every one of those at once,
+            // because pinning is what "becomes a runtime value" means.
+            Checked::Type(ty) => {
+                let name = self.type_name(ty);
+                self.error(DiagnosticKind::TypeIsNotARuntimeValue(name), at);
+                self.pinned_error()
+            }
             Checked::Error => self.pinned_error(),
         }
     }
@@ -617,6 +660,8 @@ impl<'a> Lowerer<'a> {
     fn known_type(&self, value: &Checked) -> Option<TypeId> {
         match value {
             Checked::Val(_, ty) => Some(*ty),
+            // §comptime: the type of a type is `Type`.
+            Checked::Type(_) => Some(self.t_type),
             _ => None,
         }
     }
@@ -685,7 +730,7 @@ impl Lowerer<'_> {
             {
                 let sym = self.program.syms.intern(&name);
                 let ty = self.program.types.fresh_struct(Some(sym), *child);
-                self.bind(name, Binding::Type(ty));
+                self.bind(name, Binding::Const(Checked::Type(ty)));
                 structs.push((*child, ty));
             }
         }
@@ -700,7 +745,7 @@ impl Lowerer<'_> {
                     Some(node) => self.resolve_type(node),
                     None => self.t_error,
                 };
-                self.bind(name, Binding::Type(ty));
+                self.bind(name, Binding::Const(Checked::Type(ty)));
             }
         }
 
@@ -736,7 +781,10 @@ impl Lowerer<'_> {
                 // §types: field types are required — there is no inference
                 // across a declaration boundary.
                 let ty = match cst::type_child(self.tree, decl) {
-                    Some(node) => self.resolve_type(node),
+                    Some(node) => {
+                        let ty = self.resolve_type(node);
+                        self.runtime_type(ty, node)
+                    }
                     None => self.t_error,
                 };
                 let sym = self.program.syms.intern(&name);
@@ -783,6 +831,7 @@ impl Lowerer<'_> {
     fn fn_signature(&mut self, node: NodeId) -> (Vec<ParamInfo>, TypeId) {
         let mut params = Vec::new();
         let mut ret = self.t_unit;
+        let mut comptime = false;
         for child in cst::nodes(self.tree, node) {
             match self.tree.kind(child) {
                 NodeKind::ParamList => {
@@ -799,27 +848,63 @@ impl Lowerer<'_> {
                         let mutable = cst::has_token(self.tree, param, TokenKind::Mut);
                         // §comptime is decided and unbuilt: a comptime
                         // parameter would make this function a generic, and
-                        // instantiating one needs `Type` in the value domain
-                        // and a cache keyed on comptime arguments. Reported
-                        // here rather than at the call, because it is the
+                        // instantiating one needs a comptime call into `eval`
+                        // and a cache keyed on the arguments. Reported here
+                        // rather than at the call, because it is the
                         // declaration that cannot be given a meaning.
-                        if cst::has_token(self.tree, param, TokenKind::Comptime) {
+                        let ty = if cst::has_token(self.tree, param, TokenKind::Comptime) {
                             self.error(DiagnosticKind::Unsupported("comptime"), param);
-                        }
+                            comptime = true;
+                            self.t_error
+                        } else {
+                            self.runtime_type(ty, param)
+                        };
                         params.push(ParamInfo { name, ty, mutable });
                     }
                 }
                 // §functions: omitted when the return type is unit.
                 NodeKind::RetType => {
                     ret = match cst::type_child(self.tree, child) {
-                        Some(node) => self.resolve_type(node),
+                        // A generic's `-> Type` is right and unbuilt, and its
+                        // comptime parameters were reported a few lines above.
+                        // `ParamList` precedes `RetType` in the tree, so by
+                        // here it is already known which this is.
+                        Some(node) if comptime => self.resolve_type(node),
+                        Some(node) => {
+                            let ty = self.resolve_type(node);
+                            self.runtime_type(ty, node)
+                        }
                         None => self.t_error,
                     };
                 }
                 _ => {}
             }
         }
+
+        // A generic's `-> Type` is right, and unbuilt. The comptime parameters
+        // were already reported, so the return type says nothing further —
+        // poisoning it is what keeps `Type` out of core IR without a second
+        // diagnostic about the same declaration.
+        if comptime {
+            ret = self.t_error;
+        }
         (params, ret)
+    }
+
+    /// A type in a position that has to hold a *runtime* value.
+    ///
+    /// §comptime: everything may cross from comptime to runtime except a
+    /// `Type`, which has no representation to cross as. Slots, globals,
+    /// parameters, returns, and fields all go through here or through
+    /// [`Lowerer::pin`], which is what makes "core IR is free of `Type`" a
+    /// property of the code rather than a promise in a comment.
+    fn runtime_type(&mut self, ty: TypeId, at: NodeId) -> TypeId {
+        if self.program.types.has_runtime_representation(ty) {
+            return ty;
+        }
+        let name = self.type_name(ty);
+        self.error(DiagnosticKind::TypeIsNotARuntimeValue(name), at);
+        self.t_error
     }
 
     fn stmt(&mut self, blk: BlockId, node: NodeId) {
@@ -856,6 +941,35 @@ impl Lowerer<'_> {
             Some(init) => self.expr(blk, init, annotation),
             None => Checked::Error,
         };
+
+        // §comptime: a type is a value with no runtime representation, so a
+        // binding holding one is a constant no matter what else is true of it.
+        // There is no slot to put it in, and no `mut` that could produce one —
+        // assigning to it is `NotAPlace`, like any other constant. This is the
+        // whole of §types' declaration forms becoming sugar:
+        // `let Point = struct { … };` binds here, and `struct Point { … }`
+        // means the same thing.
+        if let Checked::Type(ty) = value {
+            if let Some(want) = annotation
+                && !self.program.types.compatible(want, self.t_type)
+            {
+                let expected = self.type_name(want);
+                let found = self.type_name(self.t_type);
+                self.error(
+                    DiagnosticKind::TypeMismatch { expected, found },
+                    init.unwrap_or(node),
+                );
+                return;
+            }
+            // §comptime: `struct Point { … }` ≡ `let Point = struct { … };`,
+            // and a struct's name is for diagnostics rather than identity — so
+            // the binding lends its name to a type that has none, and the two
+            // forms produce the same IR rather than merely the same meaning.
+            let sym = self.program.syms.intern(&name);
+            self.program.types.name_struct(ty, sym);
+            self.bind(name, Binding::Const(Checked::Type(ty)));
+            return;
+        }
 
         // §lexical: a binding stays an unpinned constant when its initializer
         // is a constant expression and it is never assigned in its scope. Both
@@ -1528,6 +1642,17 @@ impl Lowerer<'_> {
                 self.error(DiagnosticKind::Unsupported("method calls"), node);
                 Checked::Error
             }
+            // §comptime's anonymous form, and §types' identity rule met from
+            // the other side: every *evaluation* of a `struct { … }`
+            // expression allocates a fresh type, so two identical ones written
+            // out by hand are two types. `fresh_struct` never interns, which
+            // is what makes that true rather than aspirational.
+            NodeKind::StructExpr => {
+                let ty = self.program.types.fresh_struct(None, node);
+                let fields = self.struct_fields(node);
+                self.program.types.set_fields(ty, fields);
+                Checked::Type(ty)
+            }
             NodeKind::ComptimeExpr => {
                 // §comptime is decided and unbuilt. The token parses so that
                 // the shape of these programs is settled and the language
@@ -1700,10 +1825,6 @@ impl Lowerer<'_> {
                 ty,
                 node,
             ),
-            Binding::Type(_) => {
-                self.error_at(DiagnosticKind::NotAValue(name), span);
-                Checked::Error
-            }
         }
     }
 
@@ -1795,6 +1916,13 @@ impl Lowerer<'_> {
                 Checked::Int(v) => Checked::Int(-v),
                 Checked::Float(v) => Checked::Float(-v),
                 Checked::Error => Checked::Error,
+                // §comptime leaves it open whether `Type` values support any
+                // operator at all. Until it says otherwise, none of them do,
+                // and `pin` gives the one answer.
+                Checked::Type(_) => {
+                    self.pin(value, None, operand_node);
+                    Checked::Error
+                }
                 Checked::Val(operand, ty) => {
                     if self.program.types.is_error(ty) {
                         return Checked::Error;
@@ -2253,6 +2381,12 @@ impl Lowerer<'_> {
         match value {
             Checked::Int(_) | Checked::Float(_) => return self.cast_const(value, target, node),
             Checked::Error => return Checked::Error,
+            // §expressions' `as` converts between runtime representations, and
+            // a type has none. `pin` is what says so.
+            Checked::Type(_) => {
+                self.pin(value, None, value_node);
+                return Checked::Error;
+            }
             Checked::Val(..) => {}
         }
 
@@ -2840,6 +2974,14 @@ impl Lowerer<'_> {
         match self.tree.kind(node) {
             NodeKind::NameType => self.resolve_type_name(node),
             NodeKind::UnitType => self.t_unit,
+            NodeKind::CallType => {
+                // §comptime: an instantiation is a call, and evaluating one
+                // needs a comptime call into `eval` plus a cache keyed on the
+                // arguments. Neither exists, so the annotation has no type to
+                // resolve to.
+                self.error(DiagnosticKind::Unsupported("generic instantiation"), node);
+                self.t_error
+            }
             NodeKind::FnType => {
                 let mut params = Vec::new();
                 let mut ret = self.t_unit;
@@ -2864,7 +3006,7 @@ impl Lowerer<'_> {
             return self.t_error;
         };
         match self.resolve(&name) {
-            Some((_, Binding::Type(ty))) => ty,
+            Some((_, Binding::Const(Checked::Type(ty)))) => ty,
             Some(_) => {
                 self.error_at(DiagnosticKind::NotAType(name), span);
                 self.t_error

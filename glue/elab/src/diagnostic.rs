@@ -42,6 +42,10 @@ pub enum DiagnosticKind {
     FnCapturesNothing(String),
     NotAType(String),
     NotAValue(String),
+    /// §comptime: `Type` is the one type with no runtime representation, so a
+    /// type may be computed and bound during elaboration and may not be
+    /// stored, passed, or returned by a running program.
+    TypeIsNotARuntimeValue(String),
 
     // ---- Types ------------------------------------------------------------
     TypeMismatch {
@@ -150,6 +154,11 @@ impl DiagnosticKind {
             ),
             NotAType(name) => format!("`{name}` is a value, not a type"),
             NotAValue(name) => format!("`{name}` is a type, not a value"),
+            TypeIsNotARuntimeValue(ty) => {
+                format!(
+                    "`{ty}` has no runtime representation — types exist only during compilation"
+                )
+            }
             TypeMismatch { expected, found } => format!("expected `{expected}`, found `{found}`"),
             ConditionNotBool(found) => format!(
                 "a condition must be `bool`, and this is `{found}` — there is no truthiness"

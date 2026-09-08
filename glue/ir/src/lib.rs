@@ -46,8 +46,16 @@
 //!   is open.
 //!
 //! Also unrepresented, and further out: `match` and patterns (§unions), traits
-//! and operator overloading (§types, §objects), `Type` and generics
-//! (§generics, §comptime).
+//! and operator overloading (§types, §objects), and generics (§generics,
+//! §comptime).
+//!
+//! [`types::TypeDef::Type`] is the exception that proves the rule. It exists in
+//! the type table, because elaboration needs something to give a type value as
+//! *its* type — and no [`Program`] ever contains a slot, global, field,
+//! parameter, or return typed with it. §comptime says `Type` has no runtime
+//! representation; `elab` refuses every position that would put one here, so
+//! "core IR is free of `Type`" is a property of the code rather than a
+//! promise.
 //!
 //! # The one thing to know about the shape
 //!
