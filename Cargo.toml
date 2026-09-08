@@ -1,5 +1,5 @@
 [workspace]
-members = ["glue/interpreter","glue/ir","glue/lsp","glue/parser","glue/tokenizer",
+members = ["glue/elab","glue/eval","glue/interpreter","glue/ir","glue/lsp","glue/parser","glue/tokenizer",
     "othismo",
     "prototype",
     "sdk"

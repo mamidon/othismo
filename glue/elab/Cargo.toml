@@ -1,15 +1,14 @@
 [package]
-name = "interpreter"
+name = "elab"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-elab = { path = "../elab" }
 eval = { path = "../eval" }
 ir = { path = "../ir" }
 parser = { path = "../parser" }
 tokenizer = { path = "../tokenizer" }
 
 [[bin]]
-name = "glue"
+name = "glue-ir"
 path = "src/main.rs"

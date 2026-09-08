@@ -5,7 +5,9 @@
 //! checks a whole dump is checking the *shape* of the IR; one that checks a
 //! diagnostic is checking a rule.
 
-use crate::{DiagnosticKind, Program, dump, lower};
+use ir::{Program, dump};
+
+use crate::{DiagnosticKind, lower};
 
 fn lowered(source: &str) -> (Program, Vec<String>) {
     let parse = parser::parse(source);

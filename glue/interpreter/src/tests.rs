@@ -11,8 +11,9 @@
 //! constant expressions at compile time, so a test that wants a *trap* has to
 //! route its operands through a function — `255u8 + 1` never runs at all.
 
-use crate::error::TrapKind::{self, *};
-use crate::value::{IntTy, Value};
+use eval::TrapKind::{self, *};
+use eval::{IntTy, Value};
+
 use crate::{Error, run};
 
 #[track_caller]

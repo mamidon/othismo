@@ -1,42 +1,16 @@
-//! What stops a program mid-flight.
+//! A trap, located where a person can read it.
 //!
-//! The list is short, and complete, and that is the point of having elaborated
-//! first. Everything this crate used to refuse — an unbound name, a condition
-//! that isn't `bool`, the wrong number of arguments, `1 + 1.5` — is an
-//! [`ir::Diagnostic`] before the program runs. What is left is §expressions'
-//! traps: the operations that are well typed and still have no answer.
-//!
-//! Every trap is fatal. §errors hasn't decided what a trap is or whether one
-//! is recoverable, so the interpreter does the one thing that can't be wrong
-//! in advance of that decision: it stops, and says where.
-//!
-//! # Two types, one shape
-//!
-//! [`Trap`] carries a [`CstId`] — core IR's provenance, which is what the
-//! executor has. [`RuntimeError`] carries a [`Span`], which is what a person
-//! reading a terminal needs. The conversion happens in [`crate::run`], the one
-//! place that still holds the tree. Everything below the seam talks about IR
-//! nodes; everything above it talks about source.
+//! The other half of `eval::Trap`. Below the seam a failure carries a
+//! `CstId`, because core IR's provenance is all the executor has; above it a
+//! failure carries a [`Span`], because that is what a person reading a
+//! terminal needs. [`crate::run`] does the conversion, since it is the one
+//! place that still holds the tree.
 
 use std::fmt;
 
-use ir::program::CstId;
+use eval::TrapKind;
 use tokenizer::Span;
 
-/// A trap, located where the executor can locate it.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Trap {
-    pub kind: TrapKind,
-    pub at: CstId,
-}
-
-impl Trap {
-    pub fn new(kind: TrapKind, at: CstId) -> Trap {
-        Trap { kind, at }
-    }
-}
-
-/// A trap, located where a person can read it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RuntimeError {
     pub kind: TrapKind,
@@ -56,41 +30,3 @@ impl fmt::Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TrapKind {
-    /// §expressions: overflow is an error, not a wrap. wasm's native behaviour
-    /// is silent wrapping, so this is a check the interpreter pays for
-    /// deliberately — and §lexical's widths are what make it reachable at all.
-    Overflow {
-        operator: &'static str,
-        ty: String,
-    },
-    DividedByZero,
-    /// §expressions: `as` is explicit and trapping. Truncation and rounding
-    /// are defined behaviour rather than traps, so this is the conversion with
-    /// no representable answer — an integer too wide for its target, or a
-    /// float past the edges of one.
-    CastOutOfRange {
-        value: String,
-        ty: String,
-    },
-    /// §functions: there is no tail-call guarantee, so deep recursion exhausts
-    /// the stack and traps. This is that trap, raised at a depth the host
-    /// stack still has room for rather than by falling off it.
-    RecursionLimit,
-}
-
-impl fmt::Display for TrapKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use TrapKind::*;
-        match self {
-            Overflow { operator, ty } => write!(f, "`{operator}` overflowed `{ty}`"),
-            DividedByZero => f.write_str("divided by zero"),
-            CastOutOfRange { value, ty } => write!(f, "{value} does not fit in `{ty}`"),
-            RecursionLimit => f.write_str(
-                "recursion went too deep — there are no tail calls, so an unbounded recursion needs a loop or a worklist"
-            ),
-        }
-    }
-}

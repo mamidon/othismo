@@ -1,16 +1,25 @@
-//! Glue core IR: concrete syntax tree in, a typed monomorphic program out.
+//! Glue core IR: the typed, monomorphic program both back ends consume.
 //!
-//! This is the representation both back ends consume — the concrete form of
-//! goal §both-modes' shared front end, and the thing §comptime names when it
-//! says elaboration "lowers to a core IR: typed, monomorphic, and free of
-//! comptime, generics, and `Type`". The design and the decisions behind it are
-//! in `scratch/core-ir.md`; this crate is that document, executable.
+//! This is the concrete form of goal §both-modes' shared front end, and the
+//! thing §comptime names when it says elaboration "lowers to a core IR: typed,
+//! monomorphic, and free of comptime, generics, and `Type`". The design and
+//! the decisions behind it are in `scratch/core-ir.md`; this crate is that
+//! document, executable.
 //!
-//! ```
-//! let parse = parser::parse("let x = 2; x * 21");
-//! let lowered = ir::lower(&parse.tree, "let x = 2; x * 21");
-//! assert!(lowered.diagnostics.is_empty());
-//! println!("{}", ir::dump(&lowered.program));
+//! # Representation only
+//!
+//! Nothing here builds a [`Program`] and nothing here runs one. `elab`
+//! produces one from a concrete syntax tree; `eval` executes one. That split
+//! is what `core-ir.md` decision 2 needs: the interpreter is also the
+//! *comptime* engine, so elaboration has to be able to call it, and an
+//! evaluator living inside the representation it evaluates would close the
+//! loop the wrong way round.
+//!
+//! ```text
+//! tokenizer ← parser ← ir
+//!                      ir ← eval
+//!               ir, eval ← elab
+//!                          elab ← interpreter, lsp
 //! ```
 //!
 //! # What is here
@@ -18,8 +27,7 @@
 //! * [`program`] — the instruction set, and the three invariants that shape it.
 //! * [`types`] — the type table, nominal for structs and interned otherwise.
 //! * [`consts`] — the constant pool, which is where comptime results will land.
-//! * [`lower`] — elaboration: name resolution, type checking, A-normal form,
-//!   capture analysis, and slot allocation, in one pass over the CST.
+//! * [`sym`] — interned names, kept for diagnostics and dumps and nothing else.
 //! * [`print`] — the s-expression dump.
 //!
 //! # What is deliberately absent
@@ -51,19 +59,10 @@
 //! neither back end implements laziness.
 
 pub mod consts;
-pub mod cst;
-pub mod diagnostic;
-pub mod lower;
 pub mod print;
 pub mod program;
-pub mod scan;
 pub mod sym;
 pub mod types;
 
-#[cfg(test)]
-mod tests;
-
-pub use crate::diagnostic::{Diagnostic, DiagnosticKind};
-pub use crate::lower::{Lowered, lower};
 pub use crate::print::{dump, dump_func};
 pub use crate::program::Program;

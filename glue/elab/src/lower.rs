@@ -25,19 +25,19 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use parser::{NodeId, NodeKind, Tree};
-use tokenizer::{Literal, NumericType, Span, TokenKind};
-
-use crate::consts::{Const, ConstId};
-use crate::cst;
-use crate::diagnostic::{Diagnostic, DiagnosticKind};
-use crate::program::{
+use ir::consts::{Const, ConstId};
+use ir::program::{
     BinOp, Block, BlockId, CstId, Func, FuncId, GlobalDef, GlobalId, Operand, Place, Program,
     Rvalue, Slot, SlotDef, SlotKind, Stmt, UnOp,
 };
+use ir::sym::{Interner, Sym};
+use ir::types::{FieldDef, FieldIdx, TypeDef, TypeId, Types};
+use parser::{NodeId, NodeKind, Tree};
+use tokenizer::{Literal, NumericType, Span, TokenKind};
+
+use crate::cst;
+use crate::diagnostic::{Diagnostic, DiagnosticKind};
 use crate::scan::{self, BlockFacts};
-use crate::sym::{Interner, Sym};
-use crate::types::{FieldDef, FieldIdx, TypeDef, TypeId, Types};
 
 pub struct Lowered {
     pub program: Program,
@@ -169,7 +169,7 @@ impl<'a> Lowerer<'a> {
         let t_f64 = types.intern(TypeDef::Float { bits: 64 });
         let t_error = types.intern(TypeDef::Error);
 
-        let mut consts = crate::consts::ConstPool::new();
+        let mut consts = ir::consts::ConstPool::new();
         let c_unit = consts.add(Const::Unit);
 
         Lowerer {
@@ -280,7 +280,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn type_name(&self, ty: TypeId) -> String {
-        crate::program::type_name(&self.program.types, &self.program.syms, ty)
+        ir::program::type_name(&self.program.types, &self.program.syms, ty)
     }
 
     // ---- Functions and blocks ---------------------------------------------

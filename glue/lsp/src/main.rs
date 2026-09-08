@@ -113,7 +113,7 @@ fn diagnostics_for(text: &str) -> Vec<Diagnostic> {
 
     let syntax_is_clean = lexed.diagnostics.is_empty() && parsed.diagnostics.is_empty();
     let elaborated = syntax_is_clean
-        .then(|| ir::lower(&parsed.tree, text).diagnostics)
+        .then(|| elab::lower(&parsed.tree, text).diagnostics)
         .unwrap_or_default();
     let semantic = elaborated.iter().map(|diagnostic| {
         (

@@ -7,9 +7,11 @@
 > [§comptime](constructs/14-metaprogramming-and-tooling.md#what-reaches-the-back-ends);
 > specified here.
 >
-> **Implemented in `../ir/`.** The crate is this document executable: `ir::lower` takes a
-> CST and returns a `Program` plus diagnostics, and `ir::dump` renders it. Where the two
-> disagree the crate is wrong, except where this document says otherwise and dates it.
+> **Implemented in `../ir/`, `../elab/`, and `../eval/`.** The crates are this document
+> executable: `elab::lower` takes a CST and returns a `Program` plus diagnostics,
+> `ir::dump` renders it, and `eval::eval` runs it. Where the two disagree the crates are
+> wrong, except where this document says otherwise and dates it. See *Crate layout*, below,
+> for why that is three crates and not one.
 
 ## What this is
 
@@ -318,21 +320,30 @@ instantiated it.
 
 ### Crate layout
 
-Today, `ir` holds the representation, elaboration, and the dump:
+**Split 2026-09-07.** `ir` used to hold the representation, elaboration, and the dump
+together. It now holds representation and the dump only:
 
 ```
-tokenizer ← parser ← ir
+tokenizer ← parser ← ir      (program, types, consts, syms, print)
+                     ir ← eval   (executes a Program)
+              ir, eval ← elab   (produces a Program; runs eval for comptime)
+                         elab ← interpreter, lsp, wasm
 ```
 
-Where it goes, once decision 2's evaluator exists. Elaboration and evaluation are mutually
-recursive (§comptime), so they end up in one crate or with `elab` depending on `eval`:
+Elaboration and evaluation are mutually recursive (§comptime), so elaboration cannot live
+in the crate the evaluator depends on. The split was made *before* `comptime` has a token,
+because it is the shape the feature lands on rather than part of it: `elab` declares its
+dependency on `eval` and does not yet call it.
 
-```
-ir    ← eval  (executes a Program)
-ir, eval ← elab  (produces a Program; runs eval for comptime)
-ir    ← wasm
-ir    ← lsp
-```
+Two consequences of the boundary, both of which fell out rather than being designed:
+
+- **`ir` no longer depends on `tokenizer`.** Nothing in the representation talks about
+  source text. Spans belong to diagnostics, and diagnostics belong to elaboration.
+- **A failure splits at the same seam as everything else.** `eval::Trap` carries a
+  `CstId`, which is core IR's provenance and all the executor has;
+  `interpreter::RuntimeError` carries a `Span`, and the conversion happens in the one
+  place still holding the tree. The doc comment describing that division predated the
+  split and now describes a crate boundary rather than two types in one file.
 
 The wasm back end does not depend on the evaluator: by the time it runs, elaboration has
 already folded every comptime expression.
@@ -365,11 +376,22 @@ the interpreter and by compiled wasm, and the observable results must be identic
 Decision 2 makes the interpreter the reference semantics in a stronger sense than that —
 it is also what computed every comptime value the wasm build contains.
 
-**The CST interpreter currently under construction is a bring-up artifact.** It sits at
-the wrong end of the pipeline, and semantics that accumulate in it — name resolution,
-coercion, evaluation order — live nowhere else, which is exactly the divergence goal
-§both-modes names. It should take core IR as its input before there is a second back end
-to disagree with.
+**Done, 2026-08-19.** This used to say that the CST interpreter then under construction
+was a bring-up artifact sitting at the wrong end of the pipeline, and that it should take
+core IR as its input before there was a second back end to disagree with. It does. The
+tree walker was retired the day after this document was written, and the semantics that
+had accumulated in it — name resolution, coercion, evaluation order — moved into
+elaboration, which is the only place they can be stated once for both back ends.
+
+`eval` takes a `Program` and nothing else: no tree, no names, no source. That is the
+property the conformance suite needs, and since the crate split it is enforced by the
+crate graph rather than by intention — `eval` does not declare `parser`, so a `Tree` is
+not a thing it can name. The one type that reaches it from there is `CstId`, which is a
+`NodeId` it carries on a trap and never looks inside. There is no tree for a semantics to
+accumulate against.
+
+**Nothing is being conformed yet.** There is one back end, and the suite this section
+describes attaches the day there are two.
 
 ---
 

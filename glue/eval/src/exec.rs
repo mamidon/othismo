@@ -41,8 +41,8 @@ use ir::consts::{Const, ConstId};
 use ir::program::{BlockId, CstId, Func, FuncId, Operand, Place, Program, Rvalue, Stmt};
 use ir::types::{TypeDef, TypeId};
 
-use crate::error::{Trap, TrapKind};
 use crate::ops;
+use crate::trap::{Trap, TrapKind};
 use crate::value::{Closure, IntTy, StructShape, StructVal, Value};
 
 /// How deep a call chain may go.

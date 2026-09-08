@@ -36,7 +36,7 @@ use std::rc::Rc;
 
 use ir::program::{BinOp, UnOp};
 
-use crate::error::TrapKind;
+use crate::trap::TrapKind;
 use crate::value::{IntTy, Value};
 
 /// The failure carries no location — the caller has the statement's [`CstId`]

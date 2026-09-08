@@ -74,7 +74,7 @@ const DECLARATION: u32 = 1 << 0;
 const DEFAULT_LIBRARY: u32 = 1 << 1;
 
 /// The predeclared type names (§lexical, §types). Kept in step with
-/// `ir::lower`'s prelude by hand; a name missing here is coloured as an
+/// `elab::lower`'s prelude by hand; a name missing here is coloured as an
 /// ordinary type, which is wrong but not misleading.
 const BUILTIN_TYPES: [&str; 15] = [
     "bool", "char", "Str", "f32", "f64", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64",

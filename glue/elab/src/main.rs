@@ -56,7 +56,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let lowered = ir::lower(&parse.tree, &source);
+    let lowered = elab::lower(&parse.tree, &source);
     for diagnostic in &lowered.diagnostics {
         let (line, column) = position(&source, diagnostic.span.start);
         eprintln!("{name}:{line}:{column}: {}", diagnostic.message());

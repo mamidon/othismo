@@ -1,11 +1,16 @@
 //! Glue interpreter: source in, a value out.
 //!
-//! Source is parsed, elaborated to core IR by `ir`, and executed. The
-//! interpreter used to walk the concrete syntax tree instead; that was a
+//! Source is parsed, elaborated to core IR by `elab`, and executed by `eval`.
+//! The interpreter used to walk the concrete syntax tree instead; that was a
 //! bring-up artifact, and it sat at the wrong end of the pipeline — name
 //! resolution, coercion, and evaluation order accumulated in it and lived
 //! nowhere else, which is exactly the divergence goal §both-modes names. They
 //! live in elaboration now, where the wasm back end will read them too.
+//!
+//! What is left here is the driver: parse, elaborate, run, and turn whatever
+//! went wrong into something with a source span on it. The execution itself is
+//! `eval`, a crate rather than a module because `elab` has to be able to call
+//! it for §comptime.
 //!
 //! ```
 //! use interpreter::{Value, run};
@@ -40,7 +45,7 @@
 //!
 //! **Most of what used to be a runtime error is a compile error.** An unbound
 //! name, a condition that isn't `bool`, the wrong number of arguments, `1 +
-//! 1.5` — all of them are [`ir::Diagnostic`]s now, reported before anything
+//! 1.5` — all of them are [`elab::Diagnostic`]s now, reported before anything
 //! runs. §expressions' "constant expressions are checked at compile time
 //! rather than trapping" moves further still: `1 / 0` is a diagnostic, and the
 //! trap needs a value that isn't constant.
@@ -49,19 +54,15 @@
 //! zero, and the recursion limit.
 
 mod error;
-mod exec;
-mod ops;
-mod value;
 
 #[cfg(test)]
 mod tests;
 
-pub use crate::error::{RuntimeError, Trap, TrapKind};
-pub use crate::value::{IntTy, Value};
+pub use crate::error::RuntimeError;
+pub use eval::{IntTy, Trap, TrapKind, Value, eval};
 
 use std::fmt;
 
-use ir::Program;
 use parser::Tree;
 use tokenizer::{Severity, Span};
 
@@ -75,7 +76,7 @@ pub enum Error {
     Syntax(Vec<SyntaxError>),
     /// Name resolution and type checking (§inference, §scope), in source
     /// order.
-    Elaboration(Vec<ir::Diagnostic>),
+    Elaboration(Vec<elab::Diagnostic>),
     Runtime(RuntimeError),
 }
 
@@ -133,7 +134,7 @@ pub fn run(source: &str) -> Result<Value, Error> {
     }
 
     let parse = parser::parse(source);
-    let lowered = ir::lower(&parse.tree, source);
+    let lowered = elab::lower(&parse.tree, source);
     if !lowered.diagnostics.is_empty() {
         return Err(Error::Elaboration(lowered.diagnostics));
     }
@@ -169,16 +170,6 @@ pub fn syntax_errors(source: &str) -> Vec<SyntaxError> {
     let mut errors: Vec<_> = lexical.chain(grammatical).collect();
     errors.sort_by_key(|error| error.span.start);
     errors
-}
-
-/// Runs an already-elaborated program.
-///
-/// The seam goal §both-modes asks for: this takes core IR and nothing else, so
-/// what it computes is what a wasm back end reading the same IR has to
-/// compute. A trap carries the IR node it happened at rather than a span,
-/// because the IR is all this side of the seam can see.
-pub fn eval(program: &Program) -> Result<Value, Trap> {
-    exec::Machine::new(program).run()
 }
 
 /// Where a piece of IR came from, in the file.
