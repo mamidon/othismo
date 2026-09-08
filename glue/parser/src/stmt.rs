@@ -146,6 +146,11 @@ fn fn_decl(cursor: &mut Cursor) {
     cursor.expect(TokenKind::ParenLeft, DiagnosticKind::ExpectedOpeningParen);
     while !cursor.at(TokenKind::ParenRight) && !cursor.at_eof() {
         let param = cursor.open(NodeKind::Param);
+        // §comptime: the argument must be known at compile time. It belongs to
+        // the parameter, like `mut` below — but it is written *before* the
+        // name rather than after the colon, because it constrains the argument
+        // rather than modifying the type.
+        cursor.eat(TokenKind::Comptime);
         cursor.expect(TokenKind::Ident, DiagnosticKind::ExpectedName);
         // §functions: parameter types are required — signatures are annotated,
         // bodies inferred, and that boundary is what lets a reader know what a

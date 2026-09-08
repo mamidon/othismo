@@ -128,6 +128,12 @@ pub enum NodeKind {
     UnitExpr,
     /// Prefix `-`, `!`, `~`.
     UnaryExpr,
+    /// `comptime expr` (§comptime) — the expression must be evaluated during
+    /// compilation, and it is an error when nothing establishes that it can
+    /// be. The parameter position of the same keyword is a token on
+    /// [`NodeKind::Param`] rather than a node, since it modifies a parameter
+    /// that already has one.
+    ComptimeExpr,
     BinaryExpr,
     /// `x as T` (§expressions) — explicit and trapping.
     CastExpr,
@@ -180,7 +186,7 @@ impl NodeKind {
     /// Every variant. Rust has no reflection, so this is written out — and
     /// kept honest by `every_kind_has_an_example`, which fails if a kind here
     /// never appears in `examples/`, and won't compile if one is missing.
-    pub const ALL: [NodeKind; 41] = {
+    pub const ALL: [NodeKind; 42] = {
         use NodeKind::*;
         [
             SourceFile,
@@ -206,6 +212,7 @@ impl NodeKind {
             ParenExpr,
             UnitExpr,
             UnaryExpr,
+            ComptimeExpr,
             BinaryExpr,
             CastExpr,
             CallExpr,

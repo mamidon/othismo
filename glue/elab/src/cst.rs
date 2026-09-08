@@ -72,6 +72,7 @@ pub fn is_expr(kind: NodeKind) -> bool {
             | ParenExpr
             | UnitExpr
             | UnaryExpr
+            | ComptimeExpr
             | BinaryExpr
             | CastExpr
             | CallExpr

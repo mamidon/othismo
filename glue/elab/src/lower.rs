@@ -797,6 +797,15 @@ impl Lowerer<'_> {
                         // §functions: `mut` belongs to the parameter, not the
                         // type.
                         let mutable = cst::has_token(self.tree, param, TokenKind::Mut);
+                        // §comptime is decided and unbuilt: a comptime
+                        // parameter would make this function a generic, and
+                        // instantiating one needs `Type` in the value domain
+                        // and a cache keyed on comptime arguments. Reported
+                        // here rather than at the call, because it is the
+                        // declaration that cannot be given a meaning.
+                        if cst::has_token(self.tree, param, TokenKind::Comptime) {
+                            self.error(DiagnosticKind::Unsupported("comptime"), param);
+                        }
                         params.push(ParamInfo { name, ty, mutable });
                     }
                 }
@@ -1517,6 +1526,19 @@ impl Lowerer<'_> {
                 // question of whether `.` on a reference is a local call or a
                 // message send.
                 self.error(DiagnosticKind::Unsupported("method calls"), node);
+                Checked::Error
+            }
+            NodeKind::ComptimeExpr => {
+                // §comptime is decided and unbuilt. The token parses so that
+                // the shape of these programs is settled and the language
+                // server has something to colour; evaluating one needs `Type`
+                // in the value domain and the instantiation cache, neither of
+                // which exists. The inner expression is still walked, so a
+                // mistake inside it is reported too.
+                self.error(DiagnosticKind::Unsupported("comptime"), node);
+                if let Some(&inner) = cst::expr_children(self.tree, node).first() {
+                    self.expr(blk, inner, expect);
+                }
                 Checked::Error
             }
             // The parser reported it and kept the bytes. Nothing to add.

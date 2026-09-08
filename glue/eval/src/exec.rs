@@ -552,7 +552,7 @@ fn constant(program: &Program, id: ConstId) -> Value {
         Const::Char(value) => Value::Char(*value),
         Const::Str(text) => Value::Str(text.clone()),
         // §comptime's, and lowering builds none yet: a struct constant is what
-        // a comptime evaluation freezes, and `comptime` has no token.
+        // a comptime evaluation freezes, and nothing evaluates one yet.
         Const::Struct { .. } => unreachable!("lowering produces no struct constant"),
     }
 }

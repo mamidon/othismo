@@ -30,7 +30,10 @@
 //! crate exists apart from `ir`, and the seam §comptime lands on: a comptime
 //! call reaches a callee, the callee is elaborated at the point its comptime
 //! parameters are bound, and the result is cached on `(declaration, comptime
-//! arguments)`. None of that is built — `comptime` has no token.
+//! arguments)`. None of that is built. `comptime` lexes and parses as of
+//! 2026-09-07 and elaborates to "comptime is not supported yet" in both of its
+//! positions; `Type`, the instantiation cache, and the call into `eval` are
+//! what remain.
 //!
 //! # What is here
 //!

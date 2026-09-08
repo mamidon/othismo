@@ -23,7 +23,7 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 
 | Area | Syntax | Semantics | Implementation |
 | --- | --- | --- | --- |
-| `comptime` — a parameter position and an expression prefix | ✓ | ✓ | — |
+| `comptime` — a parameter position and an expression prefix | ✓ | ✓ | ◑ |
 | `Type` as a value with no runtime representation | ✓ | ✓ | — |
 | Generics as functions over `Type` | ✓ | ✓ | — |
 | Instantiation memoized on `(declaration, arguments)` | · | ✓ | — |
@@ -40,8 +40,15 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Test declarations | — | — | — |
 
 **The widest gap between decided and built in the whole checklist.** The compile-time
-evaluation rows are settled in detail and implemented nowhere: `comptime` has no token, so
-there is no `Type`, no instantiation cache, and no second configuration of the evaluator.
+evaluation rows are settled in detail and implemented almost nowhere.
+
+The first row is ◑ as of **2026-09-07**: `comptime` is a token, it parses in both of its
+positions, and elaboration answers either one with "comptime is not supported yet". That
+is a spelling and a refusal — behind it there is no `Type`, no instantiation cache, and no
+second configuration of the evaluator. It was built ahead of the semantics on purpose, so
+that these programs have a settled shape and the language server has something to colour
+before there is anything to run.
+
 What *is* built is the thing those decisions were made for — core IR, specified in
 [`../core-ir.md`](../core-ir.md) and implemented in `glue/ir`. The sugar row is ◑ because
 `struct Point { … }` and `type X = …` both work while the anonymous `struct { … }`

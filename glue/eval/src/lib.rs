@@ -13,7 +13,7 @@
 //! goal §both-modes' thesis applied one level up.
 //!
 //! What that decision asks for and this crate does not have yet, because
-//! `comptime` has no token: a second **configuration** — a fuel budget, a
+//! nothing evaluates a `comptime` yet: a second **configuration** — a fuel budget, a
 //! recursion cap tighter than the stack, host imports denied, `Type` values
 //! permitted, and a trap reported as a diagnostic rather than raised. Two
 //! configurations, not two programs.

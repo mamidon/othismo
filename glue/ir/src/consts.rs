@@ -1,6 +1,7 @@
 //! The constant pool: where comptime results land.
 //!
-//! Today this holds literals, because §comptime's `comptime` has no token yet.
+//! Today this holds literals. `comptime` lexes and parses as of 2026-09-07,
+//! but nothing evaluates one, so no comptime result has ever landed here.
 //! The shape is chosen for what it has to hold once it does.
 //!
 //! A [`Const::Struct`] holds `ConstId`s rather than nested values, so

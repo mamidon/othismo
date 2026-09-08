@@ -629,8 +629,9 @@ fn a_struct_may_name_itself() {
 
 // ---- The examples ----------------------------------------------------------
 
-/// Every file in `examples/`, which `parser` already asserts lexes, parses,
-/// and round-trips.
+/// The examples that parse cleanly, which `parser` already asserts lex, parse,
+/// and round-trip. `generics.glue` is deliberately absent — §comptime is
+/// decided and unbuilt, so it is a target rather than a program.
 const EXAMPLES: [(&str, &str); 6] = [
     ("hello.glue", include_str!("../../examples/hello.glue")),
     (
@@ -689,5 +690,29 @@ fn unstarted_sections_say_so() {
     assert_eq!(
         only_error("let s = \"abc\"; s.len()"),
         "method calls is not supported yet"
+    );
+    // §comptime has a token and nothing behind it. Both of the keyword's
+    // positions say so — the parameter one at the declaration, because that is
+    // what has no meaning, rather than at whatever calls it.
+    assert_eq!(
+        only_error("fn twice(n: u64) -> u64 { n + n } let t = comptime twice(21);"),
+        "comptime is not supported yet"
+    );
+    assert_eq!(
+        only_error("fn Pair(comptime A: u64) -> u64 { A }"),
+        "comptime is not supported yet"
+    );
+}
+
+/// A mistake *inside* a `comptime` expression is still reported. The construct
+/// has no meaning yet, and that is no reason to stop reading the program.
+#[test]
+fn a_comptime_expression_is_still_walked() {
+    assert_eq!(
+        errors("let x = comptime nope();"),
+        [
+            "comptime is not supported yet",
+            "no binding named `nope` is in scope"
+        ]
     );
 }

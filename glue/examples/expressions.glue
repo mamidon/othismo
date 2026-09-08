@@ -169,6 +169,19 @@ let l5 = a + b == c;           // ((a + b) == c)         `+` over comparison
 let l6 = ok && b == c;         // (ok && (b == c))       comparison over `&&`
 let l7 = ok || ready && ok;    // (ok || (ready && ok))  `&&` over `||`
 
+// §comptime's prefix — "this must be evaluated during compilation" — takes the
+// same rung as `-` and `!`. So it covers a call, which is the only form
+// §comptime ever writes, and stops short of a sum, which is spelled
+// `comptime (a + b)` when that is what is meant. Choosing an existing rung is
+// what makes this no new rule; §comptime does not settle it either way.
+//
+// It elaborates to "comptime is not supported yet". The token exists so these
+// programs have a settled shape and the language server has something to
+// colour; `Type`, the instantiation cache, and the second evaluator
+// configuration do not exist yet. See `generics.glue`.
+let l8 = comptime f(1, 2);     // (comptime (f 1 2))     postfix over comptime
+let l9 = comptime a + b;       // ((comptime a) + b)     comptime over `+`
+
 // Every binary operator is left-associative.
 let leans_left = a - b - c;    // ((a - b) - c)
 

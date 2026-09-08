@@ -55,7 +55,19 @@ pub fn expr(cursor: &mut Cursor) -> Closed {
 }
 
 fn expr_bp(cursor: &mut Cursor, min_bp: u8) -> Closed {
-    let mut lhs = if is_unary_operator(cursor.peek()) {
+    let mut lhs = if cursor.at(TokenKind::Comptime) {
+        // §comptime's second position: a prefix saying this must be evaluated
+        // during compilation. It binds at [`level::UNARY`], so `comptime f(x)`
+        // covers the call — postfix binds tighter — while `comptime a + b` is
+        // `(comptime a) + b` and the whole sum is spelled `comptime (a + b)`.
+        // §comptime writes only `comptime build_table(256)`, which both
+        // readings agree on; taking the same rung as `-` and `!` is the choice
+        // that adds no rule.
+        let mark = cursor.open(NodeKind::ComptimeExpr);
+        cursor.bump();
+        expr_bp(cursor, level::UNARY * 2);
+        cursor.close(mark)
+    } else if is_unary_operator(cursor.peek()) {
         let mark = cursor.open(NodeKind::UnaryExpr);
         cursor.bump();
         expr_bp(cursor, level::UNARY * 2);

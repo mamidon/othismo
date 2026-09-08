@@ -1,0 +1,223 @@
+// §comptime and §generics — types are values, and a generic is a function.
+//
+// **None of this runs, and most of it does not parse.** As of 2026-09-07
+// `comptime` is a token, so every signature below reads as intended and
+// `comptime checksum(256u64)` is a real expression — but elaboration answers
+// both with "comptime is not supported yet", because there is no `Type` in the
+// value domain, no instantiation cache, and no second configuration of the
+// evaluator behind them.
+//
+// Two spellings this file needs are still not in the grammar, and they are
+// where the syntax errors come from:
+//
+//   * the anonymous `struct { … }` **expression** that every generic here
+//     returns — "expected a name" after `struct`;
+//   * a **call in type position**, `p: Pair(s64, s64)` — the type grammar has
+//     names, `fn(…) -> …`, and `()`, and no postfix rung.
+//
+// So `glue-ir` reports a good deal about this file, which is the correct
+// answer to it today.
+//
+// It is here as a target. §comptime decided this design on 2026-08-18 and
+// implemented none of it, and the gap between those two facts is the widest in
+// the checklist — so the decision is written out as programs, where it is
+// easier to notice that something is wrong with it.
+//
+// The one thing to know before reading: §generics has no syntax. There are no
+// angle brackets in this file and no turbofish, because a generic is a
+// function that takes a type and returns one, and an instantiation is a call.
+// §expressions' postfix rung already parses every line of it.
+
+// ---- A generic type is a function that returns one -------------------------
+
+// The conventional spelling on the left is sugar for the one on the right
+// (§comptime, jointly with §types). Both declare the same thing, and a reader
+// who never needs to know that a type is a value never has to see the second.
+//
+//   struct Point { x: s64, y: s64 }   ≡   let Point = struct { x: s64, y: s64 };
+//   type InstanceId = u64;            ≡   let InstanceId = u64;
+//
+// Once that is true, a generic needs nothing new. `Type` is the type whose
+// values are types, and it is a predeclared name rather than a keyword — the
+// same status `u64`, `bool`, and `Str` already have (§lexical).
+
+fn Pair(comptime A: Type, comptime B: Type) -> Type {
+  struct { first: A, second: B }
+}
+
+// The struct is anonymous because a generic has to return a type it cannot
+// name in advance. That is the one thing §comptime adds to §types' repertoire
+// of type-introducing forms.
+
+fn Node(comptime T: Type) -> Type {
+  struct { value: T, next: Node(T) }
+}
+
+// `Node` mentions itself, which under §types' reference semantics is an
+// ordinary thing to write rather than an infinite size. It terminates because
+// instantiation is memoized: the inner `Node(T)` hits the cache entry that the
+// outer call is still filling in, exactly as `Types::fresh_struct` allocates a
+// type before `set_fields` gives it fields.
+//
+// Worth being honest about: this type is *representable* and no finite value
+// of it can be built. §types has no `nil` and §unions is unstarted, so there
+// is nothing to put in `next` to end a list. A real linked list waits on
+// §unions, not on this file.
+
+// ---- Instantiation is a call -----------------------------------------------
+
+// A type annotation is a type annotation. What is new is that the thing in it
+// may be a call, evaluated before the annotation has a meaning.
+
+fn area(p: Pair(s64, s64)) -> s64 {
+  p.first * p.second
+}
+
+// `<` never has to be disambiguated, which is a rule C++ and Rust both spend
+// and Glue does not have to. `a < b` is a comparison. Always. A generic
+// instantiation is indistinguishable from any other call, which is why
+// §generics' syntax slot is empty by construction rather than by omission.
+
+// Because a type is a value, an instantiation can be bound like any other
+// value, and the binding is a perfectly ordinary type name afterwards.
+
+let Coord = Pair(s64, s64);
+let here: Coord = Coord { first: 3, second: 4 };
+
+// **Open, and not decided anywhere:** whether the head of a struct literal may
+// itself be a call — `Pair(s64, s64) { first: 3, second: 4 }`. Today
+// `struct_lit` expects a name there. Binding the instantiation first, as
+// above, needs no new grammar and is what this file uses.
+
+// ---- Identity comes from the cache -----------------------------------------
+
+// Instantiations are memoized on `(declaration, comptime argument values)`, so
+// two types are the same type when they are the same cache entry. §types'
+// nominal rule survives without a new clause: a generic type's identity is its
+// declaration plus its arguments.
+
+fn label(p: Pair(u64, Str)) -> Str {
+  p.second
+}
+
+fn relabel(p: Pair(u64, Str)) -> Str {
+  label(p)                 // fine: one cache entry, so one type
+}
+
+fn flipped(p: Pair(Str, u64)) -> Str {
+  label(p)                 // a type error: arguments are ordered
+}
+
+// This is *not* structural interning. Two `struct { first: u64, second: Str }`
+// written out by hand are two types, and must be — §types says every
+// evaluation of a `struct { … }` expression produces a fresh one. `Pair(u64,
+// Str)` is one type because the cache runs the body once, not because two
+// identical shapes were merged.
+
+// ---- A comptime argument need not be a type --------------------------------
+
+// The payoff for refusing to make generics their own mechanism. The cache is
+// keyed on comptime *values*, so a type parameter and a value parameter are
+// the same thing and neither needs a feature the other does not.
+
+fn Fixed(comptime T: Type, comptime capacity: u64) -> Type {
+  struct { items: T, len: u64 }
+}
+
+fn used(f: Fixed(u64, 8)) -> u64 {
+  f.len
+}
+
+fn spare(f: Fixed(u64, 8)) -> u64 {
+  8u64 - used(f)           // fine: the same two arguments, so the same type
+}
+
+fn overflowing(f: Fixed(u64, 4096)) -> u64 {
+  used(f)                  // a type error: a different `capacity`, so a
+}                          // different cache entry, so a different type
+
+// `Fixed(u64, 8)` and `Fixed(u64, 8)` are one type for the same reason
+// `Pair(u64, Str)` is: one cache entry. No rule was added to say so, and
+// nothing in the cache knows that one of those arguments was a type.
+
+// ---- `comptime` also prefixes an expression --------------------------------
+
+// The keyword's second position (§comptime — one keyword, two positions). It
+// says this must be evaluated during compilation, and is an error when it
+// cannot be.
+
+fn checksum(n: u64) -> u64 {
+  let mut acc = 0u64;
+  let mut i = 0u64;
+  while i < n {
+    acc = acc + i * i;
+    i = i + 1u64;
+  }
+  acc
+}
+
+let table = comptime checksum(256u64);
+
+// There is no `comptime let` and no `comptime var`. A `let` is already
+// comptime-known when its initializer is (§statements), so a binding form
+// would name the same thing twice.
+//
+// Evaluation is bounded — a fuel budget in steps and a recursion depth cap,
+// each exhausted as an ordinary diagnostic rather than a hang. That is not
+// polish: the language server elaborates half-typed programs on every
+// keystroke, and a half-typed program is the likeliest thing in the language
+// to loop forever.
+//
+// And it is hermetic. Comptime sees pure computation over comptime-known
+// values and the declarations of this file. No image, no namespace, no
+// messages, no host, no filesystem, no clock, no randomness — which for
+// Othismo is a deferral rather than a refusal, and is deferred because opening
+// it later is additive and closing it later breaks programs.
+
+// ---- A generic function is the same idea -----------------------------------
+
+fn first(comptime T: Type, xs: Node(T)) -> T {
+  xs.value
+}
+
+fn max(comptime T: Type, a: T, b: T) -> T {
+  if a > b { a } else { b }
+}
+
+// `max` is **accepted as written**, and that is the model's known weakness
+// rather than a bug. A generic body is type-checked when it is instantiated;
+// before that it gets lexing, parsing, and name resolution and nothing more.
+// Whether `>` exists on `T` is answered when someone calls it, and the
+// diagnostic arrives at the call site rather than here.
+//
+// That is a direct tax on goal §living: a generic nobody has called yet cannot
+// be given a red squiggle, and no amount of language-server effort changes it.
+// Accepted, because the alternative — bounds strong enough to check a body
+// ahead of instantiation — is a second type system layered on the first, and
+// §generics has not established what a bound would be.
+
+let biggest = max(u64, 3, 9);
+let earlier = max(Str, "ant", "bee");
+
+// The type argument is passed, not inferred. **Open (§inference):** whether it
+// may be inferred at a call site, and what the explicit form is for when
+// inference fails.
+
+// ---- What is still open ----------------------------------------------------
+
+// Written down so the file is not read as a complete design:
+//
+//  * Bounds and constraints — can a generic body use `+` on its `T` at all,
+//    and what is the spelling (§generics, §objects).
+//  * Variance for generic containers, or invariance only (§generics).
+//  * Inference of type arguments at a call site (§inference).
+//  * How a comptime function *rejects* its arguments. Without it, a bad
+//    instantiation fails somewhere inside a body its caller did not write.
+//  * `comptime var` and `inline for` — mutation during comptime evaluation,
+//    and a loop that unrolls because its bound is comptime-known while its
+//    body is not.
+//  * Whether `Type` values support equality, ordering, or printing.
+//  * Generic message handlers — Othismo-specific, and the hardest of these.
+//    A handler's arguments arrive as BSON on the wire, and what a type
+//    parameter means once a value has been serialized and routed is not
+//    obviously anything (§modules, §errors).

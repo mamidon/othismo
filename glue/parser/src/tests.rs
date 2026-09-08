@@ -208,6 +208,19 @@ fn precedence_ladder() {
     assert_eq!(shape("a||b&&c"), "(a||(b&&c))");
 }
 
+/// §comptime's prefix sits on the unary rung rather than getting one of its
+/// own, so a call is covered and a sum is not. §comptime only ever writes the
+/// call form, which both readings agree on; this pins which one is built.
+#[test]
+fn comptime_prefixes_at_the_unary_rung() {
+    // The space after the keyword belongs to the token that follows it — the
+    // tree is lossless — so it renders inside the operand rather than after
+    // the `comptime`.
+    assert_eq!(shape("comptime f(x)"), "(comptime( f(x)))");
+    assert_eq!(shape("comptime a+b"), "((comptime a)+b)");
+    assert_eq!(shape("comptime (a+b)"), "(comptime ((a+b)))");
+}
+
 #[test]
 fn binary_operators_are_left_associative() {
     assert_eq!(shape("a-b-c"), "((a-b)-c)");
@@ -441,6 +454,15 @@ fn declarations() {
         skeleton("fn advance(c: mut Counter, by: u64) { }"),
         "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) (BlockExpr)))"
     );
+    // §comptime: so is `comptime`, which is why it leaves no node of its own —
+    // but it is written before the name rather than after the colon. Same
+    // shape as the line above, which is the point: a comptime parameter is an
+    // ordinary parameter with a constraint on its argument.
+    assert_eq!(
+        skeleton("fn Pair(comptime A: Type, comptime B: Type) -> Type { }"),
+        "(SourceFile (FnDecl (ParamList (Param (NameType)) (Param (NameType))) \
+         (RetType (NameType)) (BlockExpr)))"
+    );
     assert_eq!(
         skeleton("struct Point {\n  x: s64,\n  y: s64,\n}"),
         "(SourceFile (StructDecl (FieldDeclList (FieldDecl (NameType)) (FieldDecl (NameType)))))"
@@ -546,8 +568,12 @@ fn a_paren_is_not_a_lambda_without_an_arrow() {
     );
 }
 
-/// Every file in `examples/`, so they can serve as a regression suite rather
-/// than as documentation nobody runs.
+/// The examples that parse cleanly, so they can serve as a regression suite
+/// rather than as documentation nobody runs.
+///
+/// `generics.glue` is deliberately absent: §comptime is decided and unbuilt,
+/// so that file is a target rather than a program, and every line of it that
+/// matters is a syntax error today.
 const EXAMPLES: [(&str, &str); 6] = [
     ("hello.glue", include_str!("../../examples/hello.glue")),
     (

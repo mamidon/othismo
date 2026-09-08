@@ -54,6 +54,12 @@ pub enum TokenKind {
     // yet (§control declines every loop but `while`) and are reserved anyway.
     As,
     Break,
+    /// §comptime: a parameter whose argument must be known at compile time,
+    /// and a prefix on an expression that must be evaluated then. The only
+    /// token §comptime adds — a generic is a function over `Type`, an
+    /// instantiation is a call, and `Type` is a predeclared name rather than
+    /// a keyword.
+    Comptime,
     Continue,
     Else,
     Export,
@@ -141,6 +147,7 @@ impl TokenKind {
         matches!(
             self,
             As | Break
+                | Comptime
                 | Continue
                 | Else
                 | Export
@@ -172,6 +179,7 @@ impl TokenKind {
         Some(match text {
             "as" => As,
             "break" => Break,
+            "comptime" => Comptime,
             "continue" => Continue,
             "else" => Else,
             "export" => Export,
@@ -240,6 +248,7 @@ impl TokenKind {
         Some(match self {
             As => "as",
             Break => "break",
+            Comptime => "comptime",
             Continue => "continue",
             Else => "else",
             Export => "export",

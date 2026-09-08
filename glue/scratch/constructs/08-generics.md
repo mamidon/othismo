@@ -67,8 +67,9 @@ been **decided**; *Implementation* tracks what is **built** in `glue/`.
 | Checking an uninstantiated generic | — | — | — |
 
 The first three rows were decided in §comptime rather than here, which is why this
-section has no syntax of its own. None of it is implemented: `comptime` has no token, so
-there is no `Type`, no instantiation, and no cache.
+section has no syntax of its own. None of it is implemented. `comptime` became a token on
+2026-09-07 and both of its positions parse, but elaboration refuses them, so there is
+still no `Type`, no instantiation, and no cache.
 
 ---
 

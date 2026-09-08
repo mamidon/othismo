@@ -124,6 +124,9 @@ fn identifiers_and_keywords() {
         kinds("import export true false as"),
         [Import, Export, True, False, As]
     );
+    // §comptime's one new token. `Type` is not one — it is a predeclared name,
+    // the same status `u64` and `Str` have (see below).
+    assert_eq!(kinds("comptime Type"), [Comptime, Ident]);
     assert_eq!(kinds("_ _x x9 X_9 letx r"), [Ident; 6]);
 }
 
