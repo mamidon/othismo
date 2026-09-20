@@ -383,6 +383,38 @@ impl Tree {
         out
     }
 
+    /// The whole tree, indented, with each token's text beside it.
+    ///
+    /// [`Tree::dump`] is one line and kinds only, which is what a parser test
+    /// wants to compare. Reading a whole file's tree wants the other shape:
+    /// one child per line, and the text each token covers next to it. Trivia
+    /// is included, because the point of a lossless tree is being able to ask
+    /// where a comment attached, and that only works if the comment is in the
+    /// answer.
+    pub fn render(&self, source: &str) -> String {
+        fn node(tree: &Tree, id: NodeId, source: &str, indent: usize, out: &mut String) {
+            out.push_str(&format!("{:indent$}({:?}", "", tree.kind(id)));
+            for child in tree.children(id) {
+                out.push('\n');
+                match child {
+                    Child::Node(child) => node(tree, child, source, indent + 2, out),
+                    Child::Token(token) => out.push_str(&format!(
+                        "{:width$}({:?} \"{}\")",
+                        "",
+                        token.kind,
+                        token.text(source).escape_debug(),
+                        width = indent + 2,
+                    )),
+                }
+            }
+            out.push(')');
+        }
+
+        let mut out = String::new();
+        node(self, self.root(), source, 0, &mut out);
+        out
+    }
+
     fn close(&self, node: NodeId) -> usize {
         match self.events[node.0 as usize] {
             Event::Open { close, .. } => {

@@ -14,7 +14,7 @@
 use eval::TrapKind::{self, *};
 use eval::{IntTy, Value};
 
-use crate::{Error, run};
+use crate::{Error, Stage, dump, run};
 
 #[track_caller]
 fn value(source: &str) -> Value {
@@ -856,5 +856,101 @@ fn values_display_as_they_are_echoed() {
     assert_eq!(
         value(r#"struct P { x: u64, y: Str } P { y: "b", x: 1 }"#).to_string(),
         r#"P { x: 1, y: "b" }"#
+    );
+}
+
+// ---- Dumping a stage -------------------------------------------------------
+//
+// What is pinned here is the *contract* `glue dump` rests on — which stage
+// reports what, and which ones still emit after a complaint — not the
+// renderings themselves. Those belong to the crates that produce them, and
+// pinning them here would make every one of these tests a change detector for
+// slot numbering.
+
+#[track_caller]
+fn dumped(source: &str, stage: Stage) -> String {
+    match dump(source, stage).artifact {
+        Some(artifact) => artifact,
+        None => panic!("`{source}` should have produced a {} dump", stage.name()),
+    }
+}
+
+#[test]
+fn every_stage_dumps_a_working_program() {
+    let source = "let x = 2; x * 21";
+    for stage in Stage::ALL {
+        let result = dump(source, stage);
+        assert!(
+            result.artifact.is_some(),
+            "{} produced nothing",
+            stage.name()
+        );
+        assert!(result.problems.is_empty(), "{} complained", stage.name());
+    }
+    assert!(dumped(source, Stage::Tokens).starts_with("(tokens"));
+    assert!(dumped(source, Stage::Cst).starts_with("(SourceFile"));
+    assert!(dumped(source, Stage::Ir).contains("(func <file>"));
+    assert_eq!(dumped(source, Stage::Value), "(value u64 42)");
+}
+
+/// The tokens are a stage of their own, so what the grammar made of them is
+/// not this stage's business — and saying so is what lets someone look at the
+/// lexing of a file the parser cannot read at all.
+#[test]
+fn the_token_stage_reports_lexical_problems_only() {
+    let result = dump("fn (", Stage::Tokens);
+    assert!(result.artifact.is_some());
+    assert!(result.problems.is_empty());
+
+    let result = dump("\"unterminated", Stage::Tokens);
+    assert!(result.artifact.is_some());
+    assert_eq!(result.problems.len(), 1);
+}
+
+/// A half-parsed tree and a poisoned IR are usually the thing worth looking
+/// at, and both stages are total, so both emit.
+#[test]
+fn a_stage_emits_even_after_a_complaint() {
+    for (source, stage) in [("fn (", Stage::Cst), ("missing", Stage::Ir)] {
+        let result = dump(source, stage);
+        assert!(
+            result.artifact.is_some(),
+            "{} produced nothing",
+            stage.name()
+        );
+        assert!(!result.problems.is_empty(), "{} was happy", stage.name());
+    }
+}
+
+/// The exception, and for [`run`]'s reason: running a program elaboration
+/// reported on means guessing what it meant.
+#[test]
+fn the_value_stage_refuses_a_program_with_a_diagnostic() {
+    let result = dump("missing", Stage::Value);
+    assert!(result.artifact.is_none());
+    assert_eq!(result.problems.len(), 1);
+}
+
+/// A trap is not a diagnostic — the program ran and then failed — so it is
+/// reported with a span like everything else, and there is no value to show.
+#[test]
+fn a_trap_is_reported_by_the_value_stage() {
+    let result = dump("fn f(a: u8, b: u8) -> u8 { a + b } f(255, 1)", Stage::Value);
+    assert!(result.artifact.is_none());
+    assert_eq!(result.problems.len(), 1);
+    assert!(result.problems[0].message.contains("overflow"));
+}
+
+/// Emission order is not source order — a `fn` body is lowered at the end of
+/// its block — and a person fixing a file wants the list in the order they
+/// will walk it.
+#[test]
+fn problems_come_back_in_source_order() {
+    let result = dump("fn f() -> u64 { missing }\nlet a: Str = 1;", Stage::Ir);
+    let offsets: Vec<_> = result.problems.iter().map(|p| p.span.start).collect();
+    assert!(result.problems.len() >= 2);
+    assert!(
+        offsets.windows(2).all(|pair| pair[0] <= pair[1]),
+        "out of order: {offsets:?}"
     );
 }

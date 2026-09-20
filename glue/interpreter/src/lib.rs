@@ -12,6 +12,10 @@
 //! `eval`, a crate rather than a module because `elab` has to be able to call
 //! it for §comptime.
 //!
+//! Two ways in, which are the `glue` binary's two subcommands. [`run`] is the
+//! whole pipeline with the value at the end of it: `glue eval`. [`dump`] stops
+//! at a [`Stage`] and renders what that stage made: `glue dump`.
+//!
 //! ```
 //! use interpreter::{Value, run};
 //!
@@ -53,11 +57,13 @@
 //! What is left at run time is §expressions' traps: overflow, division by
 //! zero, and the recursion limit.
 
+mod dump;
 mod error;
 
 #[cfg(test)]
 mod tests;
 
+pub use crate::dump::{Dump, Problem, Stage, dump};
 pub use crate::error::RuntimeError;
 pub use eval::{IntTy, Trap, TrapKind, Value, eval};
 
@@ -178,6 +184,6 @@ pub fn syntax_errors(source: &str) -> Vec<SyntaxError> {
 /// CST node, the tree is lossless, and a node begins at the trivia attached to
 /// its first token — so the plain extent of a statement can start a blank line
 /// above the statement.
-fn span(tree: &Tree, at: ir::program::CstId) -> Span {
+pub(crate) fn span(tree: &Tree, at: ir::program::CstId) -> Span {
     tree.significant_span(at)
 }

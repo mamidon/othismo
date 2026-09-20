@@ -82,6 +82,27 @@ impl Tokens {
             .filter(|token| !token.is_trivia())
     }
 
+    /// Every token as an s-expression, one per line: its kind, the text it
+    /// covers, and its span.
+    ///
+    /// Trivia included. Losslessness — every token's span begins where the
+    /// previous one ended — is a property of this crate a reader should be
+    /// able to check, and they can only check it if the whitespace is here.
+    pub fn render(&self, source: &str) -> String {
+        let mut out = String::from("(tokens");
+        for token in &self.tokens {
+            out.push_str(&format!(
+                "\n  ({:?} \"{}\" {}..{})",
+                token.kind,
+                token.text(source).escape_debug(),
+                token.span.start,
+                token.span.end,
+            ));
+        }
+        out.push(')');
+        out
+    }
+
     pub fn has_errors(&self) -> bool {
         !self.diagnostics.is_empty()
     }
