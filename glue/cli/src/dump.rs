@@ -78,7 +78,7 @@ pub struct Dump {
 /// Runs `source` as far as `stage` and renders what that stage made of it.
 ///
 /// ```
-/// use interpreter::{Stage, dump};
+/// use cli::{Stage, dump};
 ///
 /// let dumped = dump("let x = 2; x * 21", Stage::Value);
 /// assert_eq!(dumped.artifact.unwrap(), "(value u64 42)");

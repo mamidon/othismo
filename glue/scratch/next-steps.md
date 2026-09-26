@@ -26,43 +26,10 @@ current pass structure does not obviously survive that.
 
 ## The plan
 
-Three items, in this order. 1 unblocks 3, and 3 is what makes 2 safe to attempt.
+Two items. 2 is what makes 1 safe to attempt, so 1 is written down first and
+built second.
 
-### 1. A CLI that can dump any stage
-
-One tool that takes Glue source and prints what any stage made of it — tokens,
-CST, whatever IRs exist, wasm once there is any, or the evaluated value.
-
-Today this is split across two binaries: `glue` (runs a file) in `interpreter`,
-and `glue-ir` (dumps core IR) in `elab`. They should be one.
-
-Shape that worked when I spiked it:
-
-```
-glue [--emit STAGE] [FILE]
-
-  --emit STAGE     stop after STAGE and print what it produced
-  --list-stages    print the stages this build can emit, one per line
-```
-
-Four properties worth keeping, each of which earns its place in item 3:
-
-- **Artifact on stdout, diagnostics on stderr**, so a harness can capture them
-  apart.
-- **`--list-stages` is machine-readable.** A harness enumerates stages rather
-  than hard-coding them, so a `zir` stage appearing in the middle is covered
-  the day it is added rather than the day someone remembers.
-- **A stage emits even when earlier stages complained.** A poisoned IR is
-  usually the thing you wanted to look at. `value` is the exception — running a
-  program elaboration reported on means guessing what it meant.
-- **Stages are named in pipeline order** in one place, so the help text, the
-  listing, and the corpus cannot disagree.
-
-**Also worth deciding here:** the crate holding the driver is still called
-`interpreter`, and it is not the interpreter any more — `eval` is. Renaming it
-`cli` is cheap; it is a leaf and nothing depends on it.
-
-### 2. Redesign the pass data structures
+### 1. Redesign the pass data structures
 
 This is the ZIR question, and it is the item with real design content.
 
@@ -122,7 +89,7 @@ and hits the re-entrancy problem head-on; the split is more work and makes the
 problem not exist. Doing it *before* means designing ZIR against a comptime
 implementation that does not exist yet.
 
-### 3. An end-to-end corpus, independent of the implementation
+### 2. An end-to-end corpus, independent of the implementation
 
 A body of Glue with expected output per pass, as plain files rather than Rust.
 Current coverage is decent but every test is written against a crate API, so it
@@ -158,37 +125,3 @@ split. `UPDATE_EXPECT=1` regenerates.
 - **`ir.expected` is brittle**, because slot numbering and temporary names move
   when lowering changes. That is partly the point, but it argues for small
   cases about one construct each, and against dumping whole example files.
-
----
-
-## Two things the spike turned up
-
-I built items 1 and 3 to see the shape, then reverted them. Two findings are
-worth keeping, and both are independent of whether any of the above happens.
-
-### Elaboration diagnostics are not in source order
-
-`interpreter/src/main.rs` says it reports them "in source order, because a
-person fixing a file wants the list rather than the first line of it". They are
-not. `fn` bodies are lowered at the end of their block rather than at their
-position (`elab/src/lower.rs`, the `NodeKind::FnDecl => {}` arm in `stmt`), so a
-mistake inside the first function in a file is reported after every
-statement below it:
-
-```
-input.glue:2:14: expected `Str`, found `an integer constant`
-input.glue:3:9: integer and float constants do not mix …
-input.glue:4:1: comptime is not supported yet
-input.glue:1:27: no binding named `missing` is in scope     ← line 1, reported last
-```
-
-`interpreter::syntax_errors` already sorts lexical and grammatical diagnostics
-by span for exactly this reason. The fix is a sort at the reporting site, not
-in `elab` — emission order is what the elaboration tests pin, and it is the
-more useful order for debugging the pass itself.
-
-### The CST renderer
-
-`Tree::dump()` is one line and is what the parser tests compare. Reading a
-whole file's tree needs an indented rendering with token text beside each node,
-which does not exist. Small, and item 1 wants it.

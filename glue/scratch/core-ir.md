@@ -327,8 +327,12 @@ together. It now holds representation and the dump only:
 tokenizer ← parser ← ir      (program, types, consts, syms, print)
                      ir ← eval   (executes a Program)
               ir, eval ← elab   (produces a Program; runs eval for comptime)
-                         elab ← interpreter, lsp, wasm
+                         elab ← cli, lsp, wasm
 ```
+
+**Renamed 2026-09-26.** `interpreter` is `cli`. The crate never held the interpreter after
+decision 2 — `eval` does — and what is in it is the `glue` binary's driver, so it is named
+after the command line rather than after a stage.
 
 Elaboration and evaluation are mutually recursive (§comptime), so elaboration cannot live
 in the crate the evaluator depends on. The split was made *before* `comptime` has a token,
@@ -341,7 +345,7 @@ Two consequences of the boundary, both of which fell out rather than being desig
   source text. Spans belong to diagnostics, and diagnostics belong to elaboration.
 - **A failure splits at the same seam as everything else.** `eval::Trap` carries a
   `CstId`, which is core IR's provenance and all the executor has;
-  `interpreter::RuntimeError` carries a `Span`, and the conversion happens in the one
+  `cli::RuntimeError` carries a `Span`, and the conversion happens in the one
   place still holding the tree. The doc comment describing that division predated the
   split and now describes a crate boundary rather than two types in one file.
 

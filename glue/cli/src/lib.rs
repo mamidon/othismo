@@ -1,23 +1,26 @@
-//! Glue interpreter: source in, a value out.
+//! The driver behind the `glue` binary: source in, a value or a dump out.
 //!
 //! Source is parsed, elaborated to core IR by `elab`, and executed by `eval`.
-//! The interpreter used to walk the concrete syntax tree instead; that was a
-//! bring-up artifact, and it sat at the wrong end of the pipeline — name
-//! resolution, coercion, and evaluation order accumulated in it and lived
-//! nowhere else, which is exactly the divergence goal §both-modes names. They
-//! live in elaboration now, where the wasm back end will read them too.
+//! This crate used to be called `interpreter`, and it used to be one — it
+//! walked the concrete syntax tree. That was a bring-up artifact, and it sat at
+//! the wrong end of the pipeline: name resolution, coercion, and evaluation
+//! order accumulated in it and lived nowhere else, which is exactly the
+//! divergence goal §both-modes names. They live in elaboration now, where the
+//! wasm back end will read them too, and the interpreter is `eval` — a crate
+//! rather than a module because `elab` has to be able to call it for
+//! §comptime.
 //!
-//! What is left here is the driver: parse, elaborate, run, and turn whatever
-//! went wrong into something with a source span on it. The execution itself is
-//! `eval`, a crate rather than a module because `elab` has to be able to call
-//! it for §comptime.
+//! What is left here is the driver, which is why the crate is named after the
+//! command line rather than after a stage: parse, elaborate, run, and turn
+//! whatever went wrong into something with a source span on it. Nothing
+//! depends on it but the binary.
 //!
 //! Two ways in, which are the `glue` binary's two subcommands. [`run`] is the
 //! whole pipeline with the value at the end of it: `glue eval`. [`dump`] stops
 //! at a [`Stage`] and renders what that stage made: `glue dump`.
 //!
 //! ```
-//! use interpreter::{Value, run};
+//! use cli::{Value, run};
 //!
 //! assert_eq!(run("let x = 2; x * 21").unwrap(), Value::u64(42));
 //! ```

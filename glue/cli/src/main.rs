@@ -14,8 +14,10 @@
 //! unit included — `()` is a real value (§functions), and a program that
 //! produced one has not failed.
 //!
-//! `dump` is the debugging view, and it replaces the separate `glue-ir`
-//! binary's job. The stages are [`Stage::ALL`]; `glue dump --help` lists them.
+//! `dump` is the debugging view, and the only one — a separate `glue-ir`
+//! binary in `elab` used to print the IR, and `glue dump FILE ir` is what
+//! became of it. The stages are [`Stage::ALL`]; `glue dump --help` lists
+//! them.
 //!
 //! **The artifact goes to stdout and every diagnostic to stderr**, so a
 //! harness can capture them apart, and so `glue dump f.glue ir | less` shows
@@ -26,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use interpreter::{Error, Stage};
+use cli::{Error, Stage};
 
 #[derive(Parser)]
 #[command(
@@ -81,7 +83,7 @@ fn main() -> ExitCode {
 }
 
 fn eval(name: &str, source: &str) -> ExitCode {
-    match interpreter::run(source) {
+    match cli::run(source) {
         Ok(value) => {
             println!("{value}");
             ExitCode::SUCCESS
@@ -114,7 +116,7 @@ fn eval(name: &str, source: &str) -> ExitCode {
 }
 
 fn dump(name: &str, source: &str, stage: Stage) -> ExitCode {
-    let dumped = interpreter::dump(source, stage);
+    let dumped = cli::dump(source, stage);
 
     if let Some(artifact) = dumped.artifact {
         println!("{artifact}");

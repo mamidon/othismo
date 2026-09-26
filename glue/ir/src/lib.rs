@@ -19,7 +19,7 @@
 //! tokenizer ← parser ← ir
 //!                      ir ← eval
 //!               ir, eval ← elab
-//!                          elab ← interpreter, lsp
+//!                          elab ← cli, lsp
 //! ```
 //!
 //! # What is here
