@@ -40,35 +40,52 @@ cargo run -- --check-shapes image.img   # also check every message's fields in t
 
 ## The image language
 
+Objects never know who they talk to. An object can do two things: **emit** a
+message, which goes wherever the image routes it, or **reply** to whoever sent
+the message it's handling. The image declares what each protocol accepts,
+emits and replies with, which instances exist, and the routes.
+
 ```text
 import { Line } from "real-talk/env"        // environment types (as/env.ts)
-import { Echoed } from "./messages"         // resolved against messages.ts
+import { Echoed, Greeting } from "./messages"
 
 protocol Echo {
-  in Line                     // types the object accepts (comma-separated, repeatable)
-  out out: Echoed             // named out port; may carry several types
+  in Line, Greeting           // types it accepts, routed or replied to it
+  emits Echoed                // types it may emit; the image routes them
+  replies Ping                // types it may reply with (optional)
 }
 
-instance stdin : Environment.Stdin {
-  out -> echo                 // Stdin has one port, `out`, carrying Line
-}
-instance echo : Echo {
+instance stdin  : Environment.Stdin
+instance echo   : Echo {
   send Greeting { prefix: "Hi", excited: true }   // typed startup message
   send Ping                                       // unit message
-  out -> stdout, logger                           // fan-out
 }
 instance stdout : Environment.Stdout              // accepts any message
+
+// Routes: `sender.Type { targets }`. A target is an instance, or a nested
+// route for what that instance emits in turn.
+stdin.Line {
+  echo.Echoed { stdout, logger }                  // fan-out: both get a copy
+}
 ```
+
+Routing is global. Nesting is only a readable way to write the edges, so
+`echo.Echoed { ... }` applies to every `Echoed` that echo emits, however it was
+triggered. Each `sender.Type` is routed in exactly one place, and
+`sender.*` covers every type the sender emits. A type that isn't routed is
+dropped; `--check` lists such types as notes. Replies need no routes: they go
+back along the route the request came in on.
 
 The checker rejects an image when:
 
 - an imported name isn't an exported class in the referenced file, or a field
   has a type other than `string`, `bool`, `i8`–`i64`, `u8`–`u64`, `f32`, `f64`
   or `ArrayBuffer` (bytes; a string literal in a `send` is taken as UTF-8)
-- a protocol or port uses a type that wasn't imported
-- an instance's out port is unwired, wired twice, or doesn't exist
-- a wiring target doesn't list every type the port may carry in its `in`
-  (`Environment.Stdout` accepts anything)
+- a protocol uses a type that wasn't imported
+- a route names an unknown instance, a type the sender doesn't emit, or a
+  target that doesn't accept it (`Environment.Stdout` accepts anything)
+- a route's target replies with a type the sender doesn't accept
+- the same `sender.Type` is routed twice, including through `sender.*`
 - a `send` names an unknown type, gets a field wrong (missing, extra, wrong
   type, or an integer out of range), or is anonymous
 - an environment protocol is used without importing every message type it
@@ -83,12 +100,12 @@ Errors carry `line:col` positions.
 These are the only way an image reaches the outside world. Their message types
 are declared in `as/env.ts` and imported from `"real-talk/env"`.
 
-| Protocol | In | Out ports | Config (startup, exactly once) |
-|---|---|---|---|
-| `Environment.Stdin` | none | `out: Line` | none |
-| `Environment.Stdout` | anything | none | none (startup sends are printed) |
-| `Environment.Socket` | `SocketWrite`, `SocketClose` | `out: SocketData, SocketClosed`, `events: Listening` | `send Listen { address: "127.0.0.1:8080" }` |
-| `Environment.Files` | `ReadFile` | `out: FileContents, FileError` | `send FilesRoot { path: "./public" }` |
+| Protocol | In | Emits | Replies | Config (startup, exactly once) |
+|---|---|---|---|---|
+| `Environment.Stdin` | none | `Line` | none | none |
+| `Environment.Stdout` | anything | none | none | none (startup sends are printed) |
+| `Environment.Socket` | `SocketWrite`, `SocketClose` | `SocketData`, `SocketClosed`, `Listening` | none | `send Listen { address: "127.0.0.1:8080" }` |
+| `Environment.Files` | `ReadFile` | none | `FileContents`, `FileError` | `send FilesRoot { path: "./public" }` |
 
 Only the image can supply config. The checker consumes those sends, and the
 config types aren't in the protocols' `in` lists, so no object can rebind the
@@ -96,35 +113,51 @@ socket or move the files root. Anything the image grants is visible in the
 image.
 
 - **Socket** is a TCP listener. Each accepted connection gets a `conn` id.
-  Incoming bytes arrive as `SocketData` and a peer close as `SocketClosed`.
-  `SocketClose` half-closes our side once pending writes are flushed.
+  Incoming bytes are emitted as `SocketData` and a peer close as
+  `SocketClosed`. Whoever receives them answers with `SocketWrite` and
+  `SocketClose` replies. `SocketClose` half-closes our side once pending
+  writes are flushed.
   `Listening` reports the bound address, which is useful with port 0. Idle
   connections time out after 30s.
 - **Files** is read-only and resolves `ReadFile.path` under the root (a
   relative root is relative to the image file). Any `..` component is refused,
   and symlinks are resolved and must stay inside the root. Failures come back
   as `FileError` with `reason` set to `not_found`, `directory`, `forbidden` or
-  `io`. `tag` is echoed so callers can match replies to requests.
+  `io`. Every `ReadFile` gets a reply, which echoes `tag` so the caller can
+  match it to its request.
 
 ## The static HTTP server
 
-`examples/static/static.img` is a pipeline of four objects:
+`examples/static/static.img` routes requests down a tree. Every response is a
+reply that retraces the path back up:
 
+```text
+net.SocketData {
+  http.HttpRequest {
+    server.ReadFile { files }
+    server.Line     { stdout }
+  }
+}
+net.SocketClosed { http }
+net.Listening    { stdout }
 ```
-net (Environment.Socket) --SocketData--> http (HttpCodec) --HttpRequest--> server (StaticServer) --ReadFile--> files (Environment.Files)
-         ^                                   |    ^                             |    ^                                 |
-         +-------SocketWrite/SocketClose-----+    +---------HttpResponse--------+    +-----FileContents/FileError------+
-```
+
+That is, files replies to server with `FileContents`, server replies to http
+with `HttpResponse`, and http replies to net with `SocketWrite`.
+`net.*` isn't used because `Listening` goes to stdout and not to http.
 
 - `HttpCodec` (AssemblyScript) buffers bytes per connection until a request is
   complete. It parses the request line, headers and a `Content-Length` body,
-  and emits a typed `HttpRequest` with a percent-decoded `path`. Going the
-  other way, it serializes `HttpResponse`. Malformed requests get 400, and
-  oversized ones get 413 or 431, without reaching the server.
-- `StaticServer` (AssemblyScript) has no file access of its own. It sends
-  `ReadFile` to whatever the image wires `files` to and maps the reply to
-  200, 301 (directory without a trailing `/`), 403, 404, 405 or 500. It sets
-  `Content-Type` from the file extension and logs each request to stdout.
+  and emits a typed `HttpRequest` with a percent-decoded `path`. It keeps the
+  socket's reply handle for each connection, and when an `HttpResponse`
+  arrives it serializes the response and replies with it to that socket.
+  Malformed requests get 400, and oversized ones get 413 or 431, without
+  reaching the server.
+- `StaticServer` (AssemblyScript) has no file access of its own. It keeps the
+  reply handle for each request and emits `ReadFile`. The image routes that
+  to `files`, and the reply decides the response: 200, 301 (directory without
+  a trailing `/`), 403, 404, 405 or 500. It sets `Content-Type` from the file
+  extension and emits a `Line` per request for logging.
 
 Limitations: one request per connection (`Connection: close`), whole files are
 held in memory, and headers travel as a single `"name: value\r\n"` string
@@ -138,22 +171,21 @@ Each `protocol Foo` is implemented by `scripts/Foo.ts` next to the image and
 compiled to `scripts/Foo.wasm`:
 
 ```ts
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line } from "real-talk/env"
 import { Echoed } from "../messages"
 
 export { rt_inbox, rt_deliver }      // the host's entry points into the module
 
 class Echo extends Receiver {
-  constructor(private out: OutPort<Echoed>) { super() }
-
-  receive(msg: Message): void {
-    if (msg instanceof Line) this.out.send(new Echoed((msg as Line).text))
+  receive(msg: Message, from: Sender): void {
+    if (msg instanceof Line) emit(new Echoed((msg as Line).text))
+    // or: from.reply(...) to answer the sender. `from` may be kept and
+    // used later, e.g. once some other request it triggered has come back.
   }
 }
 
-// One OutPort per `out` in the protocol, numbered in declaration order.
-bind(new Echo(new OutPort<Echoed>(0)))
+bind(new Echo())
 ```
 
 Messages extend `Message`, override `typeName()` and `encode()`, and register
@@ -176,12 +208,17 @@ spells out its own encoding.
 ## Sandbox and runtime
 
 - Each object gets its own Wasmtime `Store`. Its only imports are
-  `real_talk.send(port, ptr, len)` and `env.abort`, which AssemblyScript always
-  emits. A module that imports anything else, such as WASI, `env.trace` or
-  `env.seed` (which `Math.random` needs), is refused before it is instantiated.
-- On every send the host checks that the port exists and is declared to carry
-  the message's type. With `--check-shapes` it also checks the fields against
-  the declaration.
+  `real_talk.emit(ptr, len)`, `real_talk.reply(sender, ptr, len)` and
+  `env.abort`, which AssemblyScript always emits. A module that imports
+  anything else, such as WASI, `env.trace` or `env.seed` (which `Math.random`
+  needs), is refused before it is instantiated.
+- `rt_deliver(sender)` passes a reply handle. Handles are numbered separately
+  for each receiver and only ever name instances that have messaged it, so a
+  made-up handle can't reach anything new. An unknown handle is an error, and
+  handle 0 means the image itself (startup sends), whose replies are dropped.
+- On every emit or reply the host checks that the protocol declares that
+  type. A reply's recipient must also accept the type. With `--check-shapes`
+  the host also checks the fields against the declaration.
 - Messages are BSON documents. The first key is `$type` (the class name),
   followed by the fields (see `src/wire.rs` for the type mapping).
 - Delivery is synchronous and single-threaded through one FIFO queue. Module
@@ -199,11 +236,12 @@ spells out its own encoding.
 
 ## Where this differs from the v0.1 spec
 
-- `Environment.Stdin` is wired explicitly (`out -> echo`), and the hello image
-  is changed to match. It isn't special-cased, so every edge appears in the
-  image.
+- There are no out ports. Objects `emit` or `reply`, and the image routes by
+  `sender.Type` (see above), so objects don't take ports in their
+  constructors. `Environment.Stdin` is routed explicitly
+  (`stdin.Line { echo... }`) rather than special-cased.
 - Anonymous `send { ... }` records are rejected. Every send names its type.
 - Object classes aren't `export`ed. asc warns that classes can't become Wasm
   exports, and the module's interface is `rt_inbox` / `rt_deliver` instead.
-- `receive(msg: Message)` with `instanceof`, rather than `receive(msg: Line)`,
-  for the reason above.
+- `receive(msg: Message, from: Sender)` with `instanceof`, rather than
+  `receive(msg: Line)`, for the reason above.
