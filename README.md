@@ -16,7 +16,7 @@ Requires Rust and Node.
 ```sh
 make hello            # npm install, asc → scripts/*.wasm, cargo run -- examples/hello/hello.img
 make greeter          # a larger example
-make static           # a static HTTP server on http://127.0.0.1:8080
+make static           # serves these docs as a site on http://127.0.0.1:8080
 make test             # build the wasm, then cargo test
 ```
 
@@ -44,6 +44,7 @@ cargo run -- --check-shapes image.img   # also check every body's fields in tran
 | `as/ns.ts` | `"real-talk/ns"`: the namespace SDK |
 | `as/env.ts` | `"real-talk/env"`: the runtime's message types |
 | `examples/` | `hello` (the acceptance image), `greeter`, `static` (HTTP server) |
+| `examples/static/site.mjs` | Renders this README and the design doc into the static example's site (`make site`) |
 | `docs/namespace.md` | The design: model, verbs, SDK, ABI |
 
 ## The image language
@@ -134,6 +135,11 @@ from the image, so no object can open another port or move a files root.
   stay inside the root. Anything outside it is `NotFound`.
 
 ## The static HTTP server
+
+The static example serves a small site: a landing page plus this README and
+`docs/namespace.md`, rendered to HTML in the Othismo style by
+`examples/static/site.mjs`. Run `make site` after editing either document;
+the rendered pages are committed, so the example itself needs no build step.
 
 ```text
 instance net   : Environment.Tcp     { send Listen    { address: "127.0.0.1:8080" } }

@@ -139,9 +139,9 @@ fn serves_files_with_types_and_logs_them() {
     assert_eq!(r.body, public("style.css"));
     assert_eq!(srv.log_line(), "GET /style.css 200");
 
-    let r = srv.get("/pixel.png");
+    let r = srv.get("/assets/logo.png");
     assert_eq!((r.status, r.header("Content-Type")), (200, Some("image/png")));
-    assert_eq!(r.body, public("pixel.png"), "binary bodies survive intact");
+    assert_eq!(r.body, public("assets/logo.png"), "binary bodies survive intact");
 
     let r = srv.get("/docs/");
     assert_eq!((r.status, r.body), (200, public("docs/index.html")));
@@ -212,13 +212,13 @@ fn requests_split_across_packets_and_interleaved_connections() {
     let mut a = srv.connect();
     let mut b = srv.connect();
     a.write_all(b"GET /style.css HTTP/1.1\r\nHo").unwrap();
-    b.write_all(b"GET /pixel.png HTTP/1.1\r\n\r\n").unwrap();
+    b.write_all(b"GET /assets/logo.png HTTP/1.1\r\n\r\n").unwrap();
     let rb = read_response(&mut b);
     std::thread::sleep(Duration::from_millis(50));
     a.write_all(b"st: x\r\n\r\n").unwrap();
     let ra = read_response(&mut a);
     assert_eq!((ra.status, ra.body), (200, public("style.css")));
-    assert_eq!((rb.status, rb.body), (200, public("pixel.png")));
+    assert_eq!((rb.status, rb.body), (200, public("assets/logo.png")));
 }
 
 #[test]

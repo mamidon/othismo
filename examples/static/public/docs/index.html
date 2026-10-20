@@ -1,5 +1,477 @@
 <!doctype html>
+<!-- Generated from docs/namespace.md by examples/static/site.mjs (make site). Edit the source, not this file. -->
 <html lang="en">
-<head><meta charset="utf-8"><title>Docs</title><link rel="stylesheet" href="/style.css"></head>
-<body><h1>Docs</h1><p>Directory paths ending in <code>/</code> serve <code>index.html</code>.</p><p><a href="/">Home</a></p></body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Namespaces — Design — real_talk</title>
+  <meta name="description" content="The namespace design: views, verbs, the AssemblyScript SDK, environment objects and the host ABI.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/guide/">Guide</a>
+          <a class="nav-link" href="/docs/" aria-current="page">Design</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Design</div>
+        <h1>Namespaces</h1>
+        <p class="lede">This document describes how objects in an image find and talk to each other.
+It replaces the earlier model, in which objects <code>emit</code>ted typed messages and
+the image routed them by <code>sender.Type</code> trees. That model needed new syntax for
+every new routing need. Here, almost everything is done by objects, by
+convention, in a Plan 9–style namespace.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#the-model">The model</a></li>
+          <li><a href="#verbs">Verbs</a></li>
+          <li><a href="#the-assemblyscript-sdk">The AssemblyScript SDK</a></li>
+          <li><a href="#environment-objects">Environment objects</a></li>
+          <li><a href="#the-image">The image</a></li>
+          <li><a href="#startup-order">Startup order</a></li>
+          <li><a href="#the-host-abi">The host ABI</a></li>
+          <li><a href="#not-yet">Not yet</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<h2 id="the-model">The model</h2>
+<p>Every instance has two trees.</p>
+<ul>
+<li><strong>Its view</strong> is the set of paths it can send requests to. The image builds
+the initial view with <code>mount</code>. The instance can rearrange its view at run
+time, but only using names it can already see.</li>
+<li><strong>Its served tree</strong> is the set of paths it answers for. Nothing in it has to
+exist ahead of time. A served tree is whatever the instance&#39;s <code>serve</code> code
+says it is, like a Plan 9 file server.</li>
+</ul>
+<p>Mounting instance <code>site</code> at <code>/www</code> in <code>http</code>&#39;s view means that when <code>http</code>
+sends a request to <code>/www/index.html</code>, <code>site</code> receives it as a request for
+<code>/index.html</code> in its own served tree.</p>
+<pre><code class="language-text">http&#39;s view                         site&#39;s view
+  /net/tcp  → net                     /files → files (read-only)
+  /www      → site
+  /dev/cons → cons
+</code></pre>
+<p>Views are private. The same path can mean different things to different
+instances. Conventional names (<code>/dev/cons</code>, <code>/net/tcp</code>, <code>/files</code>) keep that
+manageable.</p>
+<h3 id="names-are-the-capabilities">Names are the capabilities</h3>
+<p>A path is resolved in the sender&#39;s view. A path that isn&#39;t in the view is
+<code>NotFound</code>, exactly as if it didn&#39;t exist. Paths are plain strings, not
+unforgeable tokens. Putting a path in a message doesn&#39;t grant anything: the
+receiver resolves it in its own view. Access is controlled by what each view
+can see, and the image decides that.</p>
+<h3 id="paths">Paths</h3>
+<p>Paths are absolute and <code>/</code>-separated. The runtime normalizes <code>//</code> and <code>.</code>
+segments and keeps a trailing <code>/</code>, because <code>/docs</code> and <code>/docs/</code> can mean
+different things to a server (HTTP certainly treats them differently). A path
+containing a <code>..</code> segment, a NUL byte, or one that doesn&#39;t start with <code>/</code> is
+rejected with <code>Invalid</code> before it is resolved. Without that rule,
+<code>root + clientPath</code> could step from <code>/www</code> into any other part of the sender&#39;s
+view.</p>
+<p>A trailing <code>/</code> means nothing in a mount point: <code>/www/</code> and <code>/www</code> name the
+same one.</p>
+<p>Resolution in a view picks the longest mount point that is a prefix of the
+path, on segment boundaries. <code>/www</code> matches <code>/www</code>, <code>/www/</code> and
+<code>/www/a/b</code>, but not <code>/wwwx</code>. Then it checks the target&#39;s exposures (see
+below) for the longest prefix of the remaining path.</p>
+<h2 id="verbs">Verbs</h2>
+<p>Every request carries a verb in its envelope, apart from its typed body. The
+runtime and any intermediary can therefore tell whether a request changes
+anything without understanding the body&#39;s type.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Verb</th>
+<th>Safe</th>
+<th>Idempotent</th>
+<th>Body</th>
+<th>Reply</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Read</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>none</td>
+<td>one message, conventionally <code>Data { mime, data }</code></td>
+</tr>
+<tr>
+<td><code>Stat</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>none</td>
+<td><code>Info { kind, size, mime }</code></td>
+</tr>
+<tr>
+<td><code>List</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>none</td>
+<td>a stream of <code>Entry { name, kind }</code></td>
+</tr>
+<tr>
+<td><code>Watch</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>none</td>
+<td>a stream, until it ends or is cancelled</td>
+</tr>
+<tr>
+<td><code>Write</code></td>
+<td>no</td>
+<td>yes</td>
+<td>a message</td>
+<td>ok</td>
+</tr>
+<tr>
+<td><code>Create</code></td>
+<td>no</td>
+<td>no</td>
+<td>a message</td>
+<td><code>Entry</code> for what was made</td>
+</tr>
+<tr>
+<td><code>Remove</code></td>
+<td>no</td>
+<td>yes</td>
+<td>none</td>
+<td>ok</td>
+</tr>
+<tr>
+<td><code>Invoke</code></td>
+<td>no</td>
+<td>no</td>
+<td>a message</td>
+<td>anything: the escape hatch for RPC-shaped operations</td>
+</tr>
+</tbody></table></div>
+<p>A <strong>safe</strong> verb doesn&#39;t change anything. A mount or exposure can be
+<strong>read-only</strong>, in which case the runtime answers every unsafe verb sent
+through it with <code>ReadOnly</code> and the server never sees it. The restriction only
+accumulates along a chain: something read-only stays read-only however many
+times it is re-bound or re-exposed.</p>
+<p>Replies carry a <strong>status</strong>: <code>Ok</code>, <code>NotFound</code>, <code>ReadOnly</code>, <code>NotSupported</code>,
+<code>IsDirectory</code>, <code>NotDirectory</code>, <code>Exists</code>, <code>Invalid</code> or <code>Io</code>. A failure is just
+a reply with a status other than <code>Ok</code>.</p>
+<p>A request may get several replies (a <strong>stream</strong>): each one says whether it is
+the last. <code>List</code> and <code>Watch</code> use this, as does accepting connections. There
+is no other streaming or subscription mechanism.</p>
+<h2 id="the-assemblyscript-sdk">The AssemblyScript SDK</h2>
+<p>Message classes, <code>Writer</code>, <code>Reader</code> and <code>registerMessage</code> stay in
+<code>&quot;real-talk&quot;</code>. The namespace SDK is <code>&quot;real-talk/ns&quot;</code>. The conventional message
+types are in <code>&quot;real-talk/env&quot;</code>.</p>
+<pre><code class="language-ts">export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
+export function isSafe(v: Verb): bool
+
+export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io }
+export enum Flag { None = 0, ReadOnly = 1 }
+
+/** A request made of our served tree. Keep it to answer later if needed. */
+export class Request {
+  readonly verb: Verb
+  readonly path: string            // relative to our root, e.g. &quot;/index.html&quot;
+  readonly body: Message | null
+  readonly cancelled: bool
+  readonly finished: bool          // answered or forwarded; answering again aborts
+  reply(body: Message | null): void          // Ok, and the last reply
+  stream(body: Message): void                // Ok, more to come
+  end(): void                                // Ok, no body, the last reply
+  fail(status: Status): void                 // the last reply
+  forward(path: string): void   // resolve `path` in OUR view; the answer goes straight to the caller
+}
+
+export class Response {
+  readonly status: Status
+  readonly body: Message | null
+  readonly done: bool              // false while a stream is still open
+  get ok(): bool
+}
+
+/** Stands in for a closure, which AssemblyScript lacks. Its fields hold the state. */
+export class Then { answer(res: Response): void }
+
+/** A request we made. */
+export class Call { cancel(): void }
+
+export namespace ns {
+  // Requests. `then` may be null when no answer is wanted.
+  function read(path: string, then: Then): Call
+  function stat(path: string, then: Then): Call
+  function list(path: string, then: Then): Call
+  function watch(path: string, then: Then): Call
+  function write(path: string, body: Message, then: Then | null): Call
+  function create(path: string, body: Message, then: Then | null): Call
+  function remove(path: string, then: Then | null): Call
+  function invoke(path: string, body: Message, then: Then | null): Call
+  function call(verb: Verb, path: string, body: Message | null, then: Then | null): Call
+
+  // Rearranging our view. Synchronous; `source` must resolve in our view.
+  function bind(source: string, at: string, flags?: Flag): Status
+  function unmount(at: string): Status
+
+  // Splices part of our view into our served tree at `at`. Requests under
+  // `at` then go straight to `source`; they never reach our serve().
+  function expose(at: string, source: string, flags?: Flag): Status
+
+  /** `root` + `path`, or null if `path` is not a clean absolute path. */
+  function join(root: string, path: string): string | null
+}
+
+export class Server {
+  start(): void {}                                   // once the image is set up
+  serve(req: Request): void { req.fail(Status.NotSupported) }
+  cancel(req: Request): void {}    // the caller gave up on a stream; it is ended for us afterwards
+}
+export function run(server: Server): void
+</code></pre>
+<p>Some details of this API:</p>
+<ul>
+<li><strong><code>Then</code> objects take the place of callbacks.</strong> AssemblyScript closures
+can&#39;t capture variables, but classes have virtual methods, so a
+continuation object works as a closure. A connection&#39;s <code>OnData</code> object can
+<em>be</em> that connection&#39;s buffer. Underneath, the runtime numbers each call
+with a ticket, and the SDK maps tickets to <code>Then</code> objects.</li>
+<li><strong><code>forward</code> makes proxies stateless.</strong> A controller that maps paths onto
+another server never sees the answer.</li>
+<li><strong><code>expose</code> is the delegation primitive.</strong> It can only expose what the
+instance can see, so it never widens what is reachable.</li>
+<li><strong>Unknown types pass through.</strong> A body of a type the module didn&#39;t
+register arrives as <code>Opaque</code>. It can&#39;t be read, but it can be passed on
+unchanged.</li>
+<li><strong><code>bind</code> resolves <code>source</code> when it is called.</strong> The new mount points at
+whatever <code>source</code> named at that moment. Unmounting <code>source</code> later doesn&#39;t
+affect it, as with Plan 9&#39;s <code>bind</code>.</li>
+</ul>
+<h3 id="example-a-site-controller">Example: a site controller</h3>
+<pre><code class="language-ts">import { Message } from &quot;real-talk&quot;
+import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from &quot;real-talk/ns&quot;
+import { Data } from &quot;real-talk/env&quot;
+
+class Site extends Server {
+  hits: u64 = 0
+
+  start(): void {
+    ns.expose(&quot;/static&quot;, &quot;/files&quot;, Flag.ReadOnly)    // /static/* never reaches serve()
+  }
+
+  serve(req: Request): void {
+    if (req.path == &quot;/hits&quot;) {                       // a synthetic file
+      if (req.verb == Verb.Read) req.reply(new Data(&quot;text/plain&quot;, String.UTF8.encode(this.hits.toString())))
+      else req.fail(Status.NotSupported)
+      return
+    }
+    if (!isSafe(req.verb)) { req.fail(Status.ReadOnly); return }
+    this.hits++
+    req.forward(&quot;/files&quot; + (req.path.endsWith(&quot;/&quot;) ? req.path + &quot;index.html&quot; : req.path))
+  }
+}
+run(new Site())
+</code></pre>
+<h2 id="environment-objects">Environment objects</h2>
+<p>Environment objects are servers implemented by the runtime. They are the only
+way to reach the outside world. Their configuration comes from the image alone,
+through a <code>send</code> in the instance block, so no object can open another port or
+move a files root.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Config</th>
+<th>Serves</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Environment.Console</code></td>
+<td>none</td>
+<td><code>Watch /</code>: a stream of <code>Line</code>, one per line of stdin, ending at EOF. <code>Write /</code>: prints the body</td>
+</tr>
+<tr>
+<td><code>Environment.Tcp</code></td>
+<td><code>Listen { address }</code></td>
+<td><code>Read /address</code>: <code>Text</code> with the bound address. <code>Watch /accept</code>: a stream of <code>Accepted { conn }</code>. <code>Watch /&lt;conn&gt;</code>: a stream of <code>Data</code> received, ending when the peer closes. <code>Write /&lt;conn&gt;</code>: sends a <code>Data</code>&#39;s bytes. <code>Remove /&lt;conn&gt;</code>: closes our side</td>
+</tr>
+<tr>
+<td><code>Environment.Files</code></td>
+<td><code>FilesRoot { path }</code></td>
+<td><code>Read</code>: <code>Data</code> with a MIME type from the extension. <code>Stat</code>: <code>Info</code>. <code>List</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>ReadOnly</code></td>
+</tr>
+</tbody></table></div>
+<p>Console reads stdin only if something is watching it by the time the image
+has started. When there are several Console instances, each line goes to the
+next one in turn, and every watcher of that Console gets it.</p>
+<p>A Tcp connection can have one watcher; a second gets <code>Exists</code>. Data that
+arrives before anyone watches is kept for the first watcher. Files answers
+anything outside its root, including through symlinks, with <code>NotFound</code>. <code>Console</code> prints
+a message whose only field is <code>text: string</code> verbatim, and anything else
+JSON-ish.</p>
+<h2 id="the-image">The image</h2>
+<p>What&#39;s left of the image language is instances, the mounts that make up each
+view, environment config, and startup requests:</p>
+<pre><code class="language-text">import { Greeting } from &quot;./messages&quot;
+
+instance cons  : Environment.Console
+instance net   : Environment.Tcp   { send Listen    { address: &quot;127.0.0.1:8080&quot; } }
+instance files : Environment.Files { send FilesRoot { path: &quot;./public&quot; } }
+
+instance site : StaticSite {           // scripts/StaticSite.wasm
+  mount files /files readonly
+}
+
+instance http : HttpServer {
+  mount net  /net/tcp
+  mount site /www
+  mount cons /dev/cons
+  write /hosts/localhost Text { text: &quot;/www&quot; }   // a startup request to http itself
+}
+</code></pre>
+<ul>
+<li><code>mount &lt;instance&gt; &lt;path&gt; [readonly]</code> puts that instance&#39;s whole served tree
+at <code>&lt;path&gt;</code> in this instance&#39;s view.</li>
+<li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes of this
+instance at startup, with <code>&lt;path&gt;</code> in its served tree. The image ignores
+replies, except that a failure is printed to stderr as a warning.</li>
+<li><code>send Type { fields }</code> is only for environment config.</li>
+<li>The conventional message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
+<code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope. Importing them from
+<code>&quot;real-talk/env&quot;</code> is allowed but not needed. An import may redeclare one
+of them only with exactly the same fields.</li>
+</ul>
+<h3 id="what-the-checker-can-promise">What the checker can promise</h3>
+<p>An instance can only bind what it can see and only expose what it can see.
+So the set of instances it can ever reach is bounded by the transitive closure
+of the image&#39;s mount edges, which can be computed without running anything.
+Read-only flags carry through the closure. <code>real_talk --check</code> prints it:</p>
+<pre><code class="language-text">net    sees nothing
+files  sees nothing
+cons   sees nothing
+site   sees /files → files ro
+       can reach at most: files ro
+http   sees /net/tcp → net, /www → site, /dev/cons → cons
+       can reach at most: net rw, files ro (via site), cons rw, site rw
+</code></pre>
+<p>What is no longer checked ahead of time is message types along edges: there
+are no edges to check. With <code>--check-shapes</code>, bodies are checked against
+their declarations as they are sent, and a type the image doesn&#39;t know is an
+error.</p>
+<h2 id="startup-order">Startup order</h2>
+<ol>
+<li>Every instance is created and every view is built from the image&#39;s mounts.
+Module top-level code runs. It may already make requests, which are queued.</li>
+<li>The image&#39;s startup requests are delivered in image order.</li>
+<li><code>start()</code> runs on every Wasm instance in image order.</li>
+<li>Environment objects start listening (stdin, sockets).</li>
+</ol>
+<p>The run ends when the queue is empty and no outside event can arrive any more.</p>
+<h2 id="the-host-abi">The host ABI</h2>
+<p>The path, verb, status and ticket travel as arguments. Only bodies are BSON,
+as before.</p>
+<p>Imports (module <code>real_talk</code>), plus <code>env.abort</code>:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Import</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>call(verb, path, path_len, body, body_len, expect) -&gt; ticket</code></td>
+<td><code>body_len</code> 0 means no body. With <code>expect</code> 0, the ticket is 0 and replies are dropped</td>
+</tr>
+<tr>
+<td><code>reply(req, status, body, body_len, done)</code></td>
+<td>answer a request we are serving</td>
+</tr>
+<tr>
+<td><code>forward(req, path, path_len)</code></td>
+<td>hand a request to a path in our view</td>
+</tr>
+<tr>
+<td><code>cancel(ticket)</code></td>
+<td>give up on a call; later replies are dropped</td>
+</tr>
+<tr>
+<td><code>bind(src, src_len, at, at_len, flags) -&gt; status</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>unmount(at, at_len) -&gt; status</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>expose(at, at_len, src, src_len, flags) -&gt; status</code></td>
+<td></td>
+</tr>
+</tbody></table></div>
+<p>Exports: <code>memory</code>, plus the following:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Export</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>rt_inbox(len) -&gt; ptr</code></td>
+<td>a buffer for the host to write into</td>
+</tr>
+<tr>
+<td><code>rt_serve(req, verb, path_len, body_len)</code></td>
+<td>the inbox holds the path, then the body</td>
+</tr>
+<tr>
+<td><code>rt_answer(ticket, status, body_len, done)</code></td>
+<td>the inbox holds the body</td>
+</tr>
+<tr>
+<td><code>rt_start()</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>rt_cancel(req)</code></td>
+<td>optional. Without it, a cancelled request&#39;s replies are dropped until the module ends it</td>
+</tr>
+</tbody></table></div>
+<p>Request ids are numbered per server and tickets per caller. Replying to an
+unknown request id is an error that stops the run. Replies to a cancelled
+request, and replies to a call made with <code>expect</code> 0, are dropped.</p>
+<h2 id="not-yet">Not yet</h2>
+<ul>
+<li>Union mounts (several servers at one path, tried in order, as Plan 9&#39;s
+<code>bind -b</code> and <code>bind -a</code>).</li>
+<li>A <code>/srv</code> convention for posting a served tree so that others can mount it.</li>
+<li>Timeouts on calls.</li>
+<li>Writable Files.</li>
+</ul>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>real_talk &middot; served by real_talk</small>
+    </div>
+  </footer>
+</body>
 </html>
