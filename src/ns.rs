@@ -123,6 +123,16 @@ pub fn clean(path: &str) -> Result<String, Status> {
     Ok(out)
 }
 
+/// A clean path to mount something at. Unlike a request path, a trailing
+/// `/` means nothing here: `/www/` and `/www` are the same mount point.
+pub fn mount_point(at: &str) -> Result<String, Status> {
+    let mut at = clean(at)?;
+    if at.len() > 1 && at.ends_with('/') {
+        at.pop();
+    }
+    Ok(at)
+}
+
 /// The rest of `path` below `prefix` (`""` for an exact match), if `prefix`
 /// is a prefix on a segment boundary.
 fn below<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -174,7 +184,7 @@ impl Namespace {
     }
 
     /// Mounts all of `target`'s served tree at `at` in `inst`'s view.
-    /// Used to build views from the image, so `at` must already be clean.
+    /// Used to build views from the image, so `at` must already be a [`mount_point`].
     pub fn mount(&mut self, inst: usize, at: &str, target: usize, read_only: bool) {
         let target = Resolved { inst: target, path: "/".into(), read_only };
         put(&mut self.views[inst], at.into(), target);
@@ -205,12 +215,12 @@ impl Namespace {
     pub fn bind(&mut self, inst: usize, source: &str, at: &str, read_only: bool) -> Result<(), Status> {
         let mut target = self.resolve(inst, source)?;
         target.read_only |= read_only;
-        put(&mut self.views[inst], clean(at)?, target);
+        put(&mut self.views[inst], mount_point(at)?, target);
         Ok(())
     }
 
     pub fn unmount(&mut self, inst: usize, at: &str) -> Result<(), Status> {
-        let at = clean(at)?;
+        let at = mount_point(at)?;
         let view = &mut self.views[inst];
         let before = view.len();
         view.retain(|m| m.at != at);
@@ -222,7 +232,7 @@ impl Namespace {
     pub fn expose(&mut self, inst: usize, at: &str, source: &str, read_only: bool) -> Result<(), Status> {
         let mut target = self.resolve(inst, source)?;
         target.read_only |= read_only;
-        put(&mut self.exposed[inst], clean(at)?, target);
+        put(&mut self.exposed[inst], mount_point(at)?, target);
         Ok(())
     }
 }
@@ -303,6 +313,8 @@ mod tests {
         assert_eq!(clean("/a/.."), Err(Status::Invalid));
         assert_eq!(clean("/a\0"), Err(Status::Invalid));
         assert_eq!(clean("/a/..b/c.").unwrap(), "/a/..b/c.", "only whole `..` segments are refused");
+        assert_eq!(mount_point("/a/b/").unwrap(), "/a/b");
+        assert_eq!(mount_point("/").unwrap(), "/");
     }
 
     fn r(inst: usize, path: &str, read_only: bool) -> Result<Resolved, Status> {
@@ -350,6 +362,8 @@ mod tests {
         // Re-binding a read-only name read-write doesn't lift the restriction.
         assert_eq!(ns.bind(0, "/d", "/e", false), Ok(()));
         assert_eq!(ns.resolve(0, "/e"), r(1, "/docs", true));
+        assert_eq!(ns.unmount(0, "/d/"), Ok(()), "a trailing / names the same mount point");
+        assert_eq!(ns.resolve(0, "/d/x"), Err(Status::NotFound));
     }
 
     #[test]

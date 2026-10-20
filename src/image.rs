@@ -1,5 +1,6 @@
 //! Lexer, AST and parser for the image language (`.img` files).
 
+use crate::ns::Verb;
 use anyhow::{Result, bail};
 
 /// A source position, 1-based.
@@ -18,10 +19,7 @@ impl std::fmt::Display for Pos {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     pub imports: Vec<Import>,
-    pub protocols: Vec<Protocol>,
     pub instances: Vec<Instance>,
-    /// Top-level routing trees, in source order.
-    pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,28 +36,46 @@ pub struct Ident {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Protocol {
-    pub name: Ident,
-    /// Types the object accepts, whether routed to it or replied to it.
-    pub inputs: Vec<Ident>,
-    /// Types the object may `emit`; the image routes them.
-    pub emits: Vec<Ident>,
-    /// Types the object may `reply` with, back to whoever messaged it.
-    pub replies: Vec<Ident>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
     pub name: Ident,
-    /// Protocol name; may be dotted, e.g. `Environment.Stdin`.
-    pub protocol: Ident,
-    pub sends: Vec<Send>,
+    /// A module name (`scripts/<name>.wasm`) or a dotted environment type,
+    /// e.g. `Environment.Console`.
+    pub type_name: Ident,
+    pub mounts: Vec<Mount>,
+    /// `send T { ... }`: environment config.
+    pub config: Vec<Body>,
+    /// `<verb> <path> [T { ... }]`: startup requests to this instance.
+    pub requests: Vec<Request>,
+}
+
+/// `mount <instance> <path> [readonly]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mount {
+    pub target: Ident,
+    pub at: Path,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Send {
+pub struct Request {
+    pub verb: Verb,
+    pub verb_pos: Pos,
+    pub path: Path,
+    pub body: Option<Body>,
+}
+
+/// A path literal, as written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Path {
+    pub path: String,
+    pub pos: Pos,
+}
+
+/// A typed message literal: `T` or `T { field: value, ... }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Body {
     pub type_name: Ident,
-    /// `None` for a unit message (`send TypeName`).
+    /// `None` for a unit message (`T` alone).
     pub fields: Option<Vec<(Ident, Value)>>,
 }
 
@@ -71,39 +87,14 @@ pub enum Value {
     Bool(bool),
 }
 
-/// `sender.Type { targets }`: what `sender` emits of `Type` goes to every target.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Route {
-    pub sender: Ident,
-    /// A message type name, or `*` for every type the sender emits.
-    pub selector: Ident,
-    pub targets: Vec<Target>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Target {
-    /// Just an instance name.
-    Leaf(Ident),
-    /// An instance that also routes some of what it emits: the nested
-    /// route's sender is the target.
-    Node(Route),
-}
-
-impl Target {
-    pub fn instance(&self) -> &Ident {
-        match self {
-            Target::Leaf(id) => id,
-            Target::Node(r) => &r.sender,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Lexer
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
     Ident(String),
+    /// Starts with `/`: `/www`, `/hosts/localhost`.
+    Path(String),
     Str(String),
     Int(i128),
     Float(f64),
@@ -118,6 +109,7 @@ impl std::fmt::Display for Tok {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Tok::Ident(s) => write!(f, "`{s}`"),
+            Tok::Path(s) => write!(f, "path `{s}`"),
             Tok::Str(s) => write!(f, "string {s:?}"),
             Tok::Int(i) => write!(f, "integer {i}"),
             Tok::Float(x) => write!(f, "number {x}"),
@@ -156,6 +148,12 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
             while i < chars.len() && chars[i] != '\n' {
                 bump!();
             }
+        } else if c == '/' {
+            let start = i;
+            while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '{' | '}' | ',') {
+                bump!();
+            }
+            toks.push((Tok::Path(chars[start..i].iter().collect()), pos));
         } else if c == '{' || c == '}' || c == ',' || c == ':' {
             toks.push((
                 match c {
@@ -213,12 +211,6 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
         } else if c.is_alphabetic() || c == '_' || c == '$' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '$' | '.')) {
-                // `name.*` selects every type in a route.
-                if chars[i] == '.' && chars.get(i + 1) == Some(&'*') {
-                    bump!();
-                    bump!();
-                    break;
-                }
                 bump!();
             }
             toks.push((Tok::Ident(chars[start..i].iter().collect()), pos));
@@ -233,9 +225,9 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
 // ---------------------------------------------------------------------------
 // Parser
 
-/// Words that can never be names. `in` and `out` are only meaningful at the
-/// start of a protocol member, so ports may be called `out` (as in the spec).
-const KEYWORDS: &[&str] = &["import", "from", "protocol", "instance", "send", "true", "false"];
+/// Words that can never be names. Member keywords (`mount`, `send`,
+/// `readonly` and the verbs) only mean something inside an instance block.
+const KEYWORDS: &[&str] = &["import", "from", "instance", "true", "false"];
 
 struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -300,50 +292,27 @@ impl Parser {
         Ok(out)
     }
 
+    fn path(&mut self) -> Result<Path> {
+        match self.next() {
+            (Tok::Path(path), pos) => Ok(Path { path, pos }),
+            (other, pos) => bail!("{pos}: expected a path starting with `/`, found {other}"),
+        }
+    }
+
     fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], protocols: vec![], instances: vec![], routes: vec![] };
+        let mut image = Image { imports: vec![], instances: vec![] };
         loop {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
-                Tok::Ident(kw) if kw == "protocol" => image.protocols.push(self.protocol()?),
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
-                Tok::Ident(name) if name.contains('.') => image.routes.push(self.route()?),
-                other => bail!(
-                    "{}: expected `import`, `protocol`, `instance` or a route (`sender.Type {{ ... }}`), found {other}",
+                Tok::Ident(kw) if kw == "protocol" => bail!(
+                    "{}: protocols are gone; an instance's type names its module, and requests are addressed by path",
                     self.pos()
                 ),
+                other => bail!("{}: expected `import` or `instance`, found {other}", self.pos()),
             }
         }
-    }
-
-    /// `sender.Type { target, other.Type { ... }, ... }`
-    fn route(&mut self) -> Result<Route> {
-        let (tok, pos) = self.next();
-        let Tok::Ident(name) = tok else { bail!("{pos}: expected a route, found {tok}") };
-        let Some((sender, selector)) = name.split_once('.').filter(|(a, b)| {
-            !a.is_empty() && !b.is_empty() && !b.contains('.') && !KEYWORDS.contains(a) && !KEYWORDS.contains(b)
-        }) else {
-            bail!("{pos}: expected `instance.Type` or `instance.*`, found `{name}`");
-        };
-        let sender = Ident { name: sender.into(), pos };
-        let selector = Ident { name: selector.into(), pos: Pos { line: pos.line, col: pos.col + sender.name.len() + 1 } };
-        self.expect(Tok::LBrace)?;
-        let mut targets = vec![];
-        while *self.peek() != Tok::RBrace {
-            match self.peek().clone() {
-                Tok::Ident(n) if n.contains('.') => targets.push(Target::Node(self.route()?)),
-                _ => targets.push(Target::Leaf(self.ident("target instance or `instance.Type { ... }`", false)?)),
-            }
-            if *self.peek() == Tok::Comma {
-                self.next();
-            }
-        }
-        self.next();
-        if targets.is_empty() {
-            bail!("{pos}: route `{name}` has no targets");
-        }
-        Ok(Route { sender, selector, targets })
     }
 
     fn import(&mut self) -> Result<Import> {
@@ -359,65 +328,54 @@ impl Parser {
         Ok(Import { names, path, pos })
     }
 
-    fn protocol(&mut self) -> Result<Protocol> {
-        self.expect_kw("protocol")?;
-        let name = self.ident("protocol name", false)?;
-        self.expect(Tok::LBrace)?;
-        let mut proto = Protocol { name, inputs: vec![], emits: vec![], replies: vec![] };
-        loop {
-            let kw = match self.peek() {
-                Tok::RBrace => {
-                    self.next();
-                    return Ok(proto);
-                }
-                Tok::Ident(kw) if matches!(kw.as_str(), "in" | "emits" | "replies") => kw.clone(),
-                other => bail!("{}: expected `in`, `emits`, `replies` or `}}`, found {other}", self.pos()),
-            };
-            self.next();
-            let types = self.ident_list("message type")?;
-            match kw.as_str() {
-                "in" => proto.inputs.extend(types),
-                "emits" => proto.emits.extend(types),
-                _ => proto.replies.extend(types),
-            }
-        }
-    }
-
     fn instance(&mut self) -> Result<Instance> {
         self.expect_kw("instance")?;
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
-        let protocol = self.ident("protocol name", true)?;
-        let mut inst = Instance { name, protocol, sends: vec![] };
+        let type_name = self.ident("instance type", true)?;
+        let mut inst = Instance { name, type_name, mounts: vec![], config: vec![], requests: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
         self.next();
         loop {
-            if *self.peek() == Tok::RBrace {
-                self.next();
-                return Ok(inst);
+            let (tok, pos) = self.next();
+            let word = match tok {
+                Tok::RBrace => return Ok(inst),
+                Tok::Ident(word) => word,
+                other => bail!("{pos}: expected `mount`, `send`, a verb or `}}`, found {other}"),
+            };
+            if word == "mount" {
+                let target = self.ident("instance name", false)?;
+                let at = self.path()?;
+                let read_only = self.is_kw("readonly");
+                if read_only {
+                    self.next();
+                }
+                inst.mounts.push(Mount { target, at, read_only });
+            } else if word == "send" {
+                inst.config.push(self.body()?);
+            } else if let Some(verb) = Verb::from_keyword(&word) {
+                let path = self.path()?;
+                let body = match self.peek() {
+                    Tok::Ident(w) if w != "mount" && w != "send" && Verb::from_keyword(w).is_none() => Some(self.body()?),
+                    _ => None,
+                };
+                inst.requests.push(Request { verb, verb_pos: pos, path, body });
+            } else {
+                let verbs: Vec<&str> = crate::ns::VERBS.iter().map(|v| v.keyword()).collect();
+                bail!("{pos}: expected `mount`, `send`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
             }
-            if !self.is_kw("send") {
-                bail!(
-                    "{}: expected `send` or `}}`, found {}; routes are written at the top level as `{}.Type {{ ... }}`",
-                    self.pos(),
-                    self.peek(),
-                    inst.name.name
-                );
-            }
-            self.next();
-            inst.sends.push(self.send()?);
         }
     }
 
-    fn send(&mut self) -> Result<Send> {
+    fn body(&mut self) -> Result<Body> {
         if *self.peek() == Tok::LBrace {
-            bail!("{}: anonymous sends are not supported; write `send TypeName {{ ... }}`", self.pos());
+            bail!("{}: anonymous messages are not supported; write `TypeName {{ ... }}`", self.pos());
         }
         let type_name = self.ident("message type", false)?;
         if *self.peek() != Tok::LBrace {
-            return Ok(Send { type_name, fields: None });
+            return Ok(Body { type_name, fields: None });
         }
         self.next();
         let mut fields = vec![];
@@ -440,7 +398,7 @@ impl Parser {
             }
         }
         self.next();
-        Ok(Send { type_name, fields: Some(fields) })
+        Ok(Body { type_name, fields: Some(fields) })
     }
 }
 
@@ -460,89 +418,86 @@ mod tests {
     fn parses_full_syntax() {
         let img = parse(
             r#"
-            import { Line, Echoed } from "./messages"   // trailing comment
+            import { Greeting, Ping } from "./messages"   // trailing comment
             import { Tick } from "./other"
 
-            protocol Echo {
-              in Line, Tick
-              emits Echoed, Line
-              replies Tick
-            }
-
-            instance stdin : Environment.Stdin
+            instance cons : Environment.Console
+            instance net : Environment.Tcp { send Listen { address: "127.0.0.1:0" } }
             instance echo : Echo {
-              send Tick
-              send Line { text: "hi \"there\"" }
-              send Tick { n: -3, x: 1.5, ok: true }
-            }
-            instance stdout : Environment.Stdout
-
-            stdin.Line {
-              echo.Echoed { stdout, other }
-              echo.* { stdout }, extra
+              mount cons /dev/cons
+              mount net /net/tcp readonly
+              write /greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
+              invoke / Ping
+              remove /old
+              watch /
             }
             "#,
         )
         .unwrap();
 
         assert_eq!(img.imports.len(), 2);
-        assert_eq!(names(&img.imports[0].names), ["Line", "Echoed"]);
+        assert_eq!(names(&img.imports[0].names), ["Greeting", "Ping"]);
         assert_eq!(img.imports[0].path, "./messages");
 
-        let p = &img.protocols[0];
-        assert_eq!(p.name.name, "Echo");
-        assert_eq!(names(&p.inputs), ["Line", "Tick"]);
-        assert_eq!(names(&p.emits), ["Echoed", "Line"]);
-        assert_eq!(names(&p.replies), ["Tick"]);
-
         assert_eq!(img.instances.len(), 3);
-        assert_eq!(img.instances[0].protocol.name, "Environment.Stdin");
-        let echo = &img.instances[1];
-        assert_eq!(echo.sends[0].fields, None);
-        assert_eq!(echo.sends[1].fields.as_ref().unwrap()[0].1, Value::Str("hi \"there\"".into()));
-        let f = echo.sends[2].fields.as_ref().unwrap();
-        assert_eq!(f[0].1, Value::Int(-3));
-        assert_eq!(f[1].1, Value::Float(1.5));
-        assert_eq!(f[2].1, Value::Bool(true));
+        assert_eq!(img.instances[0].type_name.name, "Environment.Console");
+        let net = &img.instances[1];
+        assert_eq!(net.config[0].type_name.name, "Listen");
+        assert_eq!(net.config[0].fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:0".into()));
 
-        let root = &img.routes[0];
-        assert_eq!((root.sender.name.as_str(), root.selector.name.as_str()), ("stdin", "Line"));
-        assert_eq!(root.selector.pos.col, root.sender.pos.col + 6);
-        let kids: Vec<&str> = root.targets.iter().map(|t| t.instance().name.as_str()).collect();
-        assert_eq!(kids, ["echo", "echo", "extra"]);
-        let Target::Node(first) = &root.targets[0] else { panic!() };
-        assert_eq!(first.selector.name, "Echoed");
-        let leaves: Vec<&str> = first.targets.iter().map(|t| t.instance().name.as_str()).collect();
-        assert_eq!(leaves, ["stdout", "other"]);
-        let Target::Node(star) = &root.targets[1] else { panic!() };
-        assert_eq!(star.selector.name, "*");
-        assert!(matches!(root.targets[2], Target::Leaf(_)));
+        let echo = &img.instances[2];
+        let mounts: Vec<_> = echo.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
+        assert_eq!(mounts, [("cons", "/dev/cons", false), ("net", "/net/tcp", true)]);
+
+        let reqs = &echo.requests;
+        assert_eq!(reqs.iter().map(|r| r.verb).collect::<Vec<_>>(), [Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
+        assert_eq!(reqs[0].path.path, "/greeting");
+        let f = reqs[0].body.as_ref().unwrap().fields.as_ref().unwrap();
+        assert_eq!(f[0].1, Value::Str("hi \"there\"".into()));
+        assert_eq!(f[1].1, Value::Int(-3));
+        assert_eq!(f[2].1, Value::Float(1.5));
+        assert_eq!(f[3].1, Value::Bool(true));
+        assert_eq!(reqs[1].path.path, "/");
+        assert_eq!(reqs[1].body.as_ref().unwrap().fields, None);
+        assert_eq!(reqs[2].body, None, "a verb ends a body-less request");
+        assert_eq!(reqs[3].body, None);
     }
 
     #[test]
-    fn rejects_malformed_routes() {
-        assert!(parse("a.b.c { x }").is_err());
-        assert!(parse("a.T { }").unwrap_err().to_string().contains("no targets"));
-        assert!(parse("a.T { b.U }").is_err(), "nested nodes need braces");
-        let e = parse("instance a : P { out }").unwrap_err().to_string();
-        assert!(e.contains("routes are written at the top level"), "{e}");
+    fn comments_are_not_paths() {
+        let img = parse("instance a : A { mount b / // the root\n mount c /c//d }").unwrap();
+        let ats: Vec<&str> = img.instances[0].mounts.iter().map(|m| m.at.path.as_str()).collect();
+        assert_eq!(ats, ["/", "/c//d"], "`//` only starts a comment at the start of a token");
     }
 
     #[test]
-    fn rejects_anonymous_send() {
+    fn rejects_malformed_members() {
+        let e = parse("instance a : A { mount b }").unwrap_err().to_string();
+        assert!(e.contains("expected a path"), "{e}");
+        let e = parse("instance a : A { write hosts }").unwrap_err().to_string();
+        assert!(e.contains("expected a path"), "{e}");
+        let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
+        assert!(e.contains("a verb"), "{e}");
+        let e = parse("protocol P { in A }").unwrap_err().to_string();
+        assert!(e.contains("protocols are gone"), "{e}");
+    }
+
+    #[test]
+    fn rejects_anonymous_messages() {
         let err = parse("instance a : P { send { x: 1 } }").unwrap_err();
         assert!(err.to_string().contains("anonymous"), "{err}");
     }
 
     #[test]
     fn reports_position() {
-        let err = parse("protocol P {\n  in A\n  bogus\n}").unwrap_err();
+        let err = parse("instance a : A {\n  mount b /b\n  bogus\n}").unwrap_err();
         assert!(err.to_string().starts_with("3:3:"), "{err}");
     }
 
     #[test]
     fn keywords_are_not_names() {
-        assert!(parse("instance send : P").is_err());
-        assert!(parse("protocol Environment.X {}").is_err());
+        assert!(parse("instance instance : P").is_err());
+        assert!(parse("instance a.b : P").is_err());
+        assert!(parse("instance write : P").is_ok(), "verbs are only keywords inside blocks");
     }
 }

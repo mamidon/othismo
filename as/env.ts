@@ -1,15 +1,96 @@
-// Messages understood by the runtime's environmental objects.
+// Message types the runtime and its environment objects understand, and the
+// conventional bodies for the namespace verbs.
 //
-// Images import these with `import { ... } from "real-talk/env"`, and object
-// modules do the same in AssemblyScript. The runtime embeds this file and
-// checks that every environment type an image uses has exactly these fields.
+// These are always in scope in an image. Object modules import them with
+// `import { ... } from "real-talk/env"`. The runtime embeds this file, and an
+// image that redeclares one of these types must give it exactly these fields.
 
 import { Message, Reader, Writer, registerMessage } from "./index"
 
 // ---------------------------------------------------------------------------
-// Environment.Stdin / Environment.Stdout
+// Conventional bodies
 
-/** One line of text, without its line ending. Emitted by Environment.Stdin. */
+/** A string value: a setting, an address, a name. */
+export class Text extends Message {
+  text: string
+
+  constructor(text: string) {
+    super()
+    this.text = text
+  }
+
+  typeName(): string { return "Text" }
+  encode(w: Writer): void { w.string("text", this.text) }
+}
+registerMessage("Text", (r: Reader): Message => new Text(r.string("text")))
+
+/** The contents of something, as `Read` answers. `mime` may be "". */
+export class Data extends Message {
+  mime: string
+  data: ArrayBuffer
+
+  constructor(mime: string, data: ArrayBuffer) {
+    super()
+    this.mime = mime
+    this.data = data
+  }
+
+  typeName(): string { return "Data" }
+  encode(w: Writer): void {
+    w.string("mime", this.mime)
+    w.bytes("data", this.data)
+  }
+}
+registerMessage("Data", (r: Reader): Message => new Data(r.string("mime"), r.bytes("data")))
+
+/** What `Stat` answers. `kind` is "file" or "dir". */
+export class Info extends Message {
+  kind: string
+  size: i64
+  mime: string
+
+  constructor(kind: string, size: i64, mime: string) {
+    super()
+    this.kind = kind
+    this.size = size
+    this.mime = mime
+  }
+
+  typeName(): string { return "Info" }
+  encode(w: Writer): void {
+    w.string("kind", this.kind)
+    w.i64("size", this.size)
+    w.string("mime", this.mime)
+  }
+}
+registerMessage("Info", (r: Reader): Message => new Info(r.string("kind"), r.i64("size"), r.string("mime")))
+
+/** One name in a `List` stream, or what `Create` made. `kind` is "file" or "dir". */
+export class Entry extends Message {
+  name: string
+  kind: string
+
+  constructor(name: string, kind: string) {
+    super()
+    this.name = name
+    this.kind = kind
+  }
+
+  typeName(): string { return "Entry" }
+  encode(w: Writer): void {
+    w.string("name", this.name)
+    w.string("kind", this.kind)
+  }
+}
+registerMessage("Entry", (r: Reader): Message => new Entry(r.string("name"), r.string("kind")))
+
+// ---------------------------------------------------------------------------
+// Environment.Console
+//
+//   Watch /   a stream of Line, one per line of stdin, ending at EOF
+//   Write /   prints the body
+
+/** One line of text, without its line ending. */
 export class Line extends Message {
   text: string
 
@@ -24,13 +105,17 @@ export class Line extends Message {
 registerMessage("Line", (r: Reader): Message => new Line(r.string("text")))
 
 // ---------------------------------------------------------------------------
-// Environment.Socket: a TCP listener.
+// Environment.Tcp: a TCP listener.
 //
-//   in:    SocketWrite, SocketClose  (usually replies to SocketData)
-//   emits: SocketData, SocketClosed, Listening
-//   startup (exactly once, image only): Listen
+//   Read   /address  Text: the bound address, e.g. "127.0.0.1:8080"
+//   Watch  /accept   a stream of Accepted
+//   Watch  /<conn>   a stream of Data received, ending when the peer closes
+//   Write  /<conn>   sends a Data's bytes
+//   Remove /<conn>   closes our side once everything written has been sent
+//
+//   config (image only): send Listen { address: "..." }
 
-/** Startup config: the address to listen on, e.g. "127.0.0.1:8080". */
+/** Config: the address to listen on, e.g. "127.0.0.1:8080". */
 export class Listen extends Message {
   address: string
 
@@ -44,94 +129,35 @@ export class Listen extends Message {
 }
 registerMessage("Listen", (r: Reader): Message => new Listen(r.string("address")))
 
-/** Emitted once the socket is bound; `address` has the real port. */
-export class Listening extends Message {
-  address: string
+/** A new connection: `conn` names it under the listener, `peer` is the remote address. */
+export class Accepted extends Message {
+  conn: string
+  peer: string
 
-  constructor(address: string) {
-    super()
-    this.address = address
-  }
-
-  typeName(): string { return "Listening" }
-  encode(w: Writer): void { w.string("address", this.address) }
-}
-registerMessage("Listening", (r: Reader): Message => new Listening(r.string("address")))
-
-/** Bytes received on connection `conn`. */
-export class SocketData extends Message {
-  conn: u32
-  data: ArrayBuffer
-
-  constructor(conn: u32, data: ArrayBuffer) {
+  constructor(conn: string, peer: string) {
     super()
     this.conn = conn
-    this.data = data
+    this.peer = peer
   }
 
-  typeName(): string { return "SocketData" }
+  typeName(): string { return "Accepted" }
   encode(w: Writer): void {
-    w.i64("conn", this.conn)
-    w.bytes("data", this.data)
+    w.string("conn", this.conn)
+    w.string("peer", this.peer)
   }
 }
-registerMessage("SocketData", (r: Reader): Message => new SocketData(<u32>r.i64("conn"), r.bytes("data")))
-
-/** The peer closed connection `conn`, or it failed. */
-export class SocketClosed extends Message {
-  conn: u32
-
-  constructor(conn: u32) {
-    super()
-    this.conn = conn
-  }
-
-  typeName(): string { return "SocketClosed" }
-  encode(w: Writer): void { w.i64("conn", this.conn) }
-}
-registerMessage("SocketClosed", (r: Reader): Message => new SocketClosed(<u32>r.i64("conn")))
-
-/** Writes bytes to connection `conn`. */
-export class SocketWrite extends Message {
-  conn: u32
-  data: ArrayBuffer
-
-  constructor(conn: u32, data: ArrayBuffer) {
-    super()
-    this.conn = conn
-    this.data = data
-  }
-
-  typeName(): string { return "SocketWrite" }
-  encode(w: Writer): void {
-    w.i64("conn", this.conn)
-    w.bytes("data", this.data)
-  }
-}
-registerMessage("SocketWrite", (r: Reader): Message => new SocketWrite(<u32>r.i64("conn"), r.bytes("data")))
-
-/** Closes connection `conn` after everything written so far. */
-export class SocketClose extends Message {
-  conn: u32
-
-  constructor(conn: u32) {
-    super()
-    this.conn = conn
-  }
-
-  typeName(): string { return "SocketClose" }
-  encode(w: Writer): void { w.i64("conn", this.conn) }
-}
-registerMessage("SocketClose", (r: Reader): Message => new SocketClose(<u32>r.i64("conn")))
+registerMessage("Accepted", (r: Reader): Message => new Accepted(r.string("conn"), r.string("peer")))
 
 // ---------------------------------------------------------------------------
 // Environment.Files: read-only access to one directory tree.
 //
-//   in:      ReadFile
-//   replies: FileContents, FileError
-//   startup (exactly once, image only): FilesRoot
+//   Read   Data, with a MIME type from the extension; IsDirectory for a directory
+//   Stat   Info
+//   List   a stream of Entry, sorted by name
+//
+//   config (image only): send FilesRoot { path: "..." }
 
-/** Startup config: the directory served, relative to the image file. */
+/** Config: the directory served, relative to the image file. */
 export class FilesRoot extends Message {
   path: string
 
@@ -144,69 +170,3 @@ export class FilesRoot extends Message {
   encode(w: Writer): void { w.string("path", this.path) }
 }
 registerMessage("FilesRoot", (r: Reader): Message => new FilesRoot(r.string("path")))
-
-/** Reads `path` (relative to the root; a leading "/" is ignored). The reply echoes `tag`. */
-export class ReadFile extends Message {
-  tag: u32
-  path: string
-
-  constructor(tag: u32, path: string) {
-    super()
-    this.tag = tag
-    this.path = path
-  }
-
-  typeName(): string { return "ReadFile" }
-  encode(w: Writer): void {
-    w.i64("tag", this.tag)
-    w.string("path", this.path)
-  }
-}
-registerMessage("ReadFile", (r: Reader): Message => new ReadFile(<u32>r.i64("tag"), r.string("path")))
-
-/** The whole contents of the file a ReadFile asked for. */
-export class FileContents extends Message {
-  tag: u32
-  path: string
-  data: ArrayBuffer
-
-  constructor(tag: u32, path: string, data: ArrayBuffer) {
-    super()
-    this.tag = tag
-    this.path = path
-    this.data = data
-  }
-
-  typeName(): string { return "FileContents" }
-  encode(w: Writer): void {
-    w.i64("tag", this.tag)
-    w.string("path", this.path)
-    w.bytes("data", this.data)
-  }
-}
-registerMessage("FileContents", (r: Reader): Message => new FileContents(<u32>r.i64("tag"), r.string("path"), r.bytes("data")))
-
-/**
- * A ReadFile failed. `reason` is "not_found", "directory" (the path is a
- * directory), "forbidden" (outside the root) or "io" (anything else).
- */
-export class FileError extends Message {
-  tag: u32
-  path: string
-  reason: string
-
-  constructor(tag: u32, path: string, reason: string) {
-    super()
-    this.tag = tag
-    this.path = path
-    this.reason = reason
-  }
-
-  typeName(): string { return "FileError" }
-  encode(w: Writer): void {
-    w.i64("tag", this.tag)
-    w.string("path", this.path)
-    w.string("reason", this.reason)
-  }
-}
-registerMessage("FileError", (r: Reader): Message => new FileError(<u32>r.i64("tag"), r.string("path"), r.string("reason")))

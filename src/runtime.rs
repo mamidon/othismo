@@ -1,22 +1,27 @@
 //! Instantiates a checked [`Program`] and runs its message loop.
 //!
-//! Delivery is synchronous and single-threaded: one FIFO queue of
-//! `(target, sender, message)` entries, drained completely before the next
-//! outside [`Event`] is taken. Objects send in two ways: `emit`, which the
-//! image's routes direct, and `reply`, which goes back to whoever sent the
-//! message being answered.
+//! Every message is a request to a path or a reply to one. A request is
+//! resolved in the sender's view (see [`crate::ns`]) when it is made, and
+//! queued for the instance that serves it. Replies go back to whoever made
+//! the request, tagged with the ticket the caller was given.
 //!
-//! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`,
-//! `real_talk.emit` and `real_talk.reply`; anything else a module asks for is
-//! refused before it is instantiated.
+//! Delivery is synchronous and single-threaded: one FIFO queue, drained
+//! completely before the next outside [`Event`] is taken.
+//!
+//! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`
+//! and the `real_talk` functions in [`ALLOWED_IMPORTS`]; anything else a
+//! module asks for is refused before it is instantiated.
 
 use crate::check::{Kind, Program};
-use crate::env::{self, EnvObject, Event, Out};
+use crate::env::{self, EnvObject, Event, Reply};
 use crate::messages::MessageType;
+use crate::ns::{self, Namespace, Resolved, Status, Verb};
 use crate::wire::Message;
 use anyhow::{Context, Result, anyhow, bail};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, Write};
+use std::rc::Rc;
 use std::sync::mpsc;
 use wasmtime::{Caller, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
 
@@ -35,52 +40,192 @@ impl Io {
 
 #[derive(Debug, Default, Clone)]
 pub struct Options {
-    /// Check every message's fields against its declaration in transit.
+    /// Check every body's fields against its declaration in transit.
     pub check_shapes: bool,
 }
 
 /// Every host function a module may import.
-const ALLOWED_IMPORTS: &[(&str, &str)] = &[("env", "abort"), ("real_talk", "emit"), ("real_talk", "reply")];
+pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
+    ("env", "abort"),
+    ("real_talk", "call"),
+    ("real_talk", "reply"),
+    ("real_talk", "forward"),
+    ("real_talk", "cancel"),
+    ("real_talk", "bind"),
+    ("real_talk", "unmount"),
+    ("real_talk", "expose"),
+];
 
-/// Reply handle meaning "the image itself" (startup sends); replies to it are dropped.
-const NOBODY: u32 = 0;
-
-#[derive(Default)]
-struct HostState {
-    /// Messages the module sent during the current call, as BSON.
-    outbox: Vec<Sent>,
-    /// Reply handles: handle `h` (from 1) names instance `senders[h - 1]`.
-    /// Only instances that have messaged this object ever get a handle, so a
-    /// guessed handle can only reach something it could already reply to.
-    senders: Vec<usize>,
-    handles: HashMap<usize, u32>,
+/// Who made a request, and so where its replies go.
+#[derive(Debug, Clone)]
+enum Requester {
+    /// A startup request, described for warnings. Replies are dropped.
+    Image(String),
+    /// Ticket 0 means no answer is wanted.
+    Wasm { inst: usize, ticket: u32 },
 }
 
-enum Sent {
-    Emit(Vec<u8>),
-    Reply(u32, Vec<u8>),
+/// A request being served.
+struct Pending {
+    caller: Requester,
+    verb: Verb,
+    /// Kept so the request can be forwarded.
+    body: Option<Message>,
+    /// The caller gave up; replies are dropped.
+    cancelled: bool,
+}
+
+enum Delivery {
+    Serve { to: usize, req: u32, verb: Verb, path: String, body: Option<Message> },
+    Answer { to: usize, ticket: u32, status: Status, body: Option<Message>, done: bool },
+    Cancel { to: usize, req: u32 },
+}
+
+/// The state host functions work on. Shared between the runtime and every
+/// Wasm store, and only ever borrowed briefly, never across a call into Wasm.
+struct Shared {
+    names: Vec<String>,
+    ns: Namespace,
+    messages: BTreeMap<String, MessageType>,
+    check_shapes: bool,
+    queue: VecDeque<Delivery>,
+    /// `(server, req)`.
+    requests: HashMap<(usize, u32), Pending>,
+    next_req: Vec<u32>,
+    /// `(caller, ticket) -> (server, req)`, for cancelling.
+    calls: HashMap<(usize, u32), (usize, u32)>,
+    next_ticket: Vec<u32>,
+}
+
+impl Shared {
+    /// Makes a request of wherever `to` resolved; failures to resolve are
+    /// answered straight away.
+    fn request(&mut self, caller: Requester, to: Result<Resolved, Status>, verb: Verb, body: Option<Message>) {
+        let to = match to {
+            Ok(r) if r.read_only && !verb.is_safe() => Err(Status::ReadOnly),
+            other => other,
+        };
+        let r = match to {
+            Ok(r) => r,
+            Err(status) => return self.answer(&caller, status, None, true),
+        };
+        self.next_req[r.inst] += 1;
+        let req = self.next_req[r.inst];
+        if let Requester::Wasm { inst, ticket } = caller
+            && ticket != 0
+        {
+            self.calls.insert((inst, ticket), (r.inst, req));
+        }
+        self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false });
+        self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, path: r.path, body });
+    }
+
+    fn answer(&mut self, caller: &Requester, status: Status, body: Option<Message>, done: bool) {
+        match *caller {
+            Requester::Image(ref what) => {
+                if status != Status::Ok {
+                    eprintln!("warning: startup request `{what}` failed: {status}");
+                }
+            }
+            Requester::Wasm { ticket: 0, .. } => {}
+            Requester::Wasm { inst, ticket } => {
+                if done {
+                    self.calls.remove(&(inst, ticket));
+                }
+                self.queue.push_back(Delivery::Answer { to: inst, ticket, status, body, done });
+            }
+        }
+    }
+
+    /// `server` replies to its request `req`.
+    fn reply(&mut self, server: usize, req: u32, status: Status, body: Option<Message>, done: bool) -> Result<()> {
+        if let Some(b) = &body {
+            self.check_shape(server, b)?;
+        }
+        let Some(p) = self.requests.get(&(server, req)) else {
+            bail!("instance `{}` replied to unknown request {req}", self.names[server]);
+        };
+        let (caller, cancelled) = (p.caller.clone(), p.cancelled);
+        if done {
+            self.requests.remove(&(server, req));
+        }
+        if !cancelled {
+            self.answer(&caller, status, body, done);
+        }
+        Ok(())
+    }
+
+    /// `server` hands its request `req` to `path` in its own view.
+    fn forward(&mut self, server: usize, req: u32, path: &str) -> Result<()> {
+        let Some(p) = self.requests.remove(&(server, req)) else {
+            bail!("instance `{}` forwarded unknown request {req}", self.names[server]);
+        };
+        if p.cancelled {
+            return Ok(());
+        }
+        let to = self.ns.resolve(server, path);
+        self.request(p.caller, to, p.verb, p.body);
+        Ok(())
+    }
+
+    /// `caller` gives up on the call it was given `ticket` for.
+    fn cancel(&mut self, caller: usize, ticket: u32) {
+        let Some((server, req)) = self.calls.remove(&(caller, ticket)) else { return };
+        if let Some(p) = self.requests.get_mut(&(server, req)) {
+            p.cancelled = true;
+            self.queue.push_back(Delivery::Cancel { to: server, req });
+        }
+    }
+
+    fn check_shape(&self, from: usize, msg: &Message) -> Result<()> {
+        if !self.check_shapes {
+            return Ok(());
+        }
+        let name = &self.names[from];
+        let ty = self.messages.get(&msg.type_name).ok_or_else(|| {
+            anyhow!("instance `{name}` sent `{}`, which isn't declared in the image's imports", msg.type_name)
+        })?;
+        msg.check_shape(ty).with_context(|| format!("instance `{name}` sent a malformed `{}`", msg.type_name))
+    }
+}
+
+struct HostState {
+    me: usize,
+    shared: Rc<RefCell<Shared>>,
 }
 
 struct WasmObject {
     store: Store<HostState>,
     memory: Memory,
     inbox: TypedFunc<i32, i32>,
-    deliver: TypedFunc<i32, ()>,
+    serve: TypedFunc<(i32, i32, i32, i32), ()>,
+    answer: TypedFunc<(i32, i32, i32, i32), ()>,
+    start: TypedFunc<(), ()>,
+    /// Optional: a module that never streams needn't hear about cancels.
+    /// Without it, a cancelled request's replies are dropped until it ends.
+    cancel: Option<TypedFunc<i32, ()>>,
+}
+
+impl WasmObject {
+    /// Copies `bytes` into a fresh inbox in the module's memory.
+    fn fill_inbox(&mut self, bytes: &[u8]) -> Result<()> {
+        let ptr = self.inbox.call(&mut self.store, bytes.len() as i32)?;
+        self.memory.write(&mut self.store, ptr as u32 as usize, bytes)?;
+        Ok(())
+    }
 }
 
 enum Object {
-    Wasm(WasmObject),
+    Wasm(Box<WasmObject>),
     Env(EnvObject),
 }
 
 pub struct Runtime<'p> {
     program: &'p Program,
     objects: Vec<Object>,
-    /// `(to, from, message)`; `from` is `None` for the image's startup sends.
-    queue: VecDeque<(usize, Option<usize>, Message)>,
+    shared: Rc<RefCell<Shared>>,
     input: Option<Box<dyn BufRead + Send>>,
     output: Box<dyn Write>,
-    options: Options,
 }
 
 /// Runs `program` until no outside event can arrive any more (stdin is
@@ -90,54 +235,36 @@ pub fn run(program: &Program, io: Io, options: Options) -> Result<()> {
 }
 
 impl<'p> Runtime<'p> {
-    /// Instantiates every object. Messages sent by module start functions are
-    /// queued, not yet delivered.
+    /// Builds every view and instantiates every object. Requests made by
+    /// module top-level code are queued, not yet delivered.
     pub fn new(program: &'p Program, io: Io, options: Options) -> Result<Runtime<'p>> {
+        let n = program.instances.len();
+        let mut ns = Namespace::new(n);
+        for (i, inst) in program.instances.iter().enumerate() {
+            for m in &inst.mounts {
+                ns.mount(i, &m.at, m.target, m.read_only);
+            }
+        }
+        let shared = Rc::new(RefCell::new(Shared {
+            names: program.instances.iter().map(|i| i.name.clone()).collect(),
+            ns,
+            messages: program.messages.clone(),
+            check_shapes: options.check_shapes,
+            queue: VecDeque::new(),
+            requests: HashMap::new(),
+            next_req: vec![0; n],
+            calls: HashMap::new(),
+            next_ticket: vec![0; n],
+        }));
+
         let engine = Engine::default();
         let linker = host_linker(&engine)?;
-        let mut rt = Runtime {
-            program,
-            objects: vec![],
-            queue: VecDeque::new(),
-            input: Some(io.input),
-            output: io.output,
-            options,
-        };
+        let mut objects = vec![];
         for (i, inst) in program.instances.iter().enumerate() {
             let obj = match &inst.kind {
-                Kind::Wasm { protocol, module } => {
-                    let bytes = std::fs::read(module).with_context(|| {
-                        format!("instance `{}`: cannot read {} (did you compile {protocol}.ts?)", inst.name, module.display())
-                    })?;
-                    let module = Module::new(&engine, bytes)
-                        .map_err(anyhow::Error::from)
-                        .with_context(|| format!("instance `{}`: invalid module {}", inst.name, module.display()))?;
-                    for imp in module.imports() {
-                        if !ALLOWED_IMPORTS.contains(&(imp.module(), imp.name())) {
-                            bail!(
-                                "instance `{}`: module for {protocol} imports `{}.{}`, which the runtime does not provide",
-                                inst.name,
-                                imp.module(),
-                                imp.name()
-                            );
-                        }
-                    }
-                    let mut store = Store::new(&engine, HostState::default());
-                    let instance = linker
-                        .instantiate(&mut store, &module)
-                        .map_err(|e| anyhow!("instance `{}` failed to start: {e:#}", inst.name))?;
-                    let memory = instance
-                        .get_memory(&mut store, "memory")
-                        .ok_or_else(|| anyhow!("instance `{}`: module does not export `memory`", inst.name))?;
-                    let inbox = instance
-                        .get_typed_func(&mut store, "rt_inbox")
-                        .map_err(anyhow::Error::from)
-                        .with_context(|| format!("instance `{}`: module must export rt_inbox(i32) -> i32", inst.name))?;
-                    let deliver = instance
-                        .get_typed_func(&mut store, "rt_deliver")
-                        .map_err(anyhow::Error::from)
-                        .with_context(|| format!("instance `{}`: module must export rt_deliver(i32)", inst.name))?;
-                    Object::Wasm(WasmObject { store, memory, inbox, deliver })
+                Kind::Wasm { type_name, module } => {
+                    let state = HostState { me: i, shared: shared.clone() };
+                    Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))
                 }
                 kind => Object::Env(
                     EnvObject::new(kind)?
@@ -145,192 +272,290 @@ impl<'p> Runtime<'p> {
                         .with_context(|| format!("instance `{}`", inst.name))?,
                 ),
             };
-            rt.objects.push(obj);
-            rt.flush_outbox(i)?;
+            objects.push(obj);
         }
-        Ok(rt)
+        Ok(Runtime { program, objects, shared, input: Some(io.input), output: io.output })
     }
 
     pub fn run(mut self) -> Result<()> {
-        // Startup sends go out once every object exists, before outside events.
+        // The image's startup requests, then every module's start().
         for (i, inst) in self.program.instances.iter().enumerate() {
-            for msg in &inst.startup {
-                self.queue.push_back((i, None, msg.clone()));
+            for s in &inst.startup {
+                let what = format!("{} {} {}", s.verb.keyword(), inst.name, s.path);
+                let to = Ok(Resolved { inst: i, path: s.path.clone(), read_only: false });
+                self.shared.borrow_mut().request(Requester::Image(what), to, s.verb, s.body.clone());
+            }
+        }
+        self.drain()?;
+        for i in 0..self.objects.len() {
+            if let Object::Wasm(obj) = &mut self.objects[i] {
+                obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;
             }
         }
         self.drain()?;
 
+        // Then the outside world. Stdin is read only if something watches it.
         let (tx, rx) = mpsc::channel::<Event>();
-        let stdins: Vec<usize> = (0..self.objects.len())
-            .filter(|&i| matches!(self.objects[i], Object::Env(EnvObject::Stdin)))
+        let consoles: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| matches!(&self.objects[i], Object::Env(EnvObject::Console(c)) if c.is_watched()))
             .collect();
-        if !stdins.is_empty() {
-            env::spawn_stdin(self.input.take().expect("input is taken once"), stdins, tx.clone());
+        if !consoles.is_empty() {
+            env::spawn_stdin(self.input.take().expect("input is taken once"), consoles, tx.clone());
         }
-        for i in 0..self.objects.len() {
-            if let Object::Env(e) = &mut self.objects[i] {
-                let sent = e.start(i, &tx).with_context(|| format!("instance `{}`", self.program.instances[i].name))?;
-                self.send_all(i, None, sent)?;
+        for (i, obj) in self.objects.iter_mut().enumerate() {
+            if let Object::Env(e) = obj {
+                e.start(i, &tx);
             }
         }
         // Once every source thread has finished, `rx` disconnects and we're done.
         drop(tx);
-        self.drain()?;
-
         for ev in rx {
             let Object::Env(e) = &mut self.objects[ev.to] else { unreachable!("events only come from env objects") };
-            let sent = e.on_event(ev.what);
-            self.send_all(ev.to, None, sent)?;
+            let replies = e.on_event(ev.what);
+            self.send_replies(ev.to, replies)?;
             self.drain()?;
         }
         Ok(())
     }
 
+    fn failed(&self, inst: usize, doing: &str, e: impl std::fmt::Display) -> anyhow::Error {
+        anyhow!("instance `{}` failed {doing}: {e:#}", self.program.instances[inst].name)
+    }
+
     fn drain(&mut self) -> Result<()> {
-        while let Some((to, from, msg)) = self.queue.pop_front() {
-            self.deliver(to, from, msg)?;
-        }
-        Ok(())
-    }
-
-    fn deliver(&mut self, to: usize, from: Option<usize>, msg: Message) -> Result<()> {
-        let name = &self.program.instances[to].name;
-        match &mut self.objects[to] {
-            Object::Env(e) => {
-                let sent = e
-                    .deliver(&msg, self.program, &mut self.output)
-                    .with_context(|| format!("instance `{name}` failed handling `{}`", msg.type_name))?;
-                self.send_all(to, from, sent)?;
-            }
-            Object::Wasm(obj) => {
-                let bytes = msg.encode();
-                let state = obj.store.data_mut();
-                let handle = match from {
-                    None => NOBODY,
-                    Some(f) => *state.handles.entry(f).or_insert_with(|| {
-                        state.senders.push(f);
-                        state.senders.len() as u32
-                    }),
-                };
-                let call = |obj: &mut WasmObject| -> Result<()> {
-                    let ptr = obj.inbox.call(&mut obj.store, bytes.len() as i32)?;
-                    obj.memory.write(&mut obj.store, ptr as u32 as usize, &bytes)?;
-                    Ok(obj.deliver.call(&mut obj.store, handle as i32)?)
-                };
-                call(obj).map_err(|e| anyhow!("instance `{name}` failed handling `{}`: {e:#}", msg.type_name))?;
-                self.flush_outbox(to)?;
+        loop {
+            let next = self.shared.borrow_mut().queue.pop_front();
+            match next {
+                Some(d) => self.deliver(d)?,
+                None => return Ok(()),
             }
         }
-        Ok(())
     }
 
-    /// Sends what an environment object produced while handling a message from `from`.
-    fn send_all(&mut self, me: usize, from: Option<usize>, sent: Vec<Out>) -> Result<()> {
-        for out in sent {
-            match out {
-                Out::Emit(msg) => self.emit(me, msg)?,
-                Out::Reply(msg) => self.reply(me, from, msg)?,
+    fn deliver(&mut self, d: Delivery) -> Result<()> {
+        match d {
+            Delivery::Serve { to, req, verb, path, body } => {
+                let doing = format!("serving `{} {path}`", verb.keyword());
+                match &mut self.objects[to] {
+                    Object::Env(e) => {
+                        let messages = &self.program.messages;
+                        let replies = e
+                            .serve(req, verb, &path, body.as_ref(), &mut self.output, messages)
+                            .map_err(|e| self.failed(to, &doing, e))?;
+                        self.send_replies(to, replies)?;
+                    }
+                    Object::Wasm(obj) => {
+                        let mut bytes = path.as_bytes().to_vec();
+                        let body = body.map(|b| b.encode()).unwrap_or_default();
+                        bytes.extend_from_slice(&body);
+                        let args = (req as i32, verb as i32, path.len() as i32, body.len() as i32);
+                        let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.serve.call(&mut obj.store, args)?));
+                        res.map_err(|e| self.failed(to, &doing, e))?;
+                    }
+                }
             }
-        }
-        Ok(())
-    }
-
-    /// Sends whatever Wasm instance `me` produced during its last call.
-    fn flush_outbox(&mut self, me: usize) -> Result<()> {
-        let Object::Wasm(obj) = &mut self.objects[me] else { return Ok(()) };
-        let state = obj.store.data_mut();
-        let sent = std::mem::take(&mut state.outbox);
-        let senders = state.senders.clone();
-        let name = &self.program.instances[me].name;
-        for s in sent {
-            let (to, bytes) = match s {
-                Sent::Emit(bytes) => (None, bytes),
-                Sent::Reply(NOBODY, bytes) => (Some(None), bytes),
-                Sent::Reply(h, bytes) => match senders.get(h as usize - 1) {
-                    Some(&i) => (Some(Some(i)), bytes),
-                    None => bail!("instance `{name}` replied with unknown handle {h}"),
-                },
-            };
-            let msg = Message::decode(&bytes).with_context(|| format!("instance `{name}` sent an undecodable message"))?;
-            match to {
-                None => self.emit(me, msg)?,
-                Some(to) => self.reply(me, to, msg)?,
+            Delivery::Answer { to, ticket, status, body, done } => {
+                let Object::Wasm(obj) = &mut self.objects[to] else { unreachable!("only Wasm objects make calls") };
+                let body = body.map(|b| b.encode()).unwrap_or_default();
+                let args = (ticket as i32, status as i32, body.len() as i32, done as i32);
+                let res = obj.fill_inbox(&body).and_then(|_| Ok(obj.answer.call(&mut obj.store, args)?));
+                res.map_err(|e| self.failed(to, "handling an answer", e))?;
             }
+            Delivery::Cancel { to, req } => match &mut self.objects[to] {
+                Object::Env(e) => {
+                    let replies = e.cancel(req);
+                    self.send_replies(to, replies)?;
+                }
+                // Without rt_cancel, its replies are dropped until it ends the request on its own.
+                Object::Wasm(obj) => {
+                    if let Some(f) = obj.cancel.clone() {
+                        f.call(&mut obj.store, req as i32).map_err(|e| self.failed(to, "cancelling", e))?;
+                    }
+                }
+            },
         }
         Ok(())
     }
 
-    /// Enqueues `msg` for every target the image routes `from`'s `msg.type_name` to.
-    fn emit(&mut self, from: usize, msg: Message) -> Result<()> {
-        let inst = &self.program.instances[from];
-        if !inst.emits.contains(&msg.type_name) {
-            bail!("instance `{}` emitted `{}`, but its protocol only emits {}", inst.name, msg.type_name, list(&inst.emits));
-        }
-        self.check_shape(from, &msg)?;
-        let targets = self.program.routes.get(&(from, msg.type_name.clone())).cloned().unwrap_or_default();
-        for t in targets {
-            self.queue.push_back((t, Some(from), msg.clone()));
-        }
-        Ok(())
-    }
-
-    /// Enqueues `msg` back to `to`; a reply to the image (`None`) is dropped.
-    fn reply(&mut self, from: usize, to: Option<usize>, msg: Message) -> Result<()> {
-        let inst = &self.program.instances[from];
-        if !inst.replies.contains(&msg.type_name) {
-            bail!("instance `{}` replied `{}`, but its protocol only replies {}", inst.name, msg.type_name, list(&inst.replies));
-        }
-        self.check_shape(from, &msg)?;
-        let Some(to) = to else { return Ok(()) };
-        let target = &self.program.instances[to];
-        if !target.accepts(&msg.type_name) {
-            bail!("instance `{}` replied `{}` to `{}`, which doesn't accept it", inst.name, msg.type_name, target.name);
-        }
-        self.queue.push_back((to, Some(from), msg));
-        Ok(())
-    }
-
-    fn check_shape(&self, from: usize, msg: &Message) -> Result<()> {
-        if self.options.check_shapes {
-            check_shape(&self.program.messages, msg)
-                .with_context(|| format!("instance `{}` sent a malformed `{}`", self.program.instances[from].name, msg.type_name))?;
+    fn send_replies(&mut self, from: usize, replies: Vec<Reply>) -> Result<()> {
+        let mut shared = self.shared.borrow_mut();
+        for r in replies {
+            shared.reply(from, r.req, r.status, r.body, r.done)?;
         }
         Ok(())
     }
 }
 
-fn list(types: &[String]) -> String {
-    if types.is_empty() { "nothing".into() } else { types.join(", ") }
+fn instantiate(
+    engine: &Engine,
+    linker: &Linker<HostState>,
+    name: &str,
+    type_name: &str,
+    path: &std::path::Path,
+    state: HostState,
+) -> Result<WasmObject> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("instance `{name}`: cannot read {} (did you compile {type_name}.ts?)", path.display()))?;
+    let module = Module::new(engine, bytes)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("instance `{name}`: invalid module {}", path.display()))?;
+    for imp in module.imports() {
+        if !ALLOWED_IMPORTS.contains(&(imp.module(), imp.name())) {
+            bail!(
+                "instance `{name}`: module {type_name} imports `{}.{}`, which the runtime does not provide",
+                imp.module(),
+                imp.name()
+            );
+        }
+    }
+    let mut store = Store::new(engine, state);
+    let instance =
+        linker.instantiate(&mut store, &module).map_err(|e| anyhow!("instance `{name}` failed to start: {e:#}"))?;
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .ok_or_else(|| anyhow!("instance `{name}`: module does not export `memory`"))?;
+    let mut export = |func: &str, sig: &str| {
+        instance
+            .get_func(&mut store, func)
+            .ok_or_else(|| anyhow!("instance `{name}`: module must export {func}{sig}"))
+    };
+    let inbox = export("rt_inbox", "(i32) -> i32")?;
+    let serve = export("rt_serve", "(i32, i32, i32, i32)")?;
+    let answer = export("rt_answer", "(i32, i32, i32, i32)")?;
+    let start = export("rt_start", "()")?;
+    let typed = |e: wasmtime::Error, func: &str| anyhow!("instance `{name}`: {func} has the wrong signature: {e}");
+    Ok(WasmObject {
+        inbox: inbox.typed(&store).map_err(|e| typed(e, "rt_inbox"))?,
+        serve: serve.typed(&store).map_err(|e| typed(e, "rt_serve"))?,
+        answer: answer.typed(&store).map_err(|e| typed(e, "rt_answer"))?,
+        start: start.typed(&store).map_err(|e| typed(e, "rt_start"))?,
+        cancel: match instance.get_func(&mut store, "rt_cancel") {
+            Some(f) => Some(f.typed(&store).map_err(|e| typed(e, "rt_cancel"))?),
+            None => None,
+        },
+        memory,
+        store,
+    })
 }
 
-fn check_shape(messages: &BTreeMap<String, MessageType>, msg: &Message) -> Result<()> {
-    msg.check_shape(&messages[&msg.type_name])
+type HostResult<T> = wasmtime::Result<T>;
+
+fn host_err(e: anyhow::Error) -> wasmtime::Error {
+    wasmtime::format_err!("{e:#}")
+}
+
+/// A path from module memory; invalid UTF-8 can't name anything.
+fn read_path(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> HostResult<Option<String>> {
+    Ok(String::from_utf8(read_bytes(caller, ptr, len)?).ok())
+}
+
+/// An optional body from module memory: length 0 means none.
+fn read_body(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> HostResult<Option<Message>> {
+    if len == 0 {
+        return Ok(None);
+    }
+    let me = caller.data().me;
+    let bytes = read_bytes(caller, ptr, len)?;
+    let shared = caller.data().shared.clone();
+    let shared = shared.borrow();
+    let msg = Message::decode(&bytes)
+        .with_context(|| format!("instance `{}` sent an undecodable message", shared.names[me]))
+        .map_err(host_err)?;
+    shared.check_shape(me, &msg).map_err(host_err)?;
+    Ok(Some(msg))
+}
+
+fn status_code(r: Result<(), Status>) -> i32 {
+    match r {
+        Ok(()) => Status::Ok as i32,
+        Err(s) => s as i32,
+    }
 }
 
 fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap(
         "real_talk",
-        "emit",
-        |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| -> wasmtime::Result<()> {
-            let buf = read_bytes(&mut caller, ptr, len)?;
-            caller.data_mut().outbox.push(Sent::Emit(buf));
-            Ok(())
+        "call",
+        |mut caller: Caller<'_, HostState>, verb: i32, path: i32, path_len: i32, body: i32, body_len: i32, expect: i32| {
+            let me = caller.data().me;
+            let path = read_path(&mut caller, path, path_len)?;
+            let body = read_body(&mut caller, body, body_len)?;
+            let mut shared = caller.data().shared.borrow_mut();
+            let verb = Verb::from_i32(verb).ok_or_else(|| wasmtime::format_err!("call with unknown verb {verb}"))?;
+            let ticket = if expect != 0 {
+                shared.next_ticket[me] += 1;
+                shared.next_ticket[me]
+            } else {
+                0
+            };
+            let to = path.ok_or(Status::Invalid).and_then(|p| shared.ns.resolve(me, &p));
+            shared.request(Requester::Wasm { inst: me, ticket }, to, verb, body);
+            HostResult::Ok(ticket as i32)
         },
     )?;
     linker.func_wrap(
         "real_talk",
         "reply",
-        |mut caller: Caller<'_, HostState>, handle: i32, ptr: i32, len: i32| -> wasmtime::Result<()> {
-            let buf = read_bytes(&mut caller, ptr, len)?;
-            caller.data_mut().outbox.push(Sent::Reply(handle as u32, buf));
-            Ok(())
+        |mut caller: Caller<'_, HostState>, req: i32, status: i32, body: i32, body_len: i32, done: i32| -> HostResult<()> {
+            let me = caller.data().me;
+            let body = read_body(&mut caller, body, body_len)?;
+            let status = Status::from_i32(status).ok_or_else(|| wasmtime::format_err!("reply with unknown status {status}"))?;
+            let mut shared = caller.data().shared.borrow_mut();
+            shared.reply(me, req as u32, status, body, done != 0).map_err(host_err)
+        },
+    )?;
+    linker.func_wrap(
+        "real_talk",
+        "forward",
+        |mut caller: Caller<'_, HostState>, req: i32, path: i32, path_len: i32| -> HostResult<()> {
+            let me = caller.data().me;
+            // Invalid UTF-8 resolves as an invalid path.
+            let path = read_path(&mut caller, path, path_len)?.unwrap_or_default();
+            let mut shared = caller.data().shared.borrow_mut();
+            shared.forward(me, req as u32, &path).map_err(host_err)
+        },
+    )?;
+    linker.func_wrap("real_talk", "cancel", |caller: Caller<'_, HostState>, ticket: i32| {
+        let me = caller.data().me;
+        caller.data().shared.borrow_mut().cancel(me, ticket as u32);
+    })?;
+    linker.func_wrap(
+        "real_talk",
+        "bind",
+        |mut caller: Caller<'_, HostState>, src: i32, src_len: i32, at: i32, at_len: i32, flags: i32| -> HostResult<i32> {
+            let me = caller.data().me;
+            let (src, at) = (read_path(&mut caller, src, src_len)?, read_path(&mut caller, at, at_len)?);
+            let mut shared = caller.data().shared.borrow_mut();
+            Ok(status_code(match (src, at) {
+                (Some(src), Some(at)) => shared.ns.bind(me, &src, &at, flags & ns::READ_ONLY != 0),
+                _ => Err(Status::Invalid),
+            }))
+        },
+    )?;
+    linker.func_wrap("real_talk", "unmount", |mut caller: Caller<'_, HostState>, at: i32, at_len: i32| -> HostResult<i32> {
+        let me = caller.data().me;
+        let at = read_path(&mut caller, at, at_len)?;
+        let mut shared = caller.data().shared.borrow_mut();
+        Ok(status_code(at.ok_or(Status::Invalid).and_then(|at| shared.ns.unmount(me, &at))))
+    })?;
+    linker.func_wrap(
+        "real_talk",
+        "expose",
+        |mut caller: Caller<'_, HostState>, at: i32, at_len: i32, src: i32, src_len: i32, flags: i32| -> HostResult<i32> {
+            let me = caller.data().me;
+            let (at, src) = (read_path(&mut caller, at, at_len)?, read_path(&mut caller, src, src_len)?);
+            let mut shared = caller.data().shared.borrow_mut();
+            Ok(status_code(match (at, src) {
+                (Some(at), Some(src)) => shared.ns.expose(me, &at, &src, flags & ns::READ_ONLY != 0),
+                _ => Err(Status::Invalid),
+            }))
         },
     )?;
     linker.func_wrap(
         "env",
         "abort",
-        |mut caller: Caller<'_, HostState>, msg: i32, file: i32, line: i32, col: i32| -> wasmtime::Result<()> {
+        |mut caller: Caller<'_, HostState>, msg: i32, file: i32, line: i32, col: i32| -> HostResult<()> {
             let mem = memory(&mut caller)?;
             let msg = read_as_string(mem.data(&caller), msg);
             let file = read_as_string(mem.data(&caller), file);
@@ -340,14 +565,14 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     Ok(linker)
 }
 
-fn read_bytes(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime::Result<Vec<u8>> {
+fn read_bytes(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> HostResult<Vec<u8>> {
     let mem = memory(caller)?;
     let mut buf = vec![0; len as u32 as usize];
     mem.read(&*caller, ptr as u32 as usize, &mut buf).map_err(|_| wasmtime::format_err!("message out of bounds"))?;
     Ok(buf)
 }
 
-fn memory(caller: &mut Caller<'_, HostState>) -> wasmtime::Result<Memory> {
+fn memory(caller: &mut Caller<'_, HostState>) -> HostResult<Memory> {
     match caller.get_export("memory") {
         Some(Extern::Memory(m)) => Ok(m),
         _ => Err(wasmtime::format_err!("module does not export `memory`")),

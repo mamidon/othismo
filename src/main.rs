@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: real_talk [--check] [--check-shapes] <image.img>
 
-  --check         validate the image and exit without running it
+  --check         validate the image, print each instance's view and what
+                  it can reach at most, and exit without running it
   --check-shapes  verify every message's fields against its declaration";
 
 fn main() -> ExitCode {
@@ -33,9 +34,7 @@ fn main() -> ExitCode {
 
     let result = check::load(&image).and_then(|program| {
         if check_only {
-            for w in &program.warnings {
-                eprintln!("note: {w}");
-            }
+            print!("{}", check::describe(&program));
             Ok(())
         } else {
             runtime::run(&program, runtime::Io::std(), options)
