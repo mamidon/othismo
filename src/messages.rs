@@ -193,9 +193,9 @@ pub fn parse(src: &str) -> Result<BTreeMap<String, MessageType>> {
                 while word(j).is_some_and(|w| MODIFIERS.contains(&w)) {
                     j += 1;
                 }
-                // `static` members belong to the class, not to messages.
-                if word(j) == Some("static") {
-                } else if let (Some(field), true) = (word(j), punct(j + 1, ':') || (punct(j + 1, '!') && punct(j + 2, ':'))) {
+                // `name: type` or `name!: type`; `static` members aren't message fields.
+                let is_field = word(j) != Some("static") && (punct(j + 1, ':') || (punct(j + 1, '!') && punct(j + 2, ':')));
+                if let (Some(field), true) = (word(j), is_field) {
                     let ty_at = if punct(j + 1, '!') { j + 3 } else { j + 2 };
                     let line = toks.get(ty_at).map_or(0, |t| t.1);
                     let ty_name = word(ty_at).unwrap_or("?");
