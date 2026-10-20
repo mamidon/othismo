@@ -219,7 +219,8 @@ export namespace ns {
     for (let i = 0; i < segs.length; i++) {
       if (segs[i] == "..") return null;
     }
-    return (root.endsWith("/") ? root.substring(0, root.length - 1) : root) + path;
+    const base = root.endsWith("/") ? root.substring(0, root.length - 1) : root;
+    return base + path;
   }
 }
 

@@ -16,17 +16,17 @@ struct Server {
 
 impl Server {
     /// Runs a copy of static.img listening on an ephemeral port. The copy
-    /// lives in a temp dir whose messages, scripts and public files are
-    /// symlinks back into examples/static.
+    /// lives in a temp dir whose scripts and public files are symlinks back
+    /// into examples/static.
     fn start(name: &str) -> Server {
         let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static");
-        for m in ["HttpCodec", "StaticServer"] {
+        for m in ["HttpServer", "StaticSite"] {
             assert!(example.join(format!("scripts/{m}.wasm")).exists(), "run `make wasm` first");
         }
         let dir = std::env::temp_dir().join(format!("real_talk_http_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for link in ["messages.ts", "scripts", "public"] {
+        for link in ["scripts", "public"] {
             std::os::unix::fs::symlink(example.join(link), dir.join(link)).unwrap();
         }
         let img = std::fs::read_to_string(example.join("static.img")).unwrap();
@@ -42,10 +42,10 @@ impl Server {
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         let mut first = String::new();
         stdout.read_line(&mut first).unwrap();
-        // Listening {"address": "127.0.0.1:54321"}
+        // listening on http://127.0.0.1:54321/
         let port = first
             .trim_end()
-            .strip_suffix("\"}")
+            .strip_suffix('/')
             .and_then(|s| s.rsplit(':').next())
             .and_then(|p| p.parse().ok())
             .unwrap_or_else(|| panic!("unexpected first line: {first:?}"));
@@ -66,7 +66,11 @@ impl Server {
     }
 
     fn get(&self, path: &str) -> Response {
-        self.request(format!("GET {path} HTTP/1.1\r\nHost: test\r\n\r\n").as_bytes())
+        self.get_from("test", path)
+    }
+
+    fn get_from(&self, host: &str, path: &str) -> Response {
+        self.request(format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes())
     }
 
     /// Next access-log line from the server's stdout.
@@ -160,11 +164,37 @@ fn error_statuses() {
 }
 
 #[test]
-fn cannot_escape_the_files_root() {
+fn cannot_climb_out_of_the_host_root() {
+    // `..` never reaches the namespace: ns.join refuses it, and the runtime would too.
     let srv = Server::start("escape");
-    assert_eq!(srv.get("/../Cargo.toml").status, 403);
-    assert_eq!(srv.get("/%2e%2e/%2e%2e/Cargo.toml").status, 403);
-    assert_eq!(srv.get("/docs/../../static.img").status, 403);
+    assert_eq!(srv.get("/../Cargo.toml").status, 400);
+    assert_eq!(srv.get("/%2e%2e/%2e%2e/Cargo.toml").status, 400);
+    assert_eq!(srv.get("/docs/../../static.img").status, 400);
+}
+
+#[test]
+fn synthetic_files_exposures_and_virtual_hosts() {
+    let mut srv = Server::start("vhosts");
+    assert_eq!(srv.get("/index.html").status, 200);
+    assert_eq!(srv.get("/style.css").status, 200);
+    let r = srv.get("/hits");
+    assert_eq!((r.status, r.body.as_slice()), (200, &b"2\n"[..]), "/hits exists only in StaticSite's code");
+
+    // /static is /files exposed by the site: served without the site counting it.
+    let r = srv.get("/static/style.css");
+    assert_eq!((r.status, r.body), (200, public("style.css")));
+    assert_eq!(srv.get("/hits").body, b"2\n");
+    assert_eq!(srv.request(b"PUT /static/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").status, 405, "read-only all the way");
+
+    // files.localhost is rooted at /www/static: the files themselves, no site.
+    let r = srv.get_from("files.localhost:8080", "/style.css");
+    assert_eq!((r.status, r.body), (200, public("style.css")));
+    assert_eq!(srv.get_from("FILES.localhost", "/hits").status, 404);
+    assert_eq!(srv.get_from("files.localhost", "/").status, 404, "a directory, but no index.html rewriting here");
+
+    let log: Vec<String> = (0..9).map(|_| srv.log_line()).collect();
+    assert_eq!(log[0], "GET /index.html 200");
+    assert_eq!(log[8], "GET / 404");
 }
 
 #[test]
