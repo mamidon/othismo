@@ -5,6 +5,7 @@ pub mod check;
 pub mod env;
 pub mod image;
 pub mod messages;
+pub mod ns;
 pub mod render;
 pub mod runtime;
 pub mod wire;
