@@ -240,6 +240,7 @@ fn startup_message(messages: &BTreeMap<String, MessageType>, send: &image::Send)
             (FieldType::Bool, Value::Bool(b)) => Bson::Boolean(*b),
             (FieldType::F32 | FieldType::F64, Value::Float(x)) => Bson::Double(*x),
             (FieldType::F32 | FieldType::F64, Value::Int(i)) => Bson::Double(*i as f64),
+            (FieldType::Bytes, Value::Str(s)) => wire::bytes(s.as_bytes().to_vec()),
             (t, Value::Int(i)) if t.int_range().is_some() => {
                 let (lo, hi) = t.int_range().unwrap();
                 if !(lo..=hi).contains(i) {
@@ -266,6 +267,7 @@ mod tests {
         export class Echoed { text: string }
         export class Config { name: string; count: u8; ratio: f64; on: bool }
         export class Ping {}
+        export class Blob { data: ArrayBuffer }
     "#;
 
     /// Writes MESSAGES and `img` to a temp dir and checks the image.
@@ -285,9 +287,9 @@ mod tests {
     }
 
     const HEADER: &str = r#"
-        import { Line, Echoed, Config, Ping } from "./messages"
+        import { Line, Echoed, Config, Ping, Blob } from "./messages"
         protocol Echo {
-          in Line, Config, Ping
+          in Line, Config, Ping, Blob
           out out: Echoed
         }
     "#;
@@ -354,6 +356,14 @@ mod tests {
         assert!(err(&inst("send Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
         assert!(err(&inst("send Ping { x: 1 }")).contains("no field `x`"));
         assert!(err(&inst("send Missing")).contains("unknown message type"));
+        assert!(err(&inst("send Blob { data: 1 }")).contains("is ArrayBuffer"));
+    }
+
+    #[test]
+    fn bytes_fields_take_string_literals_as_utf8() {
+        let p = check_src(&format!("{HEADER} instance s : Environment.Stdout instance e : Echo {{ send Blob {{ data: \"hé\" }} out -> s }}")).unwrap();
+        let data = p.instances[1].startup[0].fields.get_binary_generic("data").unwrap();
+        assert_eq!(data, "hé".as_bytes());
     }
 
     #[test]

@@ -41,6 +41,10 @@ fn json_value(v: &Bson) -> String {
         Bson::Int64(i) => i.to_string(),
         Bson::Double(x) if x.is_finite() => format!("{x:?}"),
         Bson::Double(x) => json_string(&x.to_string()),
+        Bson::Binary(b) => match std::str::from_utf8(&b.bytes) {
+            Ok(s) => json_string(s),
+            Err(_) => format!("<{} bytes>", b.bytes.len()),
+        },
         other => json_string(&other.to_string()),
     }
 }

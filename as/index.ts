@@ -97,25 +97,27 @@ export function rt_deliver(): void {
 
 const BSON_DOUBLE: u8 = 0x01;
 const BSON_STRING: u8 = 0x02;
+const BSON_BINARY: u8 = 0x05;
 const BSON_BOOL: u8 = 0x08;
 const BSON_INT32: u8 = 0x10;
 const BSON_INT64: u8 = 0x12;
 
 /** Builds one BSON document. Integer methods follow src/wire.rs's mapping. */
 export class Writer {
-  private bytes: u8[] = [0, 0, 0, 0];
+  private buf: ArrayBuffer = new ArrayBuffer(64);
+  private len: i32 = 4; // room for the document length, patched by finish()
 
   string(name: string, v: string): void {
     this.key(BSON_STRING, name);
-    const utf8 = Uint8Array.wrap(String.UTF8.encode(v));
-    this.u32(<u32>utf8.length + 1);
-    for (let i = 0; i < utf8.length; i++) this.bytes.push(utf8[i]);
-    this.bytes.push(0);
+    const utf8 = String.UTF8.encode(v);
+    this.u32(<u32>utf8.byteLength + 1);
+    this.raw(changetype<usize>(utf8), utf8.byteLength);
+    this.u8(0);
   }
 
   bool(name: string, v: bool): void {
     this.key(BSON_BOOL, name);
-    this.bytes.push(v ? 1 : 0);
+    this.u8(v ? 1 : 0);
   }
 
   /** For i8, i16, i32, u8 and u16 fields. */
@@ -136,29 +138,55 @@ export class Writer {
     this.u64(reinterpret<u64>(v));
   }
 
+  /** For ArrayBuffer fields. */
+  bytes(name: string, v: ArrayBuffer): void {
+    this.key(BSON_BINARY, name);
+    this.u32(<u32>v.byteLength);
+    this.u8(0); // generic subtype
+    this.raw(changetype<usize>(v), v.byteLength);
+  }
+
   finish(): ArrayBuffer {
-    this.bytes.push(0);
-    const n = this.bytes.length;
-    const buf = new ArrayBuffer(n);
-    const view = Uint8Array.wrap(buf);
-    for (let i = 0; i < n; i++) view[i] = this.bytes[i];
-    store<u32>(changetype<usize>(buf), <u32>n);
-    return buf;
+    this.u8(0);
+    const out = this.buf.slice(0, this.len);
+    store<u32>(changetype<usize>(out), <u32>this.len);
+    return out;
   }
 
   private key(tag: u8, name: string): void {
-    this.bytes.push(tag);
-    const utf8 = Uint8Array.wrap(String.UTF8.encode(name));
-    for (let i = 0; i < utf8.length; i++) this.bytes.push(utf8[i]);
-    this.bytes.push(0);
+    this.u8(tag);
+    const utf8 = String.UTF8.encode(name);
+    this.raw(changetype<usize>(utf8), utf8.byteLength);
+    this.u8(0);
+  }
+
+  private reserve(n: i32): usize {
+    if (this.len + n > this.buf.byteLength) {
+      let cap = this.buf.byteLength * 2;
+      while (cap < this.len + n) cap *= 2;
+      const grown = new ArrayBuffer(cap);
+      memory.copy(changetype<usize>(grown), changetype<usize>(this.buf), <usize>this.len);
+      this.buf = grown;
+    }
+    const at = changetype<usize>(this.buf) + <usize>this.len;
+    this.len += n;
+    return at;
+  }
+
+  private raw(src: usize, n: i32): void {
+    memory.copy(this.reserve(n), src, <usize>n);
+  }
+
+  private u8(v: u8): void {
+    store<u8>(this.reserve(1), v);
   }
 
   private u32(v: u32): void {
-    for (let i = 0; i < 4; i++) this.bytes.push(<u8>(v >> (8 * i)));
+    store<u32>(this.reserve(4), v);
   }
 
   private u64(v: u64): void {
-    for (let i = 0; i < 8; i++) this.bytes.push(<u8>(v >> (8 * i)));
+    store<u64>(this.reserve(8), v);
   }
 }
 
@@ -190,6 +218,7 @@ export class Reader {
       else if (tag == BSON_INT32) p += 4;
       else if (tag == BSON_BOOL) p += 1;
       else if (tag == BSON_STRING) p += 4 + <usize>load<u32>(p);
+      else if (tag == BSON_BINARY) p += 5 + <usize>load<u32>(p);
       else abort("unsupported BSON element type in field " + name);
     }
   }
@@ -218,6 +247,15 @@ export class Reader {
 
   f64(name: string): f64 {
     return load<f64>(this.field(name, BSON_DOUBLE).offset);
+  }
+
+  /** A copy of a binary field's bytes. */
+  bytes(name: string): ArrayBuffer {
+    const f = this.field(name, BSON_BINARY);
+    const len = <i32>load<u32>(f.offset);
+    const out = new ArrayBuffer(len);
+    memory.copy(changetype<usize>(out), f.offset + 5, <usize>len);
+    return out;
   }
 
   private get(name: string): Field {

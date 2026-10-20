@@ -22,6 +22,8 @@ pub enum FieldType {
     U64,
     F32,
     F64,
+    /// `ArrayBuffer` in AssemblyScript.
+    Bytes,
 }
 
 impl FieldType {
@@ -39,6 +41,7 @@ impl FieldType {
             "u64" => FieldType::U64,
             "f32" => FieldType::F32,
             "f64" => FieldType::F64,
+            "ArrayBuffer" => FieldType::Bytes,
             _ => return None,
         })
     }
@@ -74,6 +77,7 @@ impl fmt::Display for FieldType {
             FieldType::U64 => "u64",
             FieldType::F32 => "f32",
             FieldType::F64 => "f64",
+            FieldType::Bytes => "ArrayBuffer",
         };
         f.write_str(s)
     }
@@ -206,7 +210,7 @@ pub fn parse(src: &str) -> Result<BTreeMap<String, MessageType>> {
                         Some(ty) if !complex => ty,
                         _ => bail!(
                             "line {line}: field `{name}.{field}` has unsupported type `{ty_name}`; \
-                             messages may only use string, bool, integer and float fields"
+                             messages may only use string, bool, integer, float and ArrayBuffer fields"
                         ),
                     };
                     fields.push((field.to_string(), ty));
@@ -263,6 +267,7 @@ mod tests {
               static ORIGIN: i32 = 3
               get norm(): f64 { return 0 }
               ok: bool
+              raw: ArrayBuffer
             }
 
             class Hidden { a: i32 }
@@ -277,6 +282,7 @@ mod tests {
                 ("x".into(), FieldType::I32),
                 ("y".into(), FieldType::F64),
                 ("ok".into(), FieldType::Bool),
+                ("raw".into(), FieldType::Bytes),
             ]
         );
     }

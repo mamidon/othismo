@@ -11,6 +11,7 @@
 //! | i8, i16, i32, u8, u16       | int32   |
 //! | i64, u32, u64               | int64   |
 //! | f32, f64                    | double  |
+//! | ArrayBuffer                 | binary (generic subtype) |
 
 use crate::messages::{FieldType, MessageType};
 use anyhow::{Context, Result, bail};
@@ -56,6 +57,7 @@ impl Message {
                 (FieldType::String, Bson::String(_)) => true,
                 (FieldType::Bool, Bson::Boolean(_)) => true,
                 (FieldType::F32 | FieldType::F64, Bson::Double(_)) => true,
+                (FieldType::Bytes, Bson::Binary(_)) => true,
                 (t, Bson::Int32(i)) => t.int_range().is_some_and(|(lo, hi)| (lo..=hi).contains(&(*i as i128))),
                 // u64 travels as the bit pattern of an int64, so any value is valid.
                 (FieldType::U64, Bson::Int64(_)) => true,
@@ -71,6 +73,11 @@ impl Message {
         }
         Ok(())
     }
+}
+
+/// The BSON value an `ArrayBuffer` field is carried as.
+pub fn bytes(data: Vec<u8>) -> Bson {
+    Bson::Binary(bson::Binary { subtype: bson::spec::BinarySubtype::Generic, bytes: data })
 }
 
 /// The BSON value an integer of type `ty` is carried as.
