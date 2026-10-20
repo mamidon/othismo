@@ -50,6 +50,9 @@ rejected with `Invalid` before it is resolved. Without that rule,
 `root + clientPath` could step from `/www` into any other part of the sender's
 view.
 
+A trailing `/` means nothing in a mount point: `/www/` and `/www` name the
+same one.
+
 Resolution in a view picks the longest mount point that is a prefix of the
 path, on segment boundaries. `/www` matches `/www`, `/www/` and
 `/www/a/b`, but not `/wwwx`. Then it checks the target's exposures (see
@@ -105,6 +108,7 @@ export class Request {
   readonly path: string            // relative to our root, e.g. "/index.html"
   readonly body: Message | null
   readonly cancelled: bool
+  readonly finished: bool          // answered or forwarded; answering again aborts
   reply(body: Message | null): void          // Ok, and the last reply
   stream(body: Message): void                // Ok, more to come
   end(): void                                // Ok, no body, the last reply
@@ -152,7 +156,7 @@ export namespace ns {
 export class Server {
   start(): void {}                                   // once the image is set up
   serve(req: Request): void { req.fail(Status.NotSupported) }
-  cancel(req: Request): void {}                      // the caller gave up on a stream
+  cancel(req: Request): void {}    // the caller gave up on a stream; it is ended for us afterwards
 }
 export function run(server: Server): void
 ```
@@ -168,6 +172,9 @@ Some details of this API:
   another server never sees the answer.
 - **`expose` is the delegation primitive.** It can only expose what the
   instance can see, so it never widens what is reachable.
+- **Unknown types pass through.** A body of a type the module didn't
+  register arrives as `Opaque`. It can't be read, but it can be passed on
+  unchanged.
 - **`bind` resolves `source` when it is called.** The new mount points at
   whatever `source` named at that moment. Unmounting `source` later doesn't
   affect it, as with Plan 9's `bind`.
@@ -213,8 +220,13 @@ move a files root.
 | `Environment.Tcp` | `Listen { address }` | `Read /address`: `Text` with the bound address. `Watch /accept`: a stream of `Accepted { conn }`. `Watch /<conn>`: a stream of `Data` received, ending when the peer closes. `Write /<conn>`: sends a `Data`'s bytes. `Remove /<conn>`: closes our side |
 | `Environment.Files` | `FilesRoot { path }` | `Read`: `Data` with a MIME type from the extension. `Stat`: `Info`. `List`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `ReadOnly` |
 
-When several Console instances watch stdin, each line goes to the next
-Console in turn, and every watcher of that Console gets it. `Console` prints
+Console reads stdin only if something is watching it by the time the image
+has started. When there are several Console instances, each line goes to the
+next one in turn, and every watcher of that Console gets it.
+
+A Tcp connection can have one watcher; a second gets `Exists`. Data that
+arrives before anyone watches is kept for the first watcher. Files answers
+anything outside its root, including through symlinks, with `NotFound`. `Console` prints
 a message whose only field is `text: string` verbatim, and anything else
 JSON-ish.
 
@@ -250,7 +262,8 @@ instance http : HttpServer {
 - `send Type { fields }` is only for environment config.
 - The conventional message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
   `Accepted`, `Listen`, `FilesRoot`) are always in scope. Importing them from
-  `"real-talk/env"` is allowed but not needed.
+  `"real-talk/env"` is allowed but not needed. An import may redeclare one
+  of them only with exactly the same fields.
 
 ### What the checker can promise
 
@@ -260,15 +273,19 @@ of the image's mount edges, which can be computed without running anything.
 Read-only flags carry through the closure. `real_talk --check` prints it:
 
 ```text
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, site rw, cons rw, files ro (via site)
+net    sees nothing
+files  sees nothing
+cons   sees nothing
 site   sees /files → files ro
        can reach at most: files ro
+http   sees /net/tcp → net, /www → site, /dev/cons → cons
+       can reach at most: net rw, files ro (via site), cons rw, site rw
 ```
 
 What is no longer checked ahead of time is message types along edges: there
 are no edges to check. With `--check-shapes`, bodies are checked against
-their declarations as they are delivered.
+their declarations as they are sent, and a type the image doesn't know is an
+error.
 
 ## Startup order
 
@@ -305,7 +322,7 @@ Exports: `memory`, plus the following:
 | `rt_serve(req, verb, path_len, body_len)` | the inbox holds the path, then the body |
 | `rt_answer(ticket, status, body_len, done)` | the inbox holds the body |
 | `rt_start()` | |
-| `rt_cancel(req)` | optional |
+| `rt_cancel(req)` | optional. Without it, a cancelled request's replies are dropped until the module ends it |
 
 Request ids are numbered per server and tickets per caller. Replying to an
 unknown request id is an error that stops the run. Replies to a cancelled
