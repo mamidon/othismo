@@ -1,5 +1,5 @@
 //! A runtime for images: declarative graphs of sandboxed AssemblyScript
-//! objects that talk only over the ports the image wires.
+//! objects that talk only along the routes the image declares, plus replies.
 
 pub mod check;
 pub mod env;

@@ -32,8 +32,13 @@ pub enum What {
     Closed { conn: u32 },
 }
 
-/// A message an environmental object emits on its out port `.0`.
-pub type Emit = (u32, Message);
+/// A message an environmental object sends.
+pub enum Out {
+    /// Into the image's routing.
+    Emit(Message),
+    /// Back to whoever sent the message being handled.
+    Reply(Message),
+}
 
 /// Idle connections are dropped after this long without data.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -85,17 +90,17 @@ impl EnvObject {
 
     /// Starts listening for outside events. Called once startup messages
     /// have been delivered.
-    pub fn start(&mut self, me: usize, events: &Sender<Event>) -> Result<Vec<Emit>> {
+    pub fn start(&mut self, me: usize, events: &Sender<Event>) -> Result<Vec<Out>> {
         let EnvObject::Socket(s) = self else { return Ok(vec![]) };
         let listener = TcpListener::bind(&s.address).with_context(|| format!("listening on {}", s.address))?;
         let bound = listener.local_addr()?.to_string();
         let events = events.clone();
         std::thread::spawn(move || accept_loop(listener, me, events));
-        Ok(vec![(1, msg("Listening", doc! { "address": bound }))])
+        Ok(vec![Out::Emit(msg("Listening", doc! { "address": bound }))])
     }
 
-    /// Handles a message wired to this object.
-    pub fn deliver(&mut self, m: &Message, program: &Program, out: &mut dyn Write) -> Result<Vec<Emit>> {
+    /// Handles a message routed or replied to this object.
+    pub fn deliver(&mut self, m: &Message, program: &Program, out: &mut dyn Write) -> Result<Vec<Out>> {
         let field = |name: &str| m.fields.get(name).ok_or_else(|| anyhow!("`{}` has no `{name}`", m.type_name));
         let conn_of = || field("conn").and_then(int_u32);
         match (self, m.type_name.as_str()) {
@@ -125,32 +130,29 @@ impl EnvObject {
             (EnvObject::Files(f), "ReadFile") => {
                 let tag = u32_field(int_u32(field("tag")?)?);
                 let path = field("path")?.as_str().unwrap_or_default().to_string();
-                Ok(vec![(
-                    0,
-                    match f.read(&path) {
-                        Ok(data) => msg("FileContents", doc! { "tag": tag, "path": path, "data": wire::bytes(data) }),
-                        Err(reason) => msg("FileError", doc! { "tag": tag, "path": path, "reason": reason }),
-                    },
-                )])
+                Ok(vec![Out::Reply(match f.read(&path) {
+                    Ok(data) => msg("FileContents", doc! { "tag": tag, "path": path, "data": wire::bytes(data) }),
+                    Err(reason) => msg("FileError", doc! { "tag": tag, "path": path, "reason": reason }),
+                })])
             }
             (_, other) => bail!("environment object cannot handle `{other}` at runtime"),
         }
     }
 
     /// Turns an outside event into messages, updating state on the way.
-    pub fn on_event(&mut self, what: What) -> Vec<Emit> {
+    pub fn on_event(&mut self, what: What) -> Vec<Out> {
         match (self, what) {
-            (EnvObject::Stdin, What::Line(text)) => vec![(0, msg(LINE, doc! { "text": text }))],
+            (EnvObject::Stdin, What::Line(text)) => vec![Out::Emit(msg(LINE, doc! { "text": text }))],
             (EnvObject::Socket(s), What::Accepted { conn, stream }) => {
                 s.streams.insert(conn, stream);
                 vec![]
             }
             (EnvObject::Socket(_), What::Data { conn, data }) => {
-                vec![(0, msg("SocketData", doc! { "conn": u32_field(conn), "data": wire::bytes(data) }))]
+                vec![Out::Emit(msg("SocketData", doc! { "conn": u32_field(conn), "data": wire::bytes(data) }))]
             }
             (EnvObject::Socket(s), What::Closed { conn }) => {
                 s.streams.remove(&conn);
-                vec![(0, msg("SocketClosed", doc! { "conn": u32_field(conn) }))]
+                vec![Out::Emit(msg("SocketClosed", doc! { "conn": u32_field(conn) }))]
             }
             _ => unreachable!("event for the wrong kind of object"),
         }

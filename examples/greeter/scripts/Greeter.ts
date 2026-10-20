@@ -1,4 +1,4 @@
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line } from "real-talk/env"
 import { Greeting, Stats } from "../messages"
 
@@ -10,11 +10,7 @@ class Greeter extends Receiver {
   lines: i32 = 0
   chars: i64 = 0
 
-  constructor(private greeted: OutPort<Line>, private stats: OutPort<Stats>) {
-    super()
-  }
-
-  receive(msg: Message): void {
+  receive(msg: Message, from: Sender): void {
     if (msg instanceof Greeting) {
       const g = msg as Greeting
       this.prefix = g.prefix
@@ -23,10 +19,10 @@ class Greeter extends Receiver {
       const name = (msg as Line).text
       this.lines++
       this.chars += name.length
-      this.greeted.send(new Line(this.prefix + name + (this.excited ? "!" : ".")))
-      this.stats.send(new Stats(this.lines, this.chars, <f64>this.chars / <f64>this.lines))
+      emit(new Line(this.prefix + name + (this.excited ? "!" : ".")))
+      emit(new Stats(this.lines, this.chars, <f64>this.chars / <f64>this.lines))
     }
   }
 }
 
-bind(new Greeter(new OutPort<Line>(0), new OutPort<Stats>(1)))
+bind(new Greeter())

@@ -33,6 +33,9 @@ fn main() -> ExitCode {
 
     let result = check::load(&image).and_then(|program| {
         if check_only {
+            for w in &program.warnings {
+                eprintln!("note: {w}");
+            }
             Ok(())
         } else {
             runtime::run(&program, runtime::Io::std(), options)

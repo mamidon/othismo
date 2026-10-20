@@ -20,6 +20,8 @@ pub struct Image {
     pub imports: Vec<Import>,
     pub protocols: Vec<Protocol>,
     pub instances: Vec<Instance>,
+    /// Top-level routing trees, in source order.
+    pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,14 +40,12 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Protocol {
     pub name: Ident,
+    /// Types the object accepts, whether routed to it or replied to it.
     pub inputs: Vec<Ident>,
-    pub outputs: Vec<OutPort>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutPort {
-    pub name: Ident,
-    pub types: Vec<Ident>,
+    /// Types the object may `emit`; the image routes them.
+    pub emits: Vec<Ident>,
+    /// Types the object may `reply` with, back to whoever messaged it.
+    pub replies: Vec<Ident>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +54,6 @@ pub struct Instance {
     /// Protocol name; may be dotted, e.g. `Environment.Stdin`.
     pub protocol: Ident,
     pub sends: Vec<Send>,
-    pub wires: Vec<Wire>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,10 +71,31 @@ pub enum Value {
     Bool(bool),
 }
 
+/// `sender.Type { targets }`: what `sender` emits of `Type` goes to every target.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Wire {
-    pub port: Ident,
-    pub targets: Vec<Ident>,
+pub struct Route {
+    pub sender: Ident,
+    /// A message type name, or `*` for every type the sender emits.
+    pub selector: Ident,
+    pub targets: Vec<Target>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    /// Just an instance name.
+    Leaf(Ident),
+    /// An instance that also routes some of what it emits: the nested
+    /// route's sender is the target.
+    Node(Route),
+}
+
+impl Target {
+    pub fn instance(&self) -> &Ident {
+        match self {
+            Target::Leaf(id) => id,
+            Target::Node(r) => &r.sender,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +111,6 @@ enum Tok {
     RBrace,
     Comma,
     Colon,
-    Arrow,
     Eof,
 }
 
@@ -106,7 +125,6 @@ impl std::fmt::Display for Tok {
             Tok::RBrace => write!(f, "`}}`"),
             Tok::Comma => write!(f, "`,`"),
             Tok::Colon => write!(f, "`:`"),
-            Tok::Arrow => write!(f, "`->`"),
             Tok::Eof => write!(f, "end of file"),
         }
     }
@@ -148,10 +166,6 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
                 },
                 pos,
             ));
-            bump!();
-        } else if c == '-' && chars.get(i + 1) == Some(&'>') {
-            toks.push((Tok::Arrow, pos));
-            bump!();
             bump!();
         } else if c == '"' {
             bump!();
@@ -199,6 +213,12 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
         } else if c.is_alphabetic() || c == '_' || c == '$' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '$' | '.')) {
+                // `name.*` selects every type in a route.
+                if chars[i] == '.' && chars.get(i + 1) == Some(&'*') {
+                    bump!();
+                    bump!();
+                    break;
+                }
                 bump!();
             }
             toks.push((Tok::Ident(chars[start..i].iter().collect()), pos));
@@ -281,16 +301,49 @@ impl Parser {
     }
 
     fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], protocols: vec![], instances: vec![] };
+        let mut image = Image { imports: vec![], protocols: vec![], instances: vec![], routes: vec![] };
         loop {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
                 Tok::Ident(kw) if kw == "protocol" => image.protocols.push(self.protocol()?),
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
-                other => bail!("{}: expected `import`, `protocol` or `instance`, found {other}", self.pos()),
+                Tok::Ident(name) if name.contains('.') => image.routes.push(self.route()?),
+                other => bail!(
+                    "{}: expected `import`, `protocol`, `instance` or a route (`sender.Type {{ ... }}`), found {other}",
+                    self.pos()
+                ),
             }
         }
+    }
+
+    /// `sender.Type { target, other.Type { ... }, ... }`
+    fn route(&mut self) -> Result<Route> {
+        let (tok, pos) = self.next();
+        let Tok::Ident(name) = tok else { bail!("{pos}: expected a route, found {tok}") };
+        let Some((sender, selector)) = name.split_once('.').filter(|(a, b)| {
+            !a.is_empty() && !b.is_empty() && !b.contains('.') && !KEYWORDS.contains(a) && !KEYWORDS.contains(b)
+        }) else {
+            bail!("{pos}: expected `instance.Type` or `instance.*`, found `{name}`");
+        };
+        let sender = Ident { name: sender.into(), pos };
+        let selector = Ident { name: selector.into(), pos: Pos { line: pos.line, col: pos.col + sender.name.len() + 1 } };
+        self.expect(Tok::LBrace)?;
+        let mut targets = vec![];
+        while *self.peek() != Tok::RBrace {
+            match self.peek().clone() {
+                Tok::Ident(n) if n.contains('.') => targets.push(Target::Node(self.route()?)),
+                _ => targets.push(Target::Leaf(self.ident("target instance or `instance.Type { ... }`", false)?)),
+            }
+            if *self.peek() == Tok::Comma {
+                self.next();
+            }
+        }
+        self.next();
+        if targets.is_empty() {
+            bail!("{pos}: route `{name}` has no targets");
+        }
+        Ok(Route { sender, selector, targets })
     }
 
     fn import(&mut self) -> Result<Import> {
@@ -310,22 +363,22 @@ impl Parser {
         self.expect_kw("protocol")?;
         let name = self.ident("protocol name", false)?;
         self.expect(Tok::LBrace)?;
-        let mut proto = Protocol { name, inputs: vec![], outputs: vec![] };
+        let mut proto = Protocol { name, inputs: vec![], emits: vec![], replies: vec![] };
         loop {
-            if *self.peek() == Tok::RBrace {
-                self.next();
-                return Ok(proto);
-            } else if self.is_kw("in") {
-                self.next();
-                proto.inputs.extend(self.ident_list("message type")?);
-            } else if self.is_kw("out") {
-                self.next();
-                let name = self.ident("port name", false)?;
-                self.expect(Tok::Colon)?;
-                let types = self.ident_list("message type")?;
-                proto.outputs.push(OutPort { name, types });
-            } else {
-                bail!("{}: expected `in`, `out` or `}}`, found {}", self.pos(), self.peek());
+            let kw = match self.peek() {
+                Tok::RBrace => {
+                    self.next();
+                    return Ok(proto);
+                }
+                Tok::Ident(kw) if matches!(kw.as_str(), "in" | "emits" | "replies") => kw.clone(),
+                other => bail!("{}: expected `in`, `emits`, `replies` or `}}`, found {other}", self.pos()),
+            };
+            self.next();
+            let types = self.ident_list("message type")?;
+            match kw.as_str() {
+                "in" => proto.inputs.extend(types),
+                "emits" => proto.emits.extend(types),
+                _ => proto.replies.extend(types),
             }
         }
     }
@@ -335,7 +388,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let protocol = self.ident("protocol name", true)?;
-        let mut inst = Instance { name, protocol, sends: vec![], wires: vec![] };
+        let mut inst = Instance { name, protocol, sends: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
@@ -344,15 +397,17 @@ impl Parser {
             if *self.peek() == Tok::RBrace {
                 self.next();
                 return Ok(inst);
-            } else if self.is_kw("send") {
-                self.next();
-                inst.sends.push(self.send()?);
-            } else {
-                let port = self.ident("`send`, port name or `}`", false)?;
-                self.expect(Tok::Arrow)?;
-                let targets = self.ident_list("target instance")?;
-                inst.wires.push(Wire { port, targets });
             }
+            if !self.is_kw("send") {
+                bail!(
+                    "{}: expected `send` or `}}`, found {}; routes are written at the top level as `{}.Type {{ ... }}`",
+                    self.pos(),
+                    self.peek(),
+                    inst.name.name
+                );
+            }
+            self.next();
+            inst.sends.push(self.send()?);
         }
     }
 
@@ -410,19 +465,22 @@ mod tests {
 
             protocol Echo {
               in Line, Tick
-              out out: Echoed
-              out log: Line, Echoed
+              emits Echoed, Line
+              replies Tick
             }
 
-            instance stdin : Environment.Stdin { out -> echo }
+            instance stdin : Environment.Stdin
             instance echo : Echo {
               send Tick
               send Line { text: "hi \"there\"" }
               send Tick { n: -3, x: 1.5, ok: true }
-              out -> stdout
-              log -> stdout, other
             }
             instance stdout : Environment.Stdout
+
+            stdin.Line {
+              echo.Echoed { stdout, other }
+              echo.* { stdout }, extra
+            }
             "#,
         )
         .unwrap();
@@ -434,23 +492,40 @@ mod tests {
         let p = &img.protocols[0];
         assert_eq!(p.name.name, "Echo");
         assert_eq!(names(&p.inputs), ["Line", "Tick"]);
-        assert_eq!(p.outputs[1].name.name, "log");
-        assert_eq!(names(&p.outputs[1].types), ["Line", "Echoed"]);
+        assert_eq!(names(&p.emits), ["Echoed", "Line"]);
+        assert_eq!(names(&p.replies), ["Tick"]);
 
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].protocol.name, "Environment.Stdin");
         let echo = &img.instances[1];
-        assert_eq!(echo.sends[0], Send { type_name: echo.sends[0].type_name.clone(), fields: None });
-        assert_eq!(
-            echo.sends[1].fields.as_ref().unwrap()[0].1,
-            Value::Str("hi \"there\"".into())
-        );
+        assert_eq!(echo.sends[0].fields, None);
+        assert_eq!(echo.sends[1].fields.as_ref().unwrap()[0].1, Value::Str("hi \"there\"".into()));
         let f = echo.sends[2].fields.as_ref().unwrap();
         assert_eq!(f[0].1, Value::Int(-3));
         assert_eq!(f[1].1, Value::Float(1.5));
         assert_eq!(f[2].1, Value::Bool(true));
-        assert_eq!(names(&echo.wires[1].targets), ["stdout", "other"]);
-        assert!(img.instances[2].wires.is_empty());
+
+        let root = &img.routes[0];
+        assert_eq!((root.sender.name.as_str(), root.selector.name.as_str()), ("stdin", "Line"));
+        assert_eq!(root.selector.pos.col, root.sender.pos.col + 6);
+        let kids: Vec<&str> = root.targets.iter().map(|t| t.instance().name.as_str()).collect();
+        assert_eq!(kids, ["echo", "echo", "extra"]);
+        let Target::Node(first) = &root.targets[0] else { panic!() };
+        assert_eq!(first.selector.name, "Echoed");
+        let leaves: Vec<&str> = first.targets.iter().map(|t| t.instance().name.as_str()).collect();
+        assert_eq!(leaves, ["stdout", "other"]);
+        let Target::Node(star) = &root.targets[1] else { panic!() };
+        assert_eq!(star.selector.name, "*");
+        assert!(matches!(root.targets[2], Target::Leaf(_)));
+    }
+
+    #[test]
+    fn rejects_malformed_routes() {
+        assert!(parse("a.b.c { x }").is_err());
+        assert!(parse("a.T { }").unwrap_err().to_string().contains("no targets"));
+        assert!(parse("a.T { b.U }").is_err(), "nested nodes need braces");
+        let e = parse("instance a : P { out }").unwrap_err().to_string();
+        assert!(e.contains("routes are written at the top level"), "{e}");
     }
 
     #[test]

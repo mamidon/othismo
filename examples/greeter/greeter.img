@@ -1,32 +1,32 @@
 // Greets each name typed on stdin, shouts the greeting back, and reports
-// running statistics. Exercises startup sends, multiple `in` types,
-// multiple out ports and fan-out.
+// running statistics. Exercises a startup send, multiple `in` types,
+// fan-out and nested routes.
 import { Line } from "real-talk/env"
 import { Greeting, Stats } from "./messages"
 
 protocol Greeter {
   in Line, Greeting
-  out greeted: Line
-  out stats: Stats
+  emits Line, Stats
 }
 
 protocol Shouter {
   in Line
-  out out: Line
+  emits Line
 }
 
-instance stdin : Environment.Stdin {
-  out -> greeter
-}
+instance stdin : Environment.Stdin
 
 instance greeter : Greeter {
   send Greeting { prefix: "Hello, ", excited: true }
-  greeted -> stdout, shouter
-  stats -> stdout
 }
 
-instance shouter : Shouter {
-  out -> stdout
-}
+instance shouter : Shouter
+instance stdout  : Environment.Stdout
 
-instance stdout : Environment.Stdout
+stdin.Line {
+  greeter.Line {
+    stdout
+    shouter.Line { stdout }
+  }
+  greeter.Stats { stdout }
+}

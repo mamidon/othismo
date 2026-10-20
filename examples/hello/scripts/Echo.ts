@@ -1,4 +1,4 @@
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line } from "real-talk/env"
 import { Echoed } from "../messages"
 
@@ -6,16 +6,11 @@ import { Echoed } from "../messages"
 export { rt_inbox, rt_deliver }
 
 class Echo extends Receiver {
-  constructor(private out: OutPort<Echoed>) {
-    super()
-  }
-
-  receive(msg: Message): void {
+  receive(msg: Message, from: Sender): void {
     if (msg instanceof Line) {
-      this.out.send(new Echoed((msg as Line).text))
+      emit(new Echoed((msg as Line).text))
     }
   }
 }
 
-// One OutPort per `out` in the protocol, in declaration order.
-bind(new Echo(new OutPort<Echoed>(0)))
+bind(new Echo())

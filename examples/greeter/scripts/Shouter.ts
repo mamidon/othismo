@@ -1,18 +1,14 @@
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line } from "real-talk/env"
 
 export { rt_inbox, rt_deliver }
 
 class Shouter extends Receiver {
-  constructor(private out: OutPort<Line>) {
-    super()
-  }
-
-  receive(msg: Message): void {
+  receive(msg: Message, from: Sender): void {
     if (msg instanceof Line) {
-      this.out.send(new Line((msg as Line).text.toUpperCase()))
+      emit(new Line((msg as Line).text.toUpperCase()))
     }
   }
 }
 
-bind(new Shouter(new OutPort<Line>(0)))
+bind(new Shouter())

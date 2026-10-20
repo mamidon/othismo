@@ -26,9 +26,8 @@ registerMessage("Line", (r: Reader): Message => new Line(r.string("text")))
 // ---------------------------------------------------------------------------
 // Environment.Socket: a TCP listener.
 //
-//   in:  SocketWrite, SocketClose
-//   out out:    SocketData, SocketClosed
-//   out events: Listening
+//   in:    SocketWrite, SocketClose  (usually replies to SocketData)
+//   emits: SocketData, SocketClosed, Listening
 //   startup (exactly once, image only): Listen
 
 /** Startup config: the address to listen on, e.g. "127.0.0.1:8080". */
@@ -128,8 +127,8 @@ registerMessage("SocketClose", (r: Reader): Message => new SocketClose(<u32>r.i6
 // ---------------------------------------------------------------------------
 // Environment.Files: read-only access to one directory tree.
 //
-//   in:  ReadFile
-//   out out: FileContents, FileError
+//   in:      ReadFile
+//   replies: FileContents, FileError
 //   startup (exactly once, image only): FilesRoot
 
 /** Startup config: the directory served, relative to the image file. */
@@ -146,7 +145,7 @@ export class FilesRoot extends Message {
 }
 registerMessage("FilesRoot", (r: Reader): Message => new FilesRoot(r.string("path")))
 
-/** Reads `path` (relative to the root; a leading "/" is ignored). `tag` is echoed back. */
+/** Reads `path` (relative to the root; a leading "/" is ignored). The reply echoes `tag`. */
 export class ReadFile extends Message {
   tag: u32
   path: string

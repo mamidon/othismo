@@ -3,14 +3,14 @@ import { Echoed } from "./messages"
 
 protocol Echo {
   in Line
-  out out: Echoed
+  emits Echoed
 }
 
-// Environment.Stdin has one out port, `out`, carrying Line messages.
-instance stdin  : Environment.Stdin {
-  out -> echo
-}
-instance echo   : Echo {
-  out -> stdout
-}
+instance stdin  : Environment.Stdin
+instance echo   : Echo
 instance stdout : Environment.Stdout
+
+// Lines from stdin go to echo; what echo emits goes to stdout.
+stdin.Line {
+  echo.Echoed { stdout }
+}

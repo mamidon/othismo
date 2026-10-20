@@ -7,38 +7,29 @@ import { HttpRequest, HttpResponse } from "./messages"
 // Bytes <-> typed HTTP messages.
 protocol HttpCodec {
   in SocketData, SocketClosed, HttpResponse
-  out socket: SocketWrite, SocketClose
-  out requests: HttpRequest
+  emits HttpRequest
+  replies SocketWrite, SocketClose
 }
 
 // Typed HTTP requests -> file reads -> typed HTTP responses.
 protocol StaticServer {
   in HttpRequest, FileContents, FileError
-  out files: ReadFile
-  out responses: HttpResponse
-  out log: Line
+  emits ReadFile, Line
+  replies HttpResponse
 }
 
-instance net : Environment.Socket {
-  send Listen { address: "127.0.0.1:8080" }
-  out -> http
-  events -> stdout
-}
-
-instance http : HttpCodec {
-  socket -> net
-  requests -> server
-}
-
-instance server : StaticServer {
-  files -> files
-  responses -> http
-  log -> stdout
-}
-
-instance files : Environment.Files {
-  send FilesRoot { path: "./public" }
-  out -> server
-}
-
+instance net    : Environment.Socket { send Listen { address: "127.0.0.1:8080" } }
+instance http   : HttpCodec
+instance server : StaticServer
+instance files  : Environment.Files { send FilesRoot { path: "./public" } }
 instance stdout : Environment.Stdout
+
+// Requests flow down this tree; every response is a reply back up it.
+net.SocketData {
+  http.HttpRequest {
+    server.ReadFile { files }
+    server.Line     { stdout }
+  }
+}
+net.SocketClosed { http }
+net.Listening    { stdout }

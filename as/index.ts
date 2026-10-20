@@ -1,9 +1,14 @@
 // The AssemblyScript side of the real_talk runtime.
 //
-// An object module imports this library to talk to the host. The host gives
-// the module exactly one capability, `real_talk.send`, which pushes a message
-// out of one of the module's numbered out ports. Everything else here is
-// plain AssemblyScript: BSON encoding/decoding and receive dispatch.
+// An object module imports this library to talk to the host. An object never
+// knows who it talks to. It can do two things:
+//
+//   emit(msg)        send into the image's routing; the image decides where
+//   from.reply(msg)  answer whoever sent the message being handled
+//
+// Those are the module's only capabilities (host imports `real_talk.emit` and
+// `real_talk.reply`). Everything else here is plain AssemblyScript: BSON
+// encoding/decoding and receive dispatch.
 //
 // Wire format (see src/wire.rs): one BSON document per message whose first
 // key is `$type` (the class name), followed by the class's fields.
@@ -12,15 +17,19 @@
 // Host interface
 
 // @ts-ignore: decorator
-@external("real_talk", "send")
-declare function host_send(port: u32, ptr: usize, len: usize): void;
+@external("real_talk", "emit")
+declare function host_emit(ptr: usize, len: usize): void;
+
+// @ts-ignore: decorator
+@external("real_talk", "reply")
+declare function host_reply(sender: u32, ptr: usize, len: usize): void;
 
 const TYPE_KEY = "$type";
 
 // ---------------------------------------------------------------------------
 // Messages
 
-/** Base class for every message. Subclasses override all three members. */
+/** Base class for every message. Subclasses override both members. */
 export class Message {
   /** The class name; must match the name in messages.ts. */
   typeName(): string {
@@ -41,25 +50,39 @@ export function registerMessage(typeName: string, decode: Decoder): void {
   decoders.set(typeName, decode);
 }
 
+function encodeMessage(msg: Message): ArrayBuffer {
+  const w = new Writer();
+  w.string(TYPE_KEY, msg.typeName());
+  msg.encode(w);
+  return w.finish();
+}
+
 // ---------------------------------------------------------------------------
-// Objects and ports
+// Objects
+
+/** Sends `msg` wherever the image routes this object's messages of its type. */
+export function emit(msg: Message): void {
+  const buf = encodeMessage(msg);
+  host_emit(changetype<usize>(buf), <usize>buf.byteLength);
+}
+
+/**
+ * Whoever sent the message being handled. Keep it to reply later; it stays
+ * valid for the life of the object. Replies to the image's own startup
+ * messages go nowhere.
+ */
+export class Sender {
+  constructor(private handle: u32) {}
+
+  reply(msg: Message): void {
+    const buf = encodeMessage(msg);
+    host_reply(this.handle, changetype<usize>(buf), <usize>buf.byteLength);
+  }
+}
 
 /** Base class for objects. Override `receive` and test `msg instanceof T`. */
 export class Receiver {
-  receive(msg: Message): void {}
-}
-
-/** An out port. Index `n` is the n-th `out` in the protocol declaration. */
-export class OutPort<T> {
-  constructor(readonly index: u32) {}
-
-  send(msg: T): void {
-    const w = new Writer();
-    w.string(TYPE_KEY, msg.typeName());
-    msg.encode(w);
-    const buf = w.finish();
-    host_send(this.index, changetype<usize>(buf), <usize>buf.byteLength);
-  }
+  receive(msg: Message, from: Sender): void {}
 }
 
 let receiver: Receiver | null = null;
@@ -71,7 +94,7 @@ export function bind(r: Receiver): void {
 
 // ---------------------------------------------------------------------------
 // Host entry points. Object modules re-export these:
-//   export { rt_inbox, rt_deliver } from "real-talk"
+//   export { rt_inbox, rt_deliver }
 
 let inbox = new ArrayBuffer(0);
 
@@ -82,14 +105,14 @@ export function rt_inbox(len: i32): usize {
 }
 
 /** Decodes the message in the inbox and hands it to the bound object. */
-export function rt_deliver(): void {
+export function rt_deliver(sender: u32): void {
   const r = new Reader(inbox);
   const t = r.string(TYPE_KEY);
   if (!decoders.has(t)) abort("no decoder registered for message type " + t);
   const msg = decoders.get(t)(r);
   const obj = receiver;
-  if (obj === null) abort("no object bound; call bind(new YourObject(...))");
-  else obj.receive(msg);
+  if (obj === null) abort("no object bound; call bind(new YourObject())");
+  else obj.receive(msg, new Sender(sender));
 }
 
 // ---------------------------------------------------------------------------

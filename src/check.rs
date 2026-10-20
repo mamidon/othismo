@@ -1,6 +1,6 @@
 //! Resolves and validates a parsed image into a [`Program`] the runtime can run.
 
-use crate::image::{self, Ident, Image, Value};
+use crate::image::{self, Ident, Image, Pos, Route, Target, Value};
 use crate::messages::{self, FieldType, MessageType};
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, bail};
@@ -23,17 +23,29 @@ pub const LINE: &str = "Line";
 #[derive(Debug)]
 pub struct Program {
     pub messages: BTreeMap<String, MessageType>,
-    /// Instances in image order; [`Port::targets`] index into this.
+    /// Instances in image order; routes and replies refer to them by index.
     pub instances: Vec<Instance>,
+    /// `(sender, type) -> targets`, flattened from the image's routing trees.
+    pub routes: HashMap<(usize, String), Vec<usize>>,
+    /// Things worth knowing that don't stop the image from running.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct Instance {
     pub name: String,
     pub kind: Kind,
-    /// Out ports in protocol declaration order (the order constructors see).
-    pub ports: Vec<Port>,
+    /// `None` accepts any message.
+    pub accepts: Option<Vec<String>>,
+    pub emits: Vec<String>,
+    pub replies: Vec<String>,
     pub startup: Vec<Message>,
+}
+
+impl Instance {
+    pub fn accepts(&self, ty: &str) -> bool {
+        self.accepts.as_ref().is_none_or(|a| a.iter().any(|t| t == ty))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,19 +59,13 @@ pub enum Kind {
     Files { root: PathBuf },
 }
 
-#[derive(Debug)]
-pub struct Port {
-    pub name: String,
-    pub types: Vec<String>,
-    pub targets: Vec<usize>,
-}
-
 /// A protocol implemented by the runtime itself.
 struct Builtin {
     name: &'static str,
     /// `None` accepts any message.
     accepts: Option<&'static [&'static str]>,
-    outputs: &'static [(&'static str, &'static [&'static str])],
+    emits: &'static [&'static str],
+    replies: &'static [&'static str],
     startup: Startup,
 }
 
@@ -74,27 +80,29 @@ enum Startup {
 }
 
 const BUILTINS: &[Builtin] = &[
-    Builtin { name: STDIN, accepts: Some(&[]), outputs: &[("out", &[LINE])], startup: Startup::Never },
-    Builtin { name: STDOUT, accepts: None, outputs: &[], startup: Startup::Any },
+    Builtin { name: STDIN, accepts: Some(&[]), emits: &[LINE], replies: &[], startup: Startup::Never },
+    Builtin { name: STDOUT, accepts: None, emits: &[], replies: &[], startup: Startup::Any },
     Builtin {
         name: SOCKET,
         accepts: Some(&["SocketWrite", "SocketClose"]),
-        outputs: &[("out", &["SocketData", "SocketClosed"]), ("events", &["Listening"])],
+        emits: &["SocketData", "SocketClosed", "Listening"],
+        replies: &[],
         startup: Startup::Config("Listen"),
     },
     Builtin {
         name: FILES,
         accepts: Some(&["ReadFile"]),
-        outputs: &[("out", &["FileContents", "FileError"])],
+        emits: &[],
+        replies: &["FileContents", "FileError"],
         startup: Startup::Config("FilesRoot"),
     },
 ];
 
 /// A protocol after resolution; built-ins and image-declared ones alike.
 struct ProtocolDef {
-    /// `None` accepts any message.
     accepts: Option<Vec<String>>,
-    outputs: Vec<(String, Vec<String>)>,
+    emits: Vec<String>,
+    replies: Vec<String>,
     source: Source,
 }
 
@@ -119,23 +127,28 @@ pub fn load(path: &Path) -> Result<Program> {
 pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     let messages = resolve_imports(img, dir)?;
     let env_messages = messages::parse(ENV_SOURCE).expect("as/env.ts parses");
-    let lookup_type = |id: &Ident| -> Result<String> {
-        if messages.contains_key(&id.name) {
-            Ok(id.name.clone())
-        } else {
-            Err(err_at(id, format!("unknown message type `{}`; is it imported?", id.name)))
-        }
+    let types_of = |ids: &[Ident]| -> Result<Vec<String>> {
+        ids.iter()
+            .map(|id| {
+                if messages.contains_key(&id.name) {
+                    Ok(id.name.clone())
+                } else {
+                    Err(err_at(id, format!("unknown message type `{}`; is it imported?", id.name)))
+                }
+            })
+            .collect()
     };
 
     // Protocols: built-ins first, then the image's own.
+    let strings = |ts: &[&str]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>();
     let mut protocols: HashMap<String, ProtocolDef> = HashMap::new();
     for b in BUILTINS {
-        let strings = |ts: &[&str]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>();
         protocols.insert(
             b.name.into(),
             ProtocolDef {
                 accepts: b.accepts.map(strings),
-                outputs: b.outputs.iter().map(|(n, ts)| (n.to_string(), strings(ts))).collect(),
+                emits: strings(b.emits),
+                replies: strings(b.replies),
                 source: Source::Builtin(b),
             },
         );
@@ -144,85 +157,36 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         if protocols.contains_key(&p.name.name) {
             bail!(err_at(&p.name, format!("protocol `{}` is already defined", p.name.name)));
         }
-        let accepts = p.inputs.iter().map(&lookup_type).collect::<Result<Vec<_>>>()?;
-        let mut outputs: Vec<(String, Vec<String>)> = vec![];
-        for o in &p.outputs {
-            if outputs.iter().any(|(n, _)| *n == o.name.name) {
-                bail!(err_at(&o.name, format!("port `{}` is declared twice", o.name.name)));
-            }
-            outputs.push((o.name.name.clone(), o.types.iter().map(&lookup_type).collect::<Result<_>>()?));
-        }
         let module = dir.join("scripts").join(format!("{}.wasm", p.name.name));
         protocols.insert(
             p.name.name.clone(),
-            ProtocolDef { accepts: Some(accepts), outputs, source: Source::Wasm { protocol: p.name.name.clone(), module } },
+            ProtocolDef {
+                accepts: Some(types_of(&p.inputs)?),
+                emits: types_of(&p.emits)?,
+                replies: types_of(&p.replies)?,
+                source: Source::Wasm { protocol: p.name.name.clone(), module },
+            },
         );
     }
 
-    // Instance names, so wiring can refer forwards.
+    // Instances.
     let mut index: HashMap<&str, usize> = HashMap::new();
+    let mut instances = vec![];
     for (i, inst) in img.instances.iter().enumerate() {
         if index.insert(&inst.name.name, i).is_some() {
             bail!(err_at(&inst.name, format!("instance `{}` is declared twice", inst.name.name)));
         }
-    }
-    let proto_of = |inst: &image::Instance| -> Result<&ProtocolDef> {
-        protocols
+        let proto = protocols
             .get(&inst.protocol.name)
-            .ok_or_else(|| err_at(&inst.protocol, format!("unknown protocol `{}`", inst.protocol.name)))
-    };
-
-    let mut instances = vec![];
-    for inst in &img.instances {
-        let proto = proto_of(inst)?;
+            .ok_or_else(|| err_at(&inst.protocol, format!("unknown protocol `{}`", inst.protocol.name)))?;
         let iname = &inst.name.name;
 
         if let Source::Builtin(b) = proto.source {
             let config = b.startup_config();
-            for ty in b.accepts.unwrap_or(&[]).iter().chain(b.outputs.iter().flat_map(|(_, ts)| *ts)).chain(&config) {
+            let used = b.accepts.unwrap_or(&[]).iter().chain(b.emits).chain(b.replies).chain(&config);
+            for ty in used {
                 require_env_type(&messages, &env_messages, ty, &inst.protocol)?;
             }
-        }
-
-        // Wiring: every declared port exactly once, every target accepts its types.
-        let mut ports: Vec<Port> = proto
-            .outputs
-            .iter()
-            .map(|(n, t)| Port { name: n.clone(), types: t.clone(), targets: vec![] })
-            .collect();
-        let mut wired = vec![false; ports.len()];
-        for w in &inst.wires {
-            let Some(pi) = ports.iter().position(|p| p.name == w.port.name) else {
-                bail!(err_at(&w.port, format!("`{iname}` ({}) has no out port `{}`", inst.protocol.name, w.port.name)));
-            };
-            if std::mem::replace(&mut wired[pi], true) {
-                bail!(err_at(&w.port, format!("port `{iname}.{}` is wired more than once", w.port.name)));
-            }
-            for t in &w.targets {
-                let Some(&ti) = index.get(t.name.as_str()) else {
-                    bail!(err_at(t, format!("unknown instance `{}`", t.name)));
-                };
-                if ports[pi].targets.contains(&ti) {
-                    bail!(err_at(t, format!("`{}` appears twice in this fan-out", t.name)));
-                }
-                if let Some(ins) = &proto_of(&img.instances[ti])?.accepts {
-                    for ty in &ports[pi].types {
-                        if !ins.contains(ty) {
-                            bail!(err_at(
-                                t,
-                                format!(
-                                    "port `{iname}.{}` may carry `{ty}`, but `{}` ({}) does not accept it",
-                                    w.port.name, t.name, img.instances[ti].protocol.name
-                                )
-                            ));
-                        }
-                    }
-                }
-                ports[pi].targets.push(ti);
-            }
-        }
-        if let Some(pi) = wired.iter().position(|w| !w) {
-            bail!(err_at(&inst.name, format!("port `{iname}.{}` is not wired", ports[pi].name)));
         }
 
         // Startup sends: typed, every field present with a matching value.
@@ -254,10 +218,97 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
             }
         };
 
-        instances.push(Instance { name: iname.clone(), kind, ports, startup });
+        instances.push(Instance {
+            name: iname.clone(),
+            kind,
+            accepts: proto.accepts.clone(),
+            emits: proto.emits.clone(),
+            replies: proto.replies.clone(),
+            startup,
+        });
     }
 
-    Ok(Program { messages, instances })
+    // Routes: flatten every tree into (sender, type) -> targets.
+    let mut routes = HashMap::new();
+    let mut defined_at: HashMap<(usize, String), Pos> = HashMap::new();
+    let mut pending: Vec<&Route> = img.routes.iter().collect();
+    while let Some(route) = pending.pop() {
+        let find = |id: &Ident| {
+            index.get(id.name.as_str()).copied().ok_or_else(|| err_at(id, format!("unknown instance `{}`", id.name)))
+        };
+        let from = find(&route.sender)?;
+        let sender = &instances[from];
+        let types = if route.selector.name == "*" {
+            if sender.emits.is_empty() {
+                bail!(err_at(&route.selector, format!("`{}` doesn't emit anything", sender.name)));
+            }
+            sender.emits.clone()
+        } else if !sender.emits.contains(&route.selector.name) {
+            bail!(err_at(
+                &route.selector,
+                format!("`{}` doesn't emit `{}` (it emits: {})", sender.name, route.selector.name, list(&sender.emits))
+            ));
+        } else {
+            vec![route.selector.name.clone()]
+        };
+
+        let mut targets = vec![];
+        for t in &route.targets {
+            let id = t.instance();
+            let to = find(id)?;
+            if let Target::Leaf(_) = t
+                && targets.contains(&to)
+            {
+                bail!(err_at(id, format!("`{}` appears twice in this route", id.name)));
+            }
+            if !targets.contains(&to) {
+                targets.push(to);
+            }
+            if let Target::Node(child) = t {
+                pending.push(child);
+            }
+            let target = &instances[to];
+            for ty in &types {
+                if !target.accepts(ty) {
+                    bail!(err_at(id, format!("`{}` doesn't accept `{ty}`, which `{}` emits", target.name, sender.name)));
+                }
+            }
+            // Whatever the target replies with goes back to the sender.
+            for ty in &target.replies {
+                if !sender.accepts(ty) {
+                    bail!(err_at(
+                        id,
+                        format!("`{}` replies with `{ty}`, which `{}` doesn't accept", target.name, sender.name)
+                    ));
+                }
+            }
+        }
+
+        for ty in types {
+            if let Some(prev) = defined_at.insert((from, ty.clone()), route.selector.pos) {
+                bail!(err_at(
+                    &route.selector,
+                    format!("`{}.{ty}` is already routed at {prev}; list every target in one place", sender.name)
+                ));
+            }
+            routes.insert((from, ty), targets.clone());
+        }
+    }
+
+    let mut warnings = vec![];
+    for (i, inst) in instances.iter().enumerate() {
+        for ty in &inst.emits {
+            if !routes.contains_key(&(i, ty.clone())) {
+                warnings.push(format!("`{}.{ty}` is not routed; those messages will be dropped", inst.name));
+            }
+        }
+    }
+
+    Ok(Program { messages, instances, routes, warnings })
+}
+
+fn list(types: &[String]) -> String {
+    if types.is_empty() { "nothing".into() } else { types.join(", ") }
 }
 
 impl Builtin {
@@ -405,59 +456,90 @@ mod tests {
         import { Line, Echoed, Config, Ping, Blob } from "./messages"
         protocol Echo {
           in Line, Config, Ping, Blob
-          out out: Echoed
+          emits Echoed
         }
+        protocol Answerer {
+          in Ping
+          replies Echoed
+        }
+        instance stdin : Environment.Stdin
+        instance echo : Echo
+        instance stdout : Environment.Stdout
     "#;
+
+    fn route(p: &Program, from: &str, ty: &str) -> Vec<String> {
+        let i = p.instances.iter().position(|x| x.name == from).unwrap();
+        p.routes[&(i, ty.to_string())].iter().map(|&t| p.instances[t].name.clone()).collect()
+    }
 
     #[test]
     fn accepts_hello_world() {
-        let p = check_src(&format!(
-            "{HEADER}
-            instance stdin : Environment.Stdin {{ out -> echo }}
-            instance echo : Echo {{
-              send Config {{ name: \"x\", count: 3, ratio: 2, on: true }}
-              send Ping
-              out -> stdout
-            }}
-            instance stdout : Environment.Stdout"
-        ))
-        .unwrap();
+        let p = check_src(&format!("{HEADER} stdin.Line {{ echo.Echoed {{ stdout }} }}")).unwrap();
         assert_eq!(p.instances.len(), 3);
         assert_eq!(p.instances[0].kind, Kind::Stdin);
-        assert_eq!(p.instances[0].ports[0].targets, [1]);
         assert!(matches!(&p.instances[1].kind, Kind::Wasm { protocol, module }
             if protocol == "Echo" && module.ends_with("scripts/Echo.wasm")));
-        assert_eq!(p.instances[1].startup.len(), 2);
-        assert_eq!(p.instances[1].startup[0].fields.get_i32("count").unwrap(), 3);
-        assert_eq!(p.instances[1].startup[0].fields.get_f64("ratio").unwrap(), 2.0);
+        assert_eq!(route(&p, "stdin", "Line"), ["echo"]);
+        assert_eq!(route(&p, "echo", "Echoed"), ["stdout"]);
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     }
 
     #[test]
-    fn unwired_port() {
-        assert!(err(&format!("{HEADER} instance echo : Echo")).contains("`echo.out` is not wired"));
+    fn nested_routes_flatten_and_fan_out() {
+        let p = check_src(&format!(
+            "{HEADER} instance echo2 : Echo
+            stdin.Line {{ echo.* {{ stdout }}, echo2.Echoed {{ stdout }}, stdout }}"
+        ))
+        .unwrap();
+        assert_eq!(route(&p, "stdin", "Line"), ["echo", "echo2", "stdout"]);
+        assert_eq!(route(&p, "echo", "Echoed"), ["stdout"]);
+        assert_eq!(route(&p, "echo2", "Echoed"), ["stdout"]);
     }
 
     #[test]
-    fn doubly_wired_port() {
-        let e = err(&format!("{HEADER} instance echo : Echo {{ out -> s\n out -> s }} instance s : Environment.Stdout"));
-        assert!(e.contains("more than once"), "{e}");
+    fn unrouted_emits_are_warnings_not_errors() {
+        let p = check_src(&format!("{HEADER} stdin.Line {{ echo }}")).unwrap();
+        assert_eq!(p.warnings, ["`echo.Echoed` is not routed; those messages will be dropped"]);
     }
 
     #[test]
-    fn unknown_port_and_target() {
-        assert!(err(&format!("{HEADER} instance echo : Echo {{ nope -> echo }}")).contains("no out port `nope`"));
-        assert!(err(&format!("{HEADER} instance echo : Echo {{ out -> ghost }}")).contains("unknown instance `ghost`"));
+    fn a_sender_and_type_is_routed_once() {
+        let e = err(&format!("{HEADER} stdin.Line {{ echo }} stdin.Line {{ stdout }}"));
+        assert!(e.contains("`stdin.Line` is already routed at"), "{e}");
+        let e = err(&format!("{HEADER} stdin.Line {{ echo.* {{ stdout }} }} echo.Echoed {{ stdout }}"));
+        assert!(e.contains("`echo.Echoed` is already routed"), "{e}");
+        let e = err(&format!("{HEADER} stdin.Line {{ echo, echo }}"));
+        assert!(e.contains("appears twice"), "{e}");
     }
 
     #[test]
-    fn target_must_accept_port_types() {
-        let e = err(&format!("{HEADER} instance a : Echo {{ out -> b }} instance b : Echo {{ out -> a }}"));
-        assert!(e.contains("does not accept"), "{e}");
+    fn routes_must_match_emits_and_accepts() {
+        assert!(err(&format!("{HEADER} stdin.Echoed {{ echo }}")).contains("`stdin` doesn't emit `Echoed` (it emits: Line)"));
+        assert!(err(&format!("{HEADER} stdout.* {{ echo }}")).contains("`stdout` doesn't emit anything"));
+        assert!(err(&format!("{HEADER} echo.Echoed {{ echo }}")).contains("`echo` doesn't accept `Echoed`"));
+        assert!(err(&format!("{HEADER} ghost.Line {{ echo }}")).contains("unknown instance `ghost`"));
+        assert!(err(&format!("{HEADER} stdin.Line {{ ghost }}")).contains("unknown instance `ghost`"));
+    }
+
+    #[test]
+    fn replies_must_be_accepted_by_the_sender() {
+        let img = format!(
+            "{HEADER}
+            protocol Pinger {{ in Line  emits Ping }}
+            instance pinger : Pinger
+            instance answerer : Answerer
+            stdin.Line {{ pinger.Ping {{ answerer }} }}"
+        );
+        let e = err(&img);
+        assert!(e.contains("`answerer` replies with `Echoed`, which `pinger` doesn't accept"), "{e}");
+        assert!(check_src(&img.replace("in Line  emits Ping", "in Line, Echoed  emits Ping")).is_ok());
     }
 
     #[test]
     fn types_must_be_imported() {
         let e = err("import { Line } from \"./messages\" protocol P { in Echoed }");
+        assert!(e.contains("unknown message type `Echoed`"), "{e}");
+        let e = err("import { Line } from \"./messages\" protocol P { emits Echoed }");
         assert!(e.contains("unknown message type `Echoed`"), "{e}");
         let e = err("import { Nope } from \"./messages\"");
         assert!(e.contains("not an exported class"), "{e}");
@@ -465,7 +547,12 @@ mod tests {
 
     #[test]
     fn startup_sends_are_typed() {
-        let inst = |send: &str| format!("{HEADER} instance s : Environment.Stdout instance e : Echo {{ {send} out -> s }}");
+        let inst = |send: &str| format!("{HEADER} instance e : Echo {{ {send} }}");
+        let p = check_src(&inst("send Config { name: \"x\", count: 3, ratio: 2, on: true } send Ping")).unwrap();
+        let e = &p.instances[3];
+        assert_eq!(e.startup.len(), 2);
+        assert_eq!(e.startup[0].fields.get_i32("count").unwrap(), 3);
+        assert_eq!(e.startup[0].fields.get_f64("ratio").unwrap(), 2.0);
         assert!(err(&inst("send Config { name: \"x\" }")).contains("missing field `count`"));
         assert!(err(&inst("send Config { name: 1, count: 1, ratio: 1, on: true }")).contains("is string"));
         assert!(err(&inst("send Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
@@ -476,58 +563,61 @@ mod tests {
 
     #[test]
     fn bytes_fields_take_string_literals_as_utf8() {
-        let p = check_src(&format!("{HEADER} instance s : Environment.Stdout instance e : Echo {{ send Blob {{ data: \"hé\" }} out -> s }}")).unwrap();
-        let data = p.instances[1].startup[0].fields.get_binary_generic("data").unwrap();
+        let p = check_src(&format!("{HEADER} instance e : Echo {{ send Blob {{ data: \"hé\" }} }}")).unwrap();
+        let data = p.instances[3].startup[0].fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
     }
 
-    const SOCKET_IMG: &str = r#"
+    const SERVER_IMG: &str = r#"
         import { Listen, Listening, SocketData, SocketClosed, SocketWrite, SocketClose,
                  FilesRoot, ReadFile, FileContents, FileError } from "real-talk/env"
         protocol Handler {
           in SocketData, SocketClosed, FileContents, FileError
-          out net: SocketWrite, SocketClose
-          out files: ReadFile
+          emits ReadFile
+          replies SocketWrite, SocketClose
         }
-        instance h : Handler { net -> net  files -> fs }
+        instance h : Handler
         instance log : Environment.Stdout
     "#;
 
     #[test]
     fn socket_and_files_take_config_from_the_image() {
         let p = check_src(&format!(
-            r#"{SOCKET_IMG}
-            instance net : Environment.Socket {{ send Listen {{ address: "127.0.0.1:0" }}  out -> h  events -> log }}
-            instance fs : Environment.Files {{ send FilesRoot {{ path: "public" }}  out -> h }}"#
+            r#"{SERVER_IMG}
+            instance net : Environment.Socket {{ send Listen {{ address: "127.0.0.1:0" }} }}
+            instance fs : Environment.Files {{ send FilesRoot {{ path: "public" }} }}
+            net.SocketData {{ h.ReadFile {{ fs }} }}
+            net.SocketClosed {{ h }}
+            net.Listening {{ log }}"#
         ))
         .unwrap();
         assert_eq!(p.instances[2].kind, Kind::Socket { address: "127.0.0.1:0".into() });
         assert!(p.instances[2].startup.is_empty(), "config is consumed by the checker");
         assert!(matches!(&p.instances[3].kind, Kind::Files { root } if root.ends_with("public")));
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     }
 
     #[test]
     fn config_is_required_exactly_once() {
-        let net = "instance fs : Environment.Files { send FilesRoot { path: \".\" }  out -> h }";
-        let e = err(&format!("{SOCKET_IMG} {net} instance net : Environment.Socket {{ out -> h  events -> log }}"));
+        let fs = "instance fs : Environment.Files { send FilesRoot { path: \".\" } }";
+        let e = err(&format!("{SERVER_IMG} {fs} instance net : Environment.Socket"));
         assert!(e.contains("needs exactly one startup message, `send Listen"), "{e}");
         let e = err(&format!(
-            "{SOCKET_IMG} {net} instance net : Environment.Socket {{
-               send Listen {{ address: \"a\" }} send Listen {{ address: \"b\" }} out -> h  events -> log }}"
+            "{SERVER_IMG} {fs} instance net : Environment.Socket {{ send Listen {{ address: \"a\" }} send Listen {{ address: \"b\" }} }}"
         ));
         assert!(e.contains("exactly one"), "{e}");
     }
 
     #[test]
-    fn config_cannot_be_wired_at_runtime() {
+    fn config_cannot_be_sent_at_runtime() {
         let e = err(
             r#"import { FilesRoot, ReadFile, FileContents, FileError } from "real-talk/env"
-            protocol Sneaky { out x: FilesRoot }
-            instance s : Sneaky { x -> fs }
-            instance fs : Environment.Files { send FilesRoot { path: "." }  out -> log }
-            instance log : Environment.Stdout"#,
+            protocol Sneaky { emits FilesRoot }
+            instance s : Sneaky
+            instance fs : Environment.Files { send FilesRoot { path: "." } }
+            s.FilesRoot { fs }"#,
         );
-        assert!(e.contains("does not accept"), "{e}");
+        assert!(e.contains("`fs` doesn't accept `FilesRoot`"), "{e}");
     }
 
     #[test]
@@ -540,8 +630,7 @@ mod tests {
         let img = image::parse(
             r#"import { Listen } from "./m"
             import { Listening, SocketData, SocketClosed, SocketWrite, SocketClose } from "real-talk/env"
-            instance net : Environment.Socket { send Listen { port: 1 } out -> o events -> o }
-            instance o : Environment.Stdout"#,
+            instance net : Environment.Socket { send Listen { port: 1 } }"#,
         )
         .unwrap();
         let e = format!("{:#}", check(&img, &dir).unwrap_err());
@@ -551,7 +640,7 @@ mod tests {
 
     #[test]
     fn stdin_requires_line() {
-        let e = err("import { Echoed } from \"./messages\" instance i : Environment.Stdin { out -> o } instance o : Environment.Stdout");
+        let e = err("import { Echoed } from \"./messages\" instance i : Environment.Stdin");
         assert!(e.contains("import it"), "{e}");
     }
 }

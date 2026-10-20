@@ -1,4 +1,4 @@
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line, ReadFile, FileContents, FileError } from "real-talk/env"
 import { HttpRequest, HttpResponse } from "../messages"
 
@@ -6,35 +6,28 @@ export { rt_inbox, rt_deliver }
 
 /** What we remember about a request while its file is being read. */
 class Pending {
-  constructor(public method: string, public path: string) {}
+  constructor(public method: string, public path: string, public from: Sender) {}
 }
 
 /**
- * Serves GET and HEAD by asking the files capability for the requested path.
- * It has no file system access of its own: it can only send ReadFile to
- * whatever the image wired `files` to.
+ * Serves GET and HEAD. It has no file system access of its own: it emits
+ * ReadFile, the image routes that somewhere, and whatever replies with
+ * FileContents or FileError decides the response, which goes back to whoever
+ * sent the request.
  */
 class StaticServer extends Receiver {
   pending: Map<u32, Pending> = new Map<u32, Pending>()
 
-  constructor(
-    private files: OutPort<ReadFile>,
-    private responses: OutPort<HttpResponse>,
-    private log: OutPort<Line>,
-  ) {
-    super()
-  }
-
-  receive(msg: Message): void {
+  receive(msg: Message, from: Sender): void {
     if (msg instanceof HttpRequest) {
       const req = msg as HttpRequest
+      this.pending.set(req.conn, new Pending(req.method, req.path, from))
       if (req.method != "GET" && req.method != "HEAD") {
         this.reply(req.conn, req.method, req.path, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n", text("405 Method Not Allowed\n"))
         return
       }
       const path = req.path.endsWith("/") ? req.path + "index.html" : req.path
-      this.pending.set(req.conn, new Pending(req.method, req.path))
-      this.files.send(new ReadFile(req.conn, path))
+      emit(new ReadFile(req.conn, path))
     } else if (msg instanceof FileContents) {
       const f = msg as FileContents
       if (!this.pending.has(f.tag)) return
@@ -60,9 +53,11 @@ class StaticServer extends Receiver {
   }
 
   private reply(conn: u32, method: string, path: string, status: u16, reason: string, headers: string, body: ArrayBuffer): void {
-    if (this.pending.has(conn)) this.pending.delete(conn)
-    this.responses.send(new HttpResponse(conn, status, reason, headers, body, method == "HEAD"))
-    this.log.send(new Line(method + " " + path + " " + status.toString()))
+    if (!this.pending.has(conn)) return
+    const p = this.pending.get(conn)
+    this.pending.delete(conn)
+    p.from.reply(new HttpResponse(conn, status, reason, headers, body, method == "HEAD"))
+    emit(new Line(method + " " + path + " " + status.toString()))
   }
 }
 
@@ -87,4 +82,4 @@ function contentType(path: string): string {
   return "application/octet-stream"
 }
 
-bind(new StaticServer(new OutPort<ReadFile>(0), new OutPort<HttpResponse>(1), new OutPort<Line>(2)))
+bind(new StaticServer())

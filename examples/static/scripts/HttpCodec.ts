@@ -1,4 +1,4 @@
-import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
+import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { SocketData, SocketClosed, SocketWrite, SocketClose } from "real-talk/env"
 import { HttpRequest, HttpResponse } from "../messages"
 
@@ -10,25 +10,24 @@ const MAX_HEAD: i32 = 16 * 1024
 const MAX_BODY: i32 = 1024 * 1024
 
 /**
- * Speaks HTTP/1.1 over Environment.Socket: buffers bytes per connection until
- * a whole request has arrived, emits it as a typed HttpRequest, and turns the
- * HttpResponse that comes back into bytes. One request per connection; every
- * response closes it.
+ * Speaks HTTP/1.1 over a socket: buffers bytes per connection until a whole
+ * request has arrived, emits it as a typed HttpRequest, and turns the
+ * HttpResponse replied to it into bytes, which it replies to the socket.
+ * One request per connection; every response closes it.
  */
 class HttpCodec extends Receiver {
   /** Bytes received so far on connections still reading a request. */
   pending: Map<u32, ArrayBuffer> = new Map<u32, ArrayBuffer>()
   /** Connections whose request was handed on and await a response. */
   answering: Set<u32> = new Set<u32>()
+  /** Who to reply to with each connection's bytes: the socket it came from. */
+  sockets: Map<u32, Sender> = new Map<u32, Sender>()
 
-  constructor(private socket: OutPort<Message>, private requests: OutPort<HttpRequest>) {
-    super()
-  }
-
-  receive(msg: Message): void {
+  receive(msg: Message, from: Sender): void {
     if (msg instanceof SocketData) {
       const d = msg as SocketData
       if (this.answering.has(d.conn)) return // ignore anything after the request
+      this.sockets.set(d.conn, from)
       const buf = this.pending.has(d.conn) ? concat(this.pending.get(d.conn), d.data) : d.data
       this.pending.set(d.conn, buf)
       this.parse(d.conn, buf)
@@ -36,6 +35,7 @@ class HttpCodec extends Receiver {
       const c = (msg as SocketClosed).conn
       if (this.pending.has(c)) this.pending.delete(c)
       if (this.answering.has(c)) this.answering.delete(c)
+      if (this.sockets.has(c)) this.sockets.delete(c)
     } else if (msg instanceof HttpResponse) {
       this.respond(msg as HttpResponse)
     }
@@ -100,19 +100,21 @@ class HttpCodec extends Receiver {
     this.pending.delete(conn)
     this.answering.add(conn)
     const body = buf.slice(bodyStart, bodyStart + length)
-    this.requests.send(new HttpRequest(conn, start[0], path, query, start[2], headers, body))
+    emit(new HttpRequest(conn, start[0], path, query, start[2], headers, body))
   }
 
   private respond(r: HttpResponse): void {
-    if (!this.answering.has(r.conn)) return // the client went away
+    if (!this.answering.has(r.conn) || !this.sockets.has(r.conn)) return // the client went away
     this.answering.delete(r.conn)
+    const socket = this.sockets.get(r.conn)
+    this.sockets.delete(r.conn)
     const head = "HTTP/1.1 " + r.status.toString() + " " + r.reason + "\r\n" +
       r.headers +
       "Content-Length: " + r.body.byteLength.toString() + "\r\n" +
       "Connection: close\r\n\r\n"
     const headBytes = String.UTF8.encode(head)
-    this.socket.send(new SocketWrite(r.conn, r.head ? headBytes : concat(headBytes, r.body)))
-    this.socket.send(new SocketClose(r.conn))
+    socket.reply(new SocketWrite(r.conn, r.head ? headBytes : concat(headBytes, r.body)))
+    socket.reply(new SocketClose(r.conn))
   }
 
   /** Answers a malformed request directly, without bothering the server. */
@@ -177,4 +179,4 @@ function percentDecode(s: string): string | null {
   return String.UTF8.decode(out.buffer.slice(0, n))
 }
 
-bind(new HttpCodec(new OutPort<Message>(0), new OutPort<HttpRequest>(1)))
+bind(new HttpCodec())

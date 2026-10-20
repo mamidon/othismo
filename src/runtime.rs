@@ -1,17 +1,21 @@
 //! Instantiates a checked [`Program`] and runs its message loop.
 //!
 //! Delivery is synchronous and single-threaded: one FIFO queue of
-//! `(target instance, message)` pairs, drained completely before the next
-//! outside [`Event`] is taken. Wasm objects get a [`Store`] each and an import
-//! set of exactly `env.abort` and `real_talk.send`; anything else a module
-//! asks for is refused before it is instantiated.
+//! `(target, sender, message)` entries, drained completely before the next
+//! outside [`Event`] is taken. Objects send in two ways: `emit`, which the
+//! image's routes direct, and `reply`, which goes back to whoever sent the
+//! message being answered.
+//!
+//! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`,
+//! `real_talk.emit` and `real_talk.reply`; anything else a module asks for is
+//! refused before it is instantiated.
 
 use crate::check::{Kind, Program};
-use crate::env::{self, Emit, EnvObject, Event};
+use crate::env::{self, EnvObject, Event, Out};
 use crate::messages::MessageType;
 use crate::wire::Message;
 use anyhow::{Context, Result, anyhow, bail};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
 use wasmtime::{Caller, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
@@ -36,19 +40,32 @@ pub struct Options {
 }
 
 /// Every host function a module may import.
-const ALLOWED_IMPORTS: &[(&str, &str)] = &[("env", "abort"), ("real_talk", "send")];
+const ALLOWED_IMPORTS: &[(&str, &str)] = &[("env", "abort"), ("real_talk", "emit"), ("real_talk", "reply")];
+
+/// Reply handle meaning "the image itself" (startup sends); replies to it are dropped.
+const NOBODY: u32 = 0;
 
 #[derive(Default)]
 struct HostState {
-    /// Messages the module sent during the current call: (port, BSON).
-    outbox: Vec<(u32, Vec<u8>)>,
+    /// Messages the module sent during the current call, as BSON.
+    outbox: Vec<Sent>,
+    /// Reply handles: handle `h` (from 1) names instance `senders[h - 1]`.
+    /// Only instances that have messaged this object ever get a handle, so a
+    /// guessed handle can only reach something it could already reply to.
+    senders: Vec<usize>,
+    handles: HashMap<usize, u32>,
+}
+
+enum Sent {
+    Emit(Vec<u8>),
+    Reply(u32, Vec<u8>),
 }
 
 struct WasmObject {
     store: Store<HostState>,
     memory: Memory,
     inbox: TypedFunc<i32, i32>,
-    deliver: TypedFunc<(), ()>,
+    deliver: TypedFunc<i32, ()>,
 }
 
 enum Object {
@@ -59,7 +76,8 @@ enum Object {
 pub struct Runtime<'p> {
     program: &'p Program,
     objects: Vec<Object>,
-    queue: VecDeque<(usize, Message)>,
+    /// `(to, from, message)`; `from` is `None` for the image's startup sends.
+    queue: VecDeque<(usize, Option<usize>, Message)>,
     input: Option<Box<dyn BufRead + Send>>,
     output: Box<dyn Write>,
     options: Options,
@@ -118,7 +136,7 @@ impl<'p> Runtime<'p> {
                     let deliver = instance
                         .get_typed_func(&mut store, "rt_deliver")
                         .map_err(anyhow::Error::from)
-                        .with_context(|| format!("instance `{}`: module must export rt_deliver()", inst.name))?;
+                        .with_context(|| format!("instance `{}`: module must export rt_deliver(i32)", inst.name))?;
                     Object::Wasm(WasmObject { store, memory, inbox, deliver })
                 }
                 kind => Object::Env(
@@ -134,10 +152,10 @@ impl<'p> Runtime<'p> {
     }
 
     pub fn run(mut self) -> Result<()> {
-        // Startup sends go out after everything is wired, before outside events.
+        // Startup sends go out once every object exists, before outside events.
         for (i, inst) in self.program.instances.iter().enumerate() {
             for msg in &inst.startup {
-                self.queue.push_back((i, msg.clone()));
+                self.queue.push_back((i, None, msg.clone()));
             }
         }
         self.drain()?;
@@ -151,8 +169,8 @@ impl<'p> Runtime<'p> {
         }
         for i in 0..self.objects.len() {
             if let Object::Env(e) = &mut self.objects[i] {
-                let emitted = e.start(i, &tx).with_context(|| format!("instance `{}`", self.program.instances[i].name))?;
-                self.emit(i, emitted)?;
+                let sent = e.start(i, &tx).with_context(|| format!("instance `{}`", self.program.instances[i].name))?;
+                self.send_all(i, None, sent)?;
             }
         }
         // Once every source thread has finished, `rx` disconnects and we're done.
@@ -161,35 +179,43 @@ impl<'p> Runtime<'p> {
 
         for ev in rx {
             let Object::Env(e) = &mut self.objects[ev.to] else { unreachable!("events only come from env objects") };
-            let emitted = e.on_event(ev.what);
-            self.emit(ev.to, emitted)?;
+            let sent = e.on_event(ev.what);
+            self.send_all(ev.to, None, sent)?;
             self.drain()?;
         }
         Ok(())
     }
 
     fn drain(&mut self) -> Result<()> {
-        while let Some((to, msg)) = self.queue.pop_front() {
-            self.deliver(to, msg)?;
+        while let Some((to, from, msg)) = self.queue.pop_front() {
+            self.deliver(to, from, msg)?;
         }
         Ok(())
     }
 
-    fn deliver(&mut self, to: usize, msg: Message) -> Result<()> {
+    fn deliver(&mut self, to: usize, from: Option<usize>, msg: Message) -> Result<()> {
         let name = &self.program.instances[to].name;
         match &mut self.objects[to] {
             Object::Env(e) => {
-                let emitted = e
+                let sent = e
                     .deliver(&msg, self.program, &mut self.output)
                     .with_context(|| format!("instance `{name}` failed handling `{}`", msg.type_name))?;
-                self.emit(to, emitted)?;
+                self.send_all(to, from, sent)?;
             }
             Object::Wasm(obj) => {
                 let bytes = msg.encode();
+                let state = obj.store.data_mut();
+                let handle = match from {
+                    None => NOBODY,
+                    Some(f) => *state.handles.entry(f).or_insert_with(|| {
+                        state.senders.push(f);
+                        state.senders.len() as u32
+                    }),
+                };
                 let call = |obj: &mut WasmObject| -> Result<()> {
                     let ptr = obj.inbox.call(&mut obj.store, bytes.len() as i32)?;
                     obj.memory.write(&mut obj.store, ptr as u32 as usize, &bytes)?;
-                    Ok(obj.deliver.call(&mut obj.store, ())?)
+                    Ok(obj.deliver.call(&mut obj.store, handle as i32)?)
                 };
                 call(obj).map_err(|e| anyhow!("instance `{name}` failed handling `{}`: {e:#}", msg.type_name))?;
                 self.flush_outbox(to)?;
@@ -198,50 +224,83 @@ impl<'p> Runtime<'p> {
         Ok(())
     }
 
-    fn emit(&mut self, from: usize, emitted: Vec<Emit>) -> Result<()> {
-        for (port, msg) in emitted {
-            self.route(from, port, msg)?;
+    /// Sends what an environment object produced while handling a message from `from`.
+    fn send_all(&mut self, me: usize, from: Option<usize>, sent: Vec<Out>) -> Result<()> {
+        for out in sent {
+            match out {
+                Out::Emit(msg) => self.emit(me, msg)?,
+                Out::Reply(msg) => self.reply(me, from, msg)?,
+            }
         }
         Ok(())
     }
 
-/// Routes whatever instance `from` sent during its last call.
-    fn flush_outbox(&mut self, from: usize) -> Result<()> {
-        let Object::Wasm(obj) = &mut self.objects[from] else { return Ok(()) };
-        let sent = std::mem::take(&mut obj.store.data_mut().outbox);
-        for (port, bytes) in sent {
-            let msg = Message::decode(&bytes)
-                .with_context(|| format!("instance `{}` sent an undecodable message", self.program.instances[from].name))?;
-            self.route(from, port, msg)?;
+    /// Sends whatever Wasm instance `me` produced during its last call.
+    fn flush_outbox(&mut self, me: usize) -> Result<()> {
+        let Object::Wasm(obj) = &mut self.objects[me] else { return Ok(()) };
+        let state = obj.store.data_mut();
+        let sent = std::mem::take(&mut state.outbox);
+        let senders = state.senders.clone();
+        let name = &self.program.instances[me].name;
+        for s in sent {
+            let (to, bytes) = match s {
+                Sent::Emit(bytes) => (None, bytes),
+                Sent::Reply(NOBODY, bytes) => (Some(None), bytes),
+                Sent::Reply(h, bytes) => match senders.get(h as usize - 1) {
+                    Some(&i) => (Some(Some(i)), bytes),
+                    None => bail!("instance `{name}` replied with unknown handle {h}"),
+                },
+            };
+            let msg = Message::decode(&bytes).with_context(|| format!("instance `{name}` sent an undecodable message"))?;
+            match to {
+                None => self.emit(me, msg)?,
+                Some(to) => self.reply(me, to, msg)?,
+            }
         }
         Ok(())
     }
 
-    /// Enqueues `msg` for every target of `from`'s out port `port`, after
-    /// checking the port exists and is declared to carry this type.
-    fn route(&mut self, from: usize, port: u32, msg: Message) -> Result<()> {
+    /// Enqueues `msg` for every target the image routes `from`'s `msg.type_name` to.
+    fn emit(&mut self, from: usize, msg: Message) -> Result<()> {
         let inst = &self.program.instances[from];
-        let Some(p) = inst.ports.get(port as usize) else {
-            bail!("instance `{}` sent on port #{port}, but its protocol declares {} out port(s)", inst.name, inst.ports.len());
-        };
-        if !p.types.contains(&msg.type_name) {
-            bail!(
-                "instance `{}` sent `{}` on port `{}`, which only carries {}",
-                inst.name,
-                msg.type_name,
-                p.name,
-                p.types.join(", ")
-            );
+        if !inst.emits.contains(&msg.type_name) {
+            bail!("instance `{}` emitted `{}`, but its protocol only emits {}", inst.name, msg.type_name, list(&inst.emits));
         }
-        if self.options.check_shapes {
-            check_shape(&self.program.messages, &msg)
-                .with_context(|| format!("instance `{}` sent a malformed message on `{}`", inst.name, p.name))?;
-        }
-        for &t in &p.targets {
-            self.queue.push_back((t, msg.clone()));
+        self.check_shape(from, &msg)?;
+        let targets = self.program.routes.get(&(from, msg.type_name.clone())).cloned().unwrap_or_default();
+        for t in targets {
+            self.queue.push_back((t, Some(from), msg.clone()));
         }
         Ok(())
     }
+
+    /// Enqueues `msg` back to `to`; a reply to the image (`None`) is dropped.
+    fn reply(&mut self, from: usize, to: Option<usize>, msg: Message) -> Result<()> {
+        let inst = &self.program.instances[from];
+        if !inst.replies.contains(&msg.type_name) {
+            bail!("instance `{}` replied `{}`, but its protocol only replies {}", inst.name, msg.type_name, list(&inst.replies));
+        }
+        self.check_shape(from, &msg)?;
+        let Some(to) = to else { return Ok(()) };
+        let target = &self.program.instances[to];
+        if !target.accepts(&msg.type_name) {
+            bail!("instance `{}` replied `{}` to `{}`, which doesn't accept it", inst.name, msg.type_name, target.name);
+        }
+        self.queue.push_back((to, Some(from), msg));
+        Ok(())
+    }
+
+    fn check_shape(&self, from: usize, msg: &Message) -> Result<()> {
+        if self.options.check_shapes {
+            check_shape(&self.program.messages, msg)
+                .with_context(|| format!("instance `{}` sent a malformed `{}`", self.program.instances[from].name, msg.type_name))?;
+        }
+        Ok(())
+    }
+}
+
+fn list(types: &[String]) -> String {
+    if types.is_empty() { "nothing".into() } else { types.join(", ") }
 }
 
 fn check_shape(messages: &BTreeMap<String, MessageType>, msg: &Message) -> Result<()> {
@@ -252,12 +311,19 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap(
         "real_talk",
-        "send",
-        |mut caller: Caller<'_, HostState>, port: i32, ptr: i32, len: i32| -> wasmtime::Result<()> {
-            let mem = memory(&mut caller)?;
-            let mut buf = vec![0; len as u32 as usize];
-            mem.read(&caller, ptr as u32 as usize, &mut buf).map_err(|_| wasmtime::format_err!("send: message out of bounds"))?;
-            caller.data_mut().outbox.push((port as u32, buf));
+        "emit",
+        |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| -> wasmtime::Result<()> {
+            let buf = read_bytes(&mut caller, ptr, len)?;
+            caller.data_mut().outbox.push(Sent::Emit(buf));
+            Ok(())
+        },
+    )?;
+    linker.func_wrap(
+        "real_talk",
+        "reply",
+        |mut caller: Caller<'_, HostState>, handle: i32, ptr: i32, len: i32| -> wasmtime::Result<()> {
+            let buf = read_bytes(&mut caller, ptr, len)?;
+            caller.data_mut().outbox.push(Sent::Reply(handle as u32, buf));
             Ok(())
         },
     )?;
@@ -272,6 +338,13 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
     Ok(linker)
+}
+
+fn read_bytes(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> wasmtime::Result<Vec<u8>> {
+    let mem = memory(caller)?;
+    let mut buf = vec![0; len as u32 as usize];
+    mem.read(&*caller, ptr as u32 as usize, &mut buf).map_err(|_| wasmtime::format_err!("message out of bounds"))?;
+    Ok(buf)
 }
 
 fn memory(caller: &mut Caller<'_, HostState>) -> wasmtime::Result<Memory> {
