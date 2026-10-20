@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 bson = "3.1.0"
-wasmtime = "48.0.7"
+wasmtime = { version = "48.0.7", features = ["anyhow"] }
