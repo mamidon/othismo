@@ -1,0 +1,7 @@
+{
+  "name": "real-talk",
+  "version": "0.1.0",
+  "description": "AssemblyScript side of the real_talk image runtime: ports, messages, BSON",
+  "types": "index.ts",
+  "ascMain": "index.ts"
+}

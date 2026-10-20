@@ -1,0 +1,15 @@
+import { Line, Echoed } from "./messages"
+
+protocol Echo {
+  in Line
+  out out: Echoed
+}
+
+// Environment.Stdin has one out port, `out`, carrying Line messages.
+instance stdin  : Environment.Stdin {
+  out -> echo
+}
+instance echo   : Echo {
+  out -> stdout
+}
+instance stdout : Environment.Stdout

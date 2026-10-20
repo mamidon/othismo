@@ -1,0 +1,8 @@
+{
+  "name": "real-talk-workspace",
+  "private": true,
+  "devDependencies": {
+    "assemblyscript": "0.28.20",
+    "real-talk": "file:./as"
+  }
+}
