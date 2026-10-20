@@ -2,6 +2,7 @@
 //! objects that talk only over the ports the image wires.
 
 pub mod check;
+pub mod env;
 pub mod image;
 pub mod messages;
 pub mod render;

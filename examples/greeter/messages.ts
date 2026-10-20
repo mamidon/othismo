@@ -1,18 +1,5 @@
 import { Message, Reader, Writer, registerMessage } from "real-talk"
 
-export class Line extends Message {
-  text: string
-
-  constructor(text: string) {
-    super()
-    this.text = text
-  }
-
-  typeName(): string { return "Line" }
-  encode(w: Writer): void { w.string("text", this.text) }
-}
-registerMessage("Line", (r: Reader): Message => new Line(r.string("text")))
-
 /** Configures a Greeter; sent once at startup by the image. */
 export class Greeting extends Message {
   prefix: string

@@ -1,7 +1,8 @@
 // Greets each name typed on stdin, shouts the greeting back, and reports
 // running statistics. Exercises startup sends, multiple `in` types,
 // multiple out ports and fan-out.
-import { Line, Greeting, Stats } from "./messages"
+import { Line } from "real-talk/env"
+import { Greeting, Stats } from "./messages"
 
 protocol Greeter {
   in Line, Greeting

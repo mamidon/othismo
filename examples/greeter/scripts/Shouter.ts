@@ -1,5 +1,5 @@
 import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
-import { Line } from "../messages"
+import { Line } from "real-talk/env"
 
 export { rt_inbox, rt_deliver }
 

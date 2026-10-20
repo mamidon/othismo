@@ -1,30 +1,31 @@
 //! Instantiates a checked [`Program`] and runs its message loop.
 //!
 //! Delivery is synchronous and single-threaded: one FIFO queue of
-//! `(target instance, message)` pairs. Wasm objects get a [`Store`] each and
-//! an import set of exactly `env.abort` and `real_talk.send`; anything else a
-//! module asks for is refused before it is instantiated.
+//! `(target instance, message)` pairs, drained completely before the next
+//! outside [`Event`] is taken. Wasm objects get a [`Store`] each and an import
+//! set of exactly `env.abort` and `real_talk.send`; anything else a module
+//! asks for is refused before it is instantiated.
 
 use crate::check::{Kind, Program};
+use crate::env::{self, Emit, EnvObject, Event};
 use crate::messages::MessageType;
-use crate::render;
 use crate::wire::Message;
 use anyhow::{Context, Result, anyhow, bail};
-use bson::doc;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, Write};
+use std::sync::mpsc;
 use wasmtime::{Caller, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
 
-/// The outside world, as seen by the environmental objects. Tests swap in
-/// in-memory buffers; the image doesn't change.
+/// The outside world's stdin/stdout, as seen by the environmental objects.
+/// Tests swap in in-memory buffers; the image doesn't change.
 pub struct Io {
-    pub input: Box<dyn BufRead>,
+    pub input: Box<dyn BufRead + Send>,
     pub output: Box<dyn Write>,
 }
 
 impl Io {
     pub fn std() -> Io {
-        Io { input: Box::new(std::io::stdin().lock()), output: Box::new(std::io::stdout()) }
+        Io { input: Box::new(std::io::BufReader::new(std::io::stdin())), output: Box::new(std::io::stdout()) }
     }
 }
 
@@ -52,19 +53,20 @@ struct WasmObject {
 
 enum Object {
     Wasm(WasmObject),
-    Stdin,
-    Stdout,
+    Env(EnvObject),
 }
 
 pub struct Runtime<'p> {
     program: &'p Program,
     objects: Vec<Object>,
     queue: VecDeque<(usize, Message)>,
-    io: Io,
+    input: Option<Box<dyn BufRead + Send>>,
+    output: Box<dyn Write>,
     options: Options,
 }
 
-/// Runs `program` until stdin is exhausted and every queued message is delivered.
+/// Runs `program` until no outside event can arrive any more (stdin is
+/// exhausted and nothing is listening) and every queued message is delivered.
 pub fn run(program: &Program, io: Io, options: Options) -> Result<()> {
     Runtime::new(program, io, options)?.run()
 }
@@ -75,11 +77,16 @@ impl<'p> Runtime<'p> {
     pub fn new(program: &'p Program, io: Io, options: Options) -> Result<Runtime<'p>> {
         let engine = Engine::default();
         let linker = host_linker(&engine)?;
-        let mut rt = Runtime { program, objects: vec![], queue: VecDeque::new(), io, options };
+        let mut rt = Runtime {
+            program,
+            objects: vec![],
+            queue: VecDeque::new(),
+            input: Some(io.input),
+            output: io.output,
+            options,
+        };
         for (i, inst) in program.instances.iter().enumerate() {
             let obj = match &inst.kind {
-                Kind::Stdin => Object::Stdin,
-                Kind::Stdout => Object::Stdout,
                 Kind::Wasm { protocol, module } => {
                     let bytes = std::fs::read(module).with_context(|| {
                         format!("instance `{}`: cannot read {} (did you compile {protocol}.ts?)", inst.name, module.display())
@@ -114,6 +121,11 @@ impl<'p> Runtime<'p> {
                         .with_context(|| format!("instance `{}`: module must export rt_deliver()", inst.name))?;
                     Object::Wasm(WasmObject { store, memory, inbox, deliver })
                 }
+                kind => Object::Env(
+                    EnvObject::new(kind)?
+                        .ok_or_else(|| anyhow!("no environment object for {kind:?}"))
+                        .with_context(|| format!("instance `{}`", inst.name))?,
+                ),
             };
             rt.objects.push(obj);
             rt.flush_outbox(i)?;
@@ -122,7 +134,7 @@ impl<'p> Runtime<'p> {
     }
 
     pub fn run(mut self) -> Result<()> {
-        // Startup sends go out after everything is wired, before external input.
+        // Startup sends go out after everything is wired, before outside events.
         for (i, inst) in self.program.instances.iter().enumerate() {
             for msg in &inst.startup {
                 self.queue.push_back((i, msg.clone()));
@@ -130,21 +142,27 @@ impl<'p> Runtime<'p> {
         }
         self.drain()?;
 
-        let stdins: Vec<usize> =
-            (0..self.objects.len()).filter(|&i| matches!(self.objects[i], Object::Stdin)).collect();
-        if stdins.is_empty() {
-            return Ok(());
+        let (tx, rx) = mpsc::channel::<Event>();
+        let stdins: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| matches!(self.objects[i], Object::Env(EnvObject::Stdin)))
+            .collect();
+        if !stdins.is_empty() {
+            env::spawn_stdin(self.input.take().expect("input is taken once"), stdins, tx.clone());
         }
-        // With several stdin instances, lines are handed out round-robin.
-        for &from in stdins.iter().cycle() {
-            let mut line = String::new();
-            if self.io.input.read_line(&mut line).context("reading stdin")? == 0 {
-                break;
+        for i in 0..self.objects.len() {
+            if let Object::Env(e) = &mut self.objects[i] {
+                let emitted = e.start(i, &tx).with_context(|| format!("instance `{}`", self.program.instances[i].name))?;
+                self.emit(i, emitted)?;
             }
-            let text = line.strip_suffix('\n').unwrap_or(&line);
-            let text = text.strip_suffix('\r').unwrap_or(text);
-            let msg = Message { type_name: crate::check::LINE.into(), fields: doc! { "text": text } };
-            self.route(from, 0, msg)?;
+        }
+        // Once every source thread has finished, `rx` disconnects and we're done.
+        drop(tx);
+        self.drain()?;
+
+        for ev in rx {
+            let Object::Env(e) = &mut self.objects[ev.to] else { unreachable!("events only come from env objects") };
+            let emitted = e.on_event(ev.what);
+            self.emit(ev.to, emitted)?;
             self.drain()?;
         }
         Ok(())
@@ -160,10 +178,11 @@ impl<'p> Runtime<'p> {
     fn deliver(&mut self, to: usize, msg: Message) -> Result<()> {
         let name = &self.program.instances[to].name;
         match &mut self.objects[to] {
-            Object::Stdin => unreachable!("the checker rejects wiring into {}", crate::check::STDIN),
-            Object::Stdout => {
-                let line = render::render(&msg, &self.program.messages);
-                writeln!(self.io.output, "{line}").and_then(|_| self.io.output.flush()).context("writing stdout")?;
+            Object::Env(e) => {
+                let emitted = e
+                    .deliver(&msg, self.program, &mut self.output)
+                    .with_context(|| format!("instance `{name}` failed handling `{}`", msg.type_name))?;
+                self.emit(to, emitted)?;
             }
             Object::Wasm(obj) => {
                 let bytes = msg.encode();
@@ -179,7 +198,14 @@ impl<'p> Runtime<'p> {
         Ok(())
     }
 
-    /// Routes whatever instance `from` sent during its last call.
+    fn emit(&mut self, from: usize, emitted: Vec<Emit>) -> Result<()> {
+        for (port, msg) in emitted {
+            self.route(from, port, msg)?;
+        }
+        Ok(())
+    }
+
+/// Routes whatever instance `from` sent during its last call.
     fn flush_outbox(&mut self, from: usize) -> Result<()> {
         let Object::Wasm(obj) = &mut self.objects[from] else { return Ok(()) };
         let sent = std::mem::take(&mut obj.store.data_mut().outbox);

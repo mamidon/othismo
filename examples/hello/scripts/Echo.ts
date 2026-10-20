@@ -1,5 +1,6 @@
 import { Message, OutPort, Receiver, bind, rt_inbox, rt_deliver } from "real-talk"
-import { Line, Echoed } from "../messages"
+import { Line } from "real-talk/env"
+import { Echoed } from "../messages"
 
 // The host's entry points into this module.
 export { rt_inbox, rt_deliver }

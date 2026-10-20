@@ -10,9 +10,14 @@ use std::path::{Path, PathBuf};
 
 pub const STDIN: &str = "Environment.Stdin";
 pub const STDOUT: &str = "Environment.Stdout";
+pub const SOCKET: &str = "Environment.Socket";
+pub const FILES: &str = "Environment.Files";
 
-/// The message type `Environment.Stdin` emits. Its declaration must be
-/// exactly `{ text: string }`.
+/// The import path for environment message types, and their declarations.
+pub const ENV_MODULE: &str = "real-talk/env";
+const ENV_SOURCE: &str = include_str!("../as/env.ts");
+
+/// The message type `Environment.Stdin` emits.
 pub const LINE: &str = "Line";
 
 #[derive(Debug)]
@@ -36,6 +41,10 @@ pub enum Kind {
     Wasm { protocol: String, module: PathBuf },
     Stdin,
     Stdout,
+    /// Listens on `address` (from the image's `send Listen`).
+    Socket { address: String },
+    /// Serves files under `root` (from `send FilesRoot`, relative to the image).
+    Files { root: PathBuf },
 }
 
 #[derive(Debug)]
@@ -45,17 +54,53 @@ pub struct Port {
     pub targets: Vec<usize>,
 }
 
-/// What a protocol accepts on input.
-enum Accepts {
-    Only(Vec<String>),
-    Anything,
+/// A protocol implemented by the runtime itself.
+struct Builtin {
+    name: &'static str,
+    /// `None` accepts any message.
+    accepts: Option<&'static [&'static str]>,
+    outputs: &'static [(&'static str, &'static [&'static str])],
+    startup: Startup,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Startup {
+    /// No startup sends allowed.
+    Never,
+    /// Startup sends of any type (delivered like normal messages).
+    Any,
+    /// Exactly one send of this type, consumed by the checker as config.
+    Config(&'static str),
+}
+
+const BUILTINS: &[Builtin] = &[
+    Builtin { name: STDIN, accepts: Some(&[]), outputs: &[("out", &[LINE])], startup: Startup::Never },
+    Builtin { name: STDOUT, accepts: None, outputs: &[], startup: Startup::Any },
+    Builtin {
+        name: SOCKET,
+        accepts: Some(&["SocketWrite", "SocketClose"]),
+        outputs: &[("out", &["SocketData", "SocketClosed"]), ("events", &["Listening"])],
+        startup: Startup::Config("Listen"),
+    },
+    Builtin {
+        name: FILES,
+        accepts: Some(&["ReadFile"]),
+        outputs: &[("out", &["FileContents", "FileError"])],
+        startup: Startup::Config("FilesRoot"),
+    },
+];
 
 /// A protocol after resolution; built-ins and image-declared ones alike.
 struct ProtocolDef {
-    kind: Kind,
-    accepts: Accepts,
+    /// `None` accepts any message.
+    accepts: Option<Vec<String>>,
     outputs: Vec<(String, Vec<String>)>,
+    source: Source,
+}
+
+enum Source {
+    Builtin(&'static Builtin),
+    Wasm { protocol: String, module: PathBuf },
 }
 
 fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
@@ -70,9 +115,10 @@ pub fn load(path: &Path) -> Result<Program> {
     check(&img, dir).with_context(|| format!("checking {}", path.display()))
 }
 
-/// Validates `img`; relative paths (imports, `scripts/`) resolve against `dir`.
+/// Validates `img`; relative paths (imports, `scripts/`, `FilesRoot`) resolve against `dir`.
 pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     let messages = resolve_imports(img, dir)?;
+    let env_messages = messages::parse(ENV_SOURCE).expect("as/env.ts parses");
     let lookup_type = |id: &Ident| -> Result<String> {
         if messages.contains_key(&id.name) {
             Ok(id.name.clone())
@@ -83,11 +129,17 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
 
     // Protocols: built-ins first, then the image's own.
     let mut protocols: HashMap<String, ProtocolDef> = HashMap::new();
-    protocols.insert(
-        STDIN.into(),
-        ProtocolDef { kind: Kind::Stdin, accepts: Accepts::Only(vec![]), outputs: vec![("out".into(), vec![LINE.into()])] },
-    );
-    protocols.insert(STDOUT.into(), ProtocolDef { kind: Kind::Stdout, accepts: Accepts::Anything, outputs: vec![] });
+    for b in BUILTINS {
+        let strings = |ts: &[&str]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        protocols.insert(
+            b.name.into(),
+            ProtocolDef {
+                accepts: b.accepts.map(strings),
+                outputs: b.outputs.iter().map(|(n, ts)| (n.to_string(), strings(ts))).collect(),
+                source: Source::Builtin(b),
+            },
+        );
+    }
     for p in &img.protocols {
         if protocols.contains_key(&p.name.name) {
             bail!(err_at(&p.name, format!("protocol `{}` is already defined", p.name.name)));
@@ -103,7 +155,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         let module = dir.join("scripts").join(format!("{}.wasm", p.name.name));
         protocols.insert(
             p.name.name.clone(),
-            ProtocolDef { kind: Kind::Wasm { protocol: p.name.name.clone(), module }, accepts: Accepts::Only(accepts), outputs },
+            ProtocolDef { accepts: Some(accepts), outputs, source: Source::Wasm { protocol: p.name.name.clone(), module } },
         );
     }
 
@@ -125,8 +177,11 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         let proto = proto_of(inst)?;
         let iname = &inst.name.name;
 
-        if proto.kind == Kind::Stdin {
-            check_line_type(&messages, &inst.protocol)?;
+        if let Source::Builtin(b) = proto.source {
+            let config = b.startup_config();
+            for ty in b.accepts.unwrap_or(&[]).iter().chain(b.outputs.iter().flat_map(|(_, ts)| *ts)).chain(&config) {
+                require_env_type(&messages, &env_messages, ty, &inst.protocol)?;
+            }
         }
 
         // Wiring: every declared port exactly once, every target accepts its types.
@@ -150,7 +205,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                 if ports[pi].targets.contains(&ti) {
                     bail!(err_at(t, format!("`{}` appears twice in this fan-out", t.name)));
                 }
-                if let Accepts::Only(ins) = &proto_of(&img.instances[ti])?.accepts {
+                if let Some(ins) = &proto_of(&img.instances[ti])?.accepts {
                     for ty in &ports[pi].types {
                         if !ins.contains(ty) {
                             bail!(err_at(
@@ -171,32 +226,81 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         }
 
         // Startup sends: typed, every field present with a matching value.
-        if proto.kind == Kind::Stdin && !inst.sends.is_empty() {
-            bail!(err_at(&inst.sends[0].type_name, format!("{STDIN} cannot receive messages")));
-        }
-        let startup = inst
+        let mut startup = inst
             .sends
             .iter()
             .map(|s| startup_message(&messages, s))
             .collect::<Result<Vec<_>>>()?;
 
-        instances.push(Instance { name: iname.clone(), kind: proto.kind.clone(), ports, startup });
+        let kind = match &proto.source {
+            Source::Wasm { protocol, module } => Kind::Wasm { protocol: protocol.clone(), module: module.clone() },
+            Source::Builtin(b) => {
+                let config = match b.startup {
+                    Startup::Never if !inst.sends.is_empty() => {
+                        bail!(err_at(&inst.sends[0].type_name, format!("{} cannot receive startup messages", b.name)))
+                    }
+                    Startup::Never | Startup::Any => None,
+                    Startup::Config(ty) => {
+                        if inst.sends.len() != 1 || inst.sends[0].type_name.name != ty {
+                            bail!(err_at(
+                                &inst.name,
+                                format!("{} needs exactly one startup message, `send {ty} {{ ... }}`", b.name)
+                            ));
+                        }
+                        Some(startup.remove(0))
+                    }
+                };
+                builtin_kind(b, config.as_ref(), dir)
+            }
+        };
+
+        instances.push(Instance { name: iname.clone(), kind, ports, startup });
     }
 
     Ok(Program { messages, instances })
+}
+
+impl Builtin {
+    fn startup_config(&self) -> Option<&'static str> {
+        match self.startup {
+            Startup::Config(ty) => Some(ty),
+            _ => None,
+        }
+    }
+}
+
+fn builtin_kind(b: &Builtin, config: Option<&Message>, dir: &Path) -> Kind {
+    let config_str = |key: &str| config.and_then(|m| m.fields.get_str(key).ok()).unwrap_or_default().to_string();
+    match b.name {
+        STDIN => Kind::Stdin,
+        STDOUT => Kind::Stdout,
+        SOCKET => Kind::Socket { address: config_str("address") },
+        FILES => Kind::Files { root: dir.join(config_str("path")) },
+        other => unreachable!("unknown builtin {other}"),
+    }
 }
 
 fn resolve_imports(img: &Image, dir: &Path) -> Result<BTreeMap<String, MessageType>> {
     let mut parsed: HashMap<PathBuf, BTreeMap<String, MessageType>> = HashMap::new();
     let mut out = BTreeMap::new();
     for imp in &img.imports {
-        let mut path = dir.join(&imp.path);
-        if path.extension().is_none() {
-            path.set_extension("ts");
-        }
+        let path = if imp.path == ENV_MODULE {
+            PathBuf::from(ENV_MODULE)
+        } else if imp.path.starts_with('.') || imp.path.starts_with('/') {
+            let mut path = dir.join(&imp.path);
+            if path.extension().is_none() {
+                path.set_extension("ts");
+            }
+            path
+        } else {
+            bail!("{}: unknown module \"{}\"; use a relative path or \"{ENV_MODULE}\"", imp.pos, imp.path);
+        };
         if !parsed.contains_key(&path) {
-            let src = std::fs::read_to_string(&path)
-                .with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?;
+            let src = if imp.path == ENV_MODULE {
+                ENV_SOURCE.to_string()
+            } else {
+                std::fs::read_to_string(&path).with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?
+            };
             let decls = messages::parse(&src).with_context(|| format!("in {}", path.display()))?;
             parsed.insert(path.clone(), decls);
         }
@@ -213,11 +317,22 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<BTreeMap<String, MessageTy
     Ok(out)
 }
 
-fn check_line_type(messages: &BTreeMap<String, MessageType>, at: &Ident) -> Result<()> {
-    match messages.get(LINE) {
-        Some(ty) if ty.fields == [("text".to_string(), FieldType::String)] => Ok(()),
-        Some(_) => Err(err_at(at, format!("{STDIN} emits `{LINE}`, which must be declared as {{ text: string }}"))),
-        None => Err(err_at(at, format!("{STDIN} emits `{LINE}`; import it from your messages"))),
+/// An environment protocol uses `ty`, so the image must import it, with the
+/// fields `as/env.ts` declares (whether or not it came from there).
+fn require_env_type(
+    messages: &BTreeMap<String, MessageType>,
+    env: &BTreeMap<String, MessageType>,
+    ty: &str,
+    at: &Ident,
+) -> Result<()> {
+    let want = &env[ty];
+    match messages.get(ty) {
+        Some(have) if have.fields == want.fields => Ok(()),
+        Some(_) => {
+            let fields: Vec<String> = want.fields.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+            Err(err_at(at, format!("{} uses `{ty}`, which must be declared as {{ {} }}", at.name, fields.join(", "))))
+        }
+        None => Err(err_at(at, format!("{} uses `{ty}`; import it from \"{ENV_MODULE}\"", at.name))),
     }
 }
 
@@ -364,6 +479,74 @@ mod tests {
         let p = check_src(&format!("{HEADER} instance s : Environment.Stdout instance e : Echo {{ send Blob {{ data: \"hé\" }} out -> s }}")).unwrap();
         let data = p.instances[1].startup[0].fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
+    }
+
+    const SOCKET_IMG: &str = r#"
+        import { Listen, Listening, SocketData, SocketClosed, SocketWrite, SocketClose,
+                 FilesRoot, ReadFile, FileContents, FileError } from "real-talk/env"
+        protocol Handler {
+          in SocketData, SocketClosed, FileContents, FileError
+          out net: SocketWrite, SocketClose
+          out files: ReadFile
+        }
+        instance h : Handler { net -> net  files -> fs }
+        instance log : Environment.Stdout
+    "#;
+
+    #[test]
+    fn socket_and_files_take_config_from_the_image() {
+        let p = check_src(&format!(
+            r#"{SOCKET_IMG}
+            instance net : Environment.Socket {{ send Listen {{ address: "127.0.0.1:0" }}  out -> h  events -> log }}
+            instance fs : Environment.Files {{ send FilesRoot {{ path: "public" }}  out -> h }}"#
+        ))
+        .unwrap();
+        assert_eq!(p.instances[2].kind, Kind::Socket { address: "127.0.0.1:0".into() });
+        assert!(p.instances[2].startup.is_empty(), "config is consumed by the checker");
+        assert!(matches!(&p.instances[3].kind, Kind::Files { root } if root.ends_with("public")));
+    }
+
+    #[test]
+    fn config_is_required_exactly_once() {
+        let net = "instance fs : Environment.Files { send FilesRoot { path: \".\" }  out -> h }";
+        let e = err(&format!("{SOCKET_IMG} {net} instance net : Environment.Socket {{ out -> h  events -> log }}"));
+        assert!(e.contains("needs exactly one startup message, `send Listen"), "{e}");
+        let e = err(&format!(
+            "{SOCKET_IMG} {net} instance net : Environment.Socket {{
+               send Listen {{ address: \"a\" }} send Listen {{ address: \"b\" }} out -> h  events -> log }}"
+        ));
+        assert!(e.contains("exactly one"), "{e}");
+    }
+
+    #[test]
+    fn config_cannot_be_wired_at_runtime() {
+        let e = err(
+            r#"import { FilesRoot, ReadFile, FileContents, FileError } from "real-talk/env"
+            protocol Sneaky { out x: FilesRoot }
+            instance s : Sneaky { x -> fs }
+            instance fs : Environment.Files { send FilesRoot { path: "." }  out -> log }
+            instance log : Environment.Stdout"#,
+        );
+        assert!(e.contains("does not accept"), "{e}");
+    }
+
+    #[test]
+    fn env_types_must_match_their_declaration() {
+        // A user-declared Line with the right shape is fine (see accepts_hello_world);
+        // a Listen of the wrong shape is not.
+        let dir = std::env::temp_dir().join(format!("real_talk_envshape_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("m.ts"), "export class Listen { port: i32 }").unwrap();
+        let img = image::parse(
+            r#"import { Listen } from "./m"
+            import { Listening, SocketData, SocketClosed, SocketWrite, SocketClose } from "real-talk/env"
+            instance net : Environment.Socket { send Listen { port: 1 } out -> o events -> o }
+            instance o : Environment.Stdout"#,
+        )
+        .unwrap();
+        let e = format!("{:#}", check(&img, &dir).unwrap_err());
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(e.contains("`Listen`, which must be declared as { address: string }"), "{e}");
     }
 
     #[test]
