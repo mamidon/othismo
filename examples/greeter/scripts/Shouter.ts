@@ -1,14 +1,21 @@
-import { Message, Receiver, Sender, bind, emit, rt_inbox, rt_deliver } from "real-talk"
 import { Line } from "real-talk/env"
+import { Request, Server, Status, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "real-talk/ns"
 
-export { rt_inbox, rt_deliver }
+export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
-class Shouter extends Receiver {
-  receive(msg: Message, from: Sender): void {
-    if (msg instanceof Line) {
-      emit(new Line((msg as Line).text.toUpperCase()))
+/** Write a Line to / and it appears on the console in capitals. */
+class Shouter extends Server {
+  serve(req: Request): void {
+    const body = req.body
+    if (req.path != "/") {
+      req.fail(Status.NotFound)
+    } else if (req.verb != Verb.Write || !(body instanceof Line)) {
+      req.fail(Status.NotSupported)
+    } else {
+      ns.write("/dev/cons", new Line((body as Line).text.toUpperCase()))
+      req.end()
     }
   }
 }
 
-bind(new Shouter())
+run(new Shouter())

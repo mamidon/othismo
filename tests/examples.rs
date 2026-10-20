@@ -42,7 +42,7 @@ fn hello_world_with_shape_checks() {
 }
 
 #[test]
-fn greeter_uses_startup_config_fan_out_and_two_ports() {
+fn greeter_uses_a_startup_request_and_a_second_object() {
     let out = run_image(&example("greeter/greeter.img"), "world\nAda\n", Options { check_shapes: true }).unwrap();
     assert_eq!(
         out,

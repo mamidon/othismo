@@ -2,7 +2,7 @@
 SCRIPTS := $(wildcard examples/*/scripts/*.ts)
 WASM    := $(SCRIPTS:.ts=.wasm)
 # Any library or message change rebuilds every module; there are few of them.
-AS_DEPS := as/index.ts as/env.ts $(wildcard examples/*/*.ts) node_modules/.installed
+AS_DEPS := as/index.ts as/ns.ts as/env.ts $(wildcard examples/*/*.ts) node_modules/.installed
 
 .PHONY: wasm hello greeter static test clean
 

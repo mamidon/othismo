@@ -1,28 +1,9 @@
-// The AssemblyScript side of the real_talk runtime.
-//
-// An object module imports this library to talk to the host. An object never
-// knows who it talks to. It can do two things:
-//
-//   emit(msg)        send into the image's routing; the image decides where
-//   from.reply(msg)  answer whoever sent the message being handled
-//
-// Those are the module's only capabilities (host imports `real_talk.emit` and
-// `real_talk.reply`). Everything else here is plain AssemblyScript: BSON
-// encoding/decoding and receive dispatch.
+// The AssemblyScript side of the real_talk runtime: message classes and
+// their wire format. The namespace SDK (requests, replies, mounts) is in
+// "real-talk/ns", and the runtime's own message types are in "real-talk/env".
 //
 // Wire format (see src/wire.rs): one BSON document per message whose first
 // key is `$type` (the class name), followed by the class's fields.
-
-// ---------------------------------------------------------------------------
-// Host interface
-
-// @ts-ignore: decorator
-@external("real_talk", "emit")
-declare function host_emit(ptr: usize, len: usize): void;
-
-// @ts-ignore: decorator
-@external("real_talk", "reply")
-declare function host_reply(sender: u32, ptr: usize, len: usize): void;
 
 const TYPE_KEY = "$type";
 
@@ -41,6 +22,18 @@ export class Message {
   encode(w: Writer): void {}
 }
 
+/**
+ * A message of a type this module has no decoder for. It can't be read, but
+ * it can be passed on unchanged: encoding it gives back the same bytes.
+ */
+export class Opaque extends Message {
+  constructor(public type: string, public raw: ArrayBuffer) {
+    super();
+  }
+
+  typeName(): string { return this.type; }
+}
+
 type Decoder = (r: Reader) => Message;
 
 const decoders = new Map<string, Decoder>();
@@ -50,69 +43,21 @@ export function registerMessage(typeName: string, decode: Decoder): void {
   decoders.set(typeName, decode);
 }
 
-function encodeMessage(msg: Message): ArrayBuffer {
+/** The wire bytes for `msg`. */
+export function encodeMessage(msg: Message): ArrayBuffer {
+  if (msg instanceof Opaque) return (msg as Opaque).raw;
   const w = new Writer();
   w.string(TYPE_KEY, msg.typeName());
   msg.encode(w);
   return w.finish();
 }
 
-// ---------------------------------------------------------------------------
-// Objects
-
-/** Sends `msg` wherever the image routes this object's messages of its type. */
-export function emit(msg: Message): void {
-  const buf = encodeMessage(msg);
-  host_emit(changetype<usize>(buf), <usize>buf.byteLength);
-}
-
-/**
- * Whoever sent the message being handled. Keep it to reply later; it stays
- * valid for the life of the object. Replies to the image's own startup
- * messages go nowhere.
- */
-export class Sender {
-  constructor(private handle: u32) {}
-
-  reply(msg: Message): void {
-    const buf = encodeMessage(msg);
-    host_reply(this.handle, changetype<usize>(buf), <usize>buf.byteLength);
-  }
-}
-
-/** Base class for objects. Override `receive` and test `msg instanceof T`. */
-export class Receiver {
-  receive(msg: Message, from: Sender): void {}
-}
-
-let receiver: Receiver | null = null;
-
-/** Registers the module's object. Call once, at top level. */
-export function bind(r: Receiver): void {
-  receiver = r;
-}
-
-// ---------------------------------------------------------------------------
-// Host entry points. Object modules re-export these:
-//   export { rt_inbox, rt_deliver }
-
-let inbox = new ArrayBuffer(0);
-
-/** Allocates a buffer the host writes the next message into. */
-export function rt_inbox(len: i32): usize {
-  inbox = new ArrayBuffer(len);
-  return changetype<usize>(inbox);
-}
-
-/** Decodes the message in the inbox and hands it to the bound object. */
-export function rt_deliver(sender: u32): void {
-  const r = new Reader(inbox);
+/** The message in `buf`, or an `Opaque` one if its type isn't registered. */
+export function decodeMessage(buf: ArrayBuffer): Message {
+  const r = new Reader(buf);
   const t = r.string(TYPE_KEY);
-  if (!decoders.has(t)) abort("no decoder registered for message type " + t);
-  const msg = decoders.get(t)(r);
-  const obj = receiver;
-  if (obj === null) abort("no object bound; call bind(new YourObject())");
-  else obj.receive(msg, new Sender(sender));
+  if (!decoders.has(t)) return new Opaque(t, buf);
+  return decoders.get(t)(r);
 }
 
 // ---------------------------------------------------------------------------

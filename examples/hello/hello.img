@@ -1,16 +1,9 @@
-import { Line } from "real-talk/env"
-import { Echoed } from "./messages"
+// Echoes every line typed on stdin. Echo can see exactly one thing: the
+// console, at /dev/cons.
+import { Echoed } from "./messages"   // what Echo writes, for --check-shapes
 
-protocol Echo {
-  in Line
-  emits Echoed
-}
+instance cons : Environment.Console
 
-instance stdin  : Environment.Stdin
-instance echo   : Echo
-instance stdout : Environment.Stdout
-
-// Lines from stdin go to echo; what echo emits goes to stdout.
-stdin.Line {
-  echo.Echoed { stdout }
+instance echo : Echo {
+  mount cons /dev/cons
 }
