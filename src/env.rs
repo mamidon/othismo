@@ -242,7 +242,7 @@ impl Files {
             return Err("forbidden");
         }
         if real.is_dir() {
-            return Err("not_found");
+            return Err("directory");
         }
         std::fs::read(&real).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { "not_found" } else { "io" })
     }
@@ -281,7 +281,7 @@ mod tests {
         let f = Files { root: base.join("root").canonicalize().unwrap() };
         assert_eq!(f.read("/a.txt").unwrap(), b"A");
         assert_eq!(f.read("sub/./b.txt").unwrap(), b"B");
-        assert_eq!(f.read("/sub"), Err("not_found"));
+        assert_eq!(f.read("/sub"), Err("directory"));
         assert_eq!(f.read("/missing"), Err("not_found"));
         assert_eq!(f.read("/../secret.txt"), Err("forbidden"));
         assert_eq!(f.read("sub/../../secret.txt"), Err("forbidden"));

@@ -4,7 +4,7 @@ WASM    := $(SCRIPTS:.ts=.wasm)
 # Any library or message change rebuilds every module; there are few of them.
 AS_DEPS := as/index.ts as/env.ts $(wildcard examples/*/*.ts) node_modules/.installed
 
-.PHONY: wasm hello greeter test clean
+.PHONY: wasm hello greeter static test clean
 
 wasm: $(WASM)
 
@@ -20,6 +20,9 @@ hello: wasm
 
 greeter: wasm
 	cargo run -- examples/greeter/greeter.img
+
+static: wasm
+	cargo run -- examples/static/static.img
 
 test: wasm
 	cargo test

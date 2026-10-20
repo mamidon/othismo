@@ -188,8 +188,8 @@ export class FileContents extends Message {
 registerMessage("FileContents", (r: Reader): Message => new FileContents(<u32>r.i64("tag"), r.string("path"), r.bytes("data")))
 
 /**
- * A ReadFile failed. `reason` is "not_found" (missing, or a directory),
- * "forbidden" (outside the root) or "io" (anything else).
+ * A ReadFile failed. `reason` is "not_found", "directory" (the path is a
+ * directory), "forbidden" (outside the root) or "io" (anything else).
  */
 export class FileError extends Message {
   tag: u32

@@ -1,0 +1,44 @@
+// A static file server. The only capabilities it has are the two below:
+// one TCP listener on 127.0.0.1:8080 and read-only access to ./public.
+import { Line, Listen, Listening, SocketData, SocketClosed, SocketWrite, SocketClose,
+         FilesRoot, ReadFile, FileContents, FileError } from "real-talk/env"
+import { HttpRequest, HttpResponse } from "./messages"
+
+// Bytes <-> typed HTTP messages.
+protocol HttpCodec {
+  in SocketData, SocketClosed, HttpResponse
+  out socket: SocketWrite, SocketClose
+  out requests: HttpRequest
+}
+
+// Typed HTTP requests -> file reads -> typed HTTP responses.
+protocol StaticServer {
+  in HttpRequest, FileContents, FileError
+  out files: ReadFile
+  out responses: HttpResponse
+  out log: Line
+}
+
+instance net : Environment.Socket {
+  send Listen { address: "127.0.0.1:8080" }
+  out -> http
+  events -> stdout
+}
+
+instance http : HttpCodec {
+  socket -> net
+  requests -> server
+}
+
+instance server : StaticServer {
+  files -> files
+  responses -> http
+  log -> stdout
+}
+
+instance files : Environment.Files {
+  send FilesRoot { path: "./public" }
+  out -> server
+}
+
+instance stdout : Environment.Stdout
