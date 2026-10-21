@@ -2,6 +2,7 @@
 //
 //   README.md          -> public/guide/index.html
 //   docs/namespace.md  -> public/docs/index.html
+//   docs/images.md     -> public/images/index.html
 //
 // Each page takes its title from the document's `# heading` and its lede
 // from the first paragraph, and gets a contents list of its `##` sections.
@@ -30,10 +31,24 @@ const PAGES = [
     eyebrow: "Design",
     description: "The namespace design: views, verbs, the AssemblyScript SDK, environment objects and the host ABI.",
   },
+  {
+    source: "docs/images.md",
+    out: "images/index.html",
+    nav: "/images/",
+    eyebrow: "Building",
+    description: "Building images: sealing an image into one file, packed files, and slots the host fills in.",
+  },
 ]
 
 /** Where links between the docs point on the site. */
-const LINKS = { "docs/namespace.md": "/docs/", "README.md": "/guide/", "../README.md": "/guide/" }
+const LINKS = {
+  "docs/namespace.md": "/docs/",
+  "namespace.md": "/docs/",
+  "docs/images.md": "/images/",
+  "images.md": "/images/",
+  "README.md": "/guide/",
+  "../README.md": "/guide/",
+}
 
 function slug(text) {
   return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
@@ -110,6 +125,7 @@ function page(p, doc) {
         <div class="nav-links">
           ${navLink("/guide/", "Guide")}
           ${navLink("/docs/", "Design")}
+          ${navLink("/images/", "Building")}
         </div>
       </nav>
 

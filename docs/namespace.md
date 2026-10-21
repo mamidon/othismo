@@ -220,6 +220,10 @@ move a files root.
 | `Environment.Tcp` | `Listen { address }` | `Read /address`: `Text` with the bound address. `Watch /accept`: a stream of `Accepted { conn }`. `Watch /<conn>`: a stream of `Data` received, ending when the peer closes. `Write /<conn>`: sends a `Data`'s bytes. `Remove /<conn>`: closes our side |
 | `Environment.Files` | `FilesRoot { path }` | `Read`: `Data` with a MIME type from the extension. `Stat`: `Info`. `List`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `ReadOnly` |
 
+`Packed.Files` answers exactly as `Environment.Files` does, from files copied
+into the image when it was built (see [Building images](images.md)). It isn't
+an environment object, since it touches nothing outside the image.
+
 Console reads stdin only if something is watching it by the time the image
 has started. When there are several Console instances, each line goes to the
 next one in turn, and every watcher of that Console gets it.
@@ -233,14 +237,17 @@ JSON-ish.
 ## The image
 
 What's left of the image language is instances, the mounts that make up each
-view, environment config, and startup requests:
+view, environment config, and startup requests, plus the packing and slots
+described in [Building images](images.md):
 
 ```text
 import { Greeting } from "./messages"
 
+require listen : Listen { address: "127.0.0.1:8080" }   // the host may change it
+
 instance cons  : Environment.Console
-instance net   : Environment.Tcp   { send Listen    { address: "127.0.0.1:8080" } }
-instance files : Environment.Files { send FilesRoot { path: "./public" } }
+instance net   : Environment.Tcp { send listen }
+instance files : Packed.Files    { include "./public/" }
 
 instance site : StaticSite {           // scripts/StaticSite.wasm
   mount files /files readonly
@@ -273,13 +280,15 @@ of the image's mount edges, which can be computed without running anything.
 Read-only flags carry through the closure. `real_talk --check` prints it:
 
 ```text
-net    sees nothing
-files  sees nothing
-cons   sees nothing
+slot listen : Listen { address: "127.0.0.1:8080" (default) }
+
+net    listens on 127.0.0.1:8080
+cons   reads stdin, writes stdout
+files  serves 9 built-in files, 85.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, files ro (via site), cons rw, site rw
+       can reach at most: net rw, cons rw, files ro (via site), site rw
 ```
 
 What is no longer checked ahead of time is message types along edges: there

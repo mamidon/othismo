@@ -4,10 +4,11 @@ A runtime for **images**: declarative sets of sandboxed AssemblyScript
 objects that reach each other only through paths in their own namespaces. If
 the image doesn't put something in an object's view, the object can't reach
 it. Environment objects (console, TCP, files) are the only way out to the
-world.
+world. An image can be built into one file that holds its modules and files
+and runs anywhere.
 
-The model is described in [docs/namespace.md](docs/namespace.md). This README
-covers using it.
+The model is described in [docs/namespace.md](docs/namespace.md), and built
+images in [docs/images.md](docs/images.md). This README covers using them.
 
 ## Quick start
 
@@ -17,16 +18,25 @@ Requires Rust and Node.
 make hello            # npm install, asc → scripts/*.wasm, cargo run -- examples/hello/hello.img
 make greeter          # a larger example
 make static           # serves these docs as a site on http://127.0.0.1:8080
+make static-built     # the same, from a built examples/static/static.rti
 make test             # build the wasm, then cargo test
 ```
 
-After `make wasm`, run any image directly:
+After `make wasm`, run any image directly, or build it first:
 
 ```sh
 cargo run -- examples/hello/hello.img
 cargo run -- --check image.img          # validate, print every view and what each instance can reach
 cargo run -- --check-shapes image.img   # also check every body's fields in transit
+
+cargo run -- build image.img -o image.rti       # seal: modules, packed files, sources
+cargo run -- image.rti --set listen.address=0.0.0.0:80 --with prod.vals
+cargo run -- unpack image.rti out/              # out/modules, out/files, out/sources
 ```
+
+A `.img` is built in memory every time it runs, so the two behave the same.
+`build -v` lists the packed paths a later `include` replaced, and
+`--no-sources` leaves out the reference copies of the image's sources.
 
 ## Layout
 
@@ -34,27 +44,34 @@ cargo run -- --check-shapes image.img   # also check every body's fields in tran
 |---|---|
 | `src/image.rs` | Lexer and parser for `.img` files |
 | `src/messages.rs` | Minimal reader for `export class X { field: type }` in AssemblyScript |
-| `src/check.rs` | Resolves imports, mounts, config and startup requests → `Program` |
+| `src/check.rs` | Resolves imports, slots, mounts, config and startup requests → `Program` |
+| `src/pack.rs` | A built image: building, sealing to and opening `.rti` files, unpacking |
+| `src/tree.rs` | Packed file trees and the `include` rules |
+| `src/slots.rs` | Filling `require` slots from defaults, value files and `--set` |
 | `src/ns.rs` | Paths, verbs, statuses, views, exposures and the static reach analysis |
 | `src/wire.rs` | BSON wire format |
 | `src/runtime.rs` | Wasmtime host, the host ABI and the message loop |
-| `src/env.rs` | Environment objects: Console, Tcp, Files |
+| `src/env.rs` | Environment objects: Console, Tcp, Files, and Packed.Files |
 | `src/render.rs` | How Console prints a message |
 | `as/index.ts` | `"real-talk"`: `Message`, `Writer`, `Reader`, `registerMessage` |
 | `as/ns.ts` | `"real-talk/ns"`: the namespace SDK |
 | `as/env.ts` | `"real-talk/env"`: the runtime's message types |
 | `examples/` | `hello` (the acceptance image), `greeter`, `static` (HTTP server) |
-| `examples/static/site.mjs` | Renders this README and the design doc into the static example's site (`make site`) |
+| `examples/static/site.mjs` | Renders this README and the docs into the static example's site (`make site`) |
 | `docs/namespace.md` | The design: model, verbs, SDK, ABI |
+| `docs/images.md` | Built images: the file format, packed files and slots |
 
 ## The image language
 
 An image declares instances. Each instance block holds that instance's view
-(`mount`), environment config (`send`), and requests the image makes of it at
-startup (a verb and a path).
+(`mount`), environment config (`send`), files to pack (`include`), and
+requests the image makes of it at startup (a verb and a path). Slots
+(`require`) are messages the host fills in when the image runs.
 
 ```text
 import { Greeting, Stats } from "./messages"   // types the image or its objects use
+
+require greeting : Greeting { prefix: "Hello, " }   // excited must come from the host
 
 instance cons : Environment.Console
 
@@ -65,7 +82,7 @@ instance shouter : Shouter {                   // runs scripts/Shouter.wasm
 instance greeter : Greeter {
   mount cons /dev/cons                         // greeter's view: two mounts
   mount shouter /shouter
-  write /greeting Greeting { prefix: "Hello, ", excited: true }
+  write /greeting greeting                     // a slot stands in for a message
 }
 ```
 
@@ -77,6 +94,17 @@ instance greeter : Greeter {
   `watch`, `write`, `create`, `remove` and `invoke`. Replies are dropped, but
   a failure is printed to stderr as a warning.
 - `send Type { fields }` configures an environment object, and only that.
+- `include "<path>" [at /path]` packs a file, or everything under a
+  directory when the path ends in `/`, into a `Packed.Files` instance when
+  the image is built. See below.
+- `require <name> : Type [{ defaults }]` declares a slot. Its name can stand
+  wherever a message can, in `send` or as a startup request's body. Fields in
+  the block are defaults; the rest must come from the host:
+  `--with <file>` (`greeting { excited: true }`, in order), then
+  `--set greeting.excited=true`, a later value winning field by field. The
+  image won't start until every field has a value, and `--check` shows each
+  value and where it came from. Slots can't change mounts, so views are fixed
+  when the image is built.
 - The runtime's message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
   `Accepted`, `Listen`, `FilesRoot`) are always in scope. Other types are
   imported from AssemblyScript files. With `--check-shapes`, every type an
@@ -94,22 +122,28 @@ The checker rejects an image when:
   gets a field wrong (missing, extra, wrong type, or an integer out of range)
 - an environment object is given mounts, or doesn't get exactly the config
   it needs, or a Wasm instance is given `send`
+- a slot reuses a message type's name or another slot's, or its defaults get
+  a field wrong; or a slot is used with fields of its own
+- `include` appears outside a `Packed.Files` instance
 
 Errors carry `line:col` positions.
 
-`--check` also prints each instance's view and the most it can ever reach.
-Objects can only bind and expose what they can already see, so this is a
-true upper bound:
+`--check` also prints each slot's value, what each environment object touches
+on the host, and each instance's view and the most it can ever reach. Objects
+can only bind and expose what they can already see, so this is a true upper
+bound:
 
 ```text
 $ cargo run -q -- --check examples/static/static.img
-net    sees nothing
-files  sees nothing
-cons   sees nothing
+slot listen : Listen { address: "127.0.0.1:8080" (default) }
+
+net    listens on 127.0.0.1:8080
+cons   reads stdin, writes stdout
+files  serves 9 built-in files, 85.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, files ro (via site), cons rw, site rw
+       can reach at most: net rw, cons rw, files ro (via site), site rw
 ```
 
 ## Environment objects
@@ -122,6 +156,7 @@ from the image, so no object can open another port or move a files root.
 | `Environment.Console` | none | `watch /`: a stream of `Line` from stdin, ending at EOF. `write /`: prints the body |
 | `Environment.Tcp` | `send Listen { address: "127.0.0.1:8080" }` | `read /address`: `Text`, the bound address. `watch /accept`: a stream of `Accepted { conn, peer }`. `watch /<conn>`: a stream of `Data` received, ending when the peer closes. `write /<conn>`: sends a `Data`'s bytes. `remove /<conn>`: closes our side |
 | `Environment.Files` | `send FilesRoot { path: "./public" }` | `read`: `Data` with a MIME type from the extension, or `IsDirectory`. `stat`: `Info`. `list`: a stream of `Entry`, sorted. Read-only |
+| `Packed.Files` | `include` | The same as `Environment.Files`, from files packed into the image when it was built. Touches nothing on the host |
 
 - **Console** prints a message whose only field is `text: string` verbatim,
   and anything else JSON-ish, e.g. `Stats {"lines": 1, "chars": 5, "average": 5.0}`.
@@ -131,20 +166,30 @@ from the image, so no object can open another port or move a files root.
   port 0. Data that arrives before anyone watches a connection is kept for
   the first watcher. Idle connections time out after 30s.
 - **Files** resolves paths under the root (a relative root is relative to the
-  image file). `..` never gets this far, and symlinks are resolved and must
-  stay inside the root. Anything outside it is `NotFound`.
+  directory holding the image, `.img` or `.rti`). `..` never gets this far,
+  and symlinks are resolved and must stay inside the root. Anything outside it
+  is `NotFound`.
+- **Packed.Files** is a snapshot. `include "dir/"` (or `"dir/*"`) takes
+  everything under `dir`, hidden files included, and `include "a.txt"` takes
+  one file. Paths are relative to the image, and symlinks are followed
+  wherever they point. A directory's contents land at the root and a file at
+  `/<name>`, unless `at /path` says otherwise. Later includes win:
+  directories merge, and a file and a directory replace each other.
 
 ## The static HTTP server
 
-The static example serves a small site: a landing page plus this README and
-`docs/namespace.md`, rendered to HTML in the Othismo style by
-`examples/static/site.mjs`. Run `make site` after editing either document;
+The static example serves a small site: a landing page plus this README,
+`docs/namespace.md` and `docs/images.md`, rendered to HTML in the Othismo style by
+`examples/static/site.mjs`. Run `make site` after editing any of them;
 the rendered pages are committed, so the example itself needs no build step.
+The pages are packed into the image, so `static.rti` is the whole site.
 
 ```text
-instance net   : Environment.Tcp     { send Listen    { address: "127.0.0.1:8080" } }
-instance files : Environment.Files   { send FilesRoot { path: "./public" } }
+require listen : Listen { address: "127.0.0.1:8080" }
+
+instance net   : Environment.Tcp     { send listen }
 instance cons  : Environment.Console
+instance files : Packed.Files        { include "./public/" }
 
 instance site : StaticSite {
   mount files /files readonly

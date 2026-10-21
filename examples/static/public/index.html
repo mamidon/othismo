@@ -20,6 +20,7 @@
         <div class="nav-links">
           <a class="nav-link" href="/guide/">Guide</a>
           <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
         </div>
       </nav>
 
@@ -97,8 +98,8 @@
           <li class="step">
             <div class="n">4</div>
             <div>
-              <h3>Files answers the caller</h3>
-              <p><code>Environment.Files</code> replied with <code>Data</code>, which went straight back to the HTTP server and out over your connection.</p>
+              <h3>The packed files answer the caller</h3>
+              <p><code>Packed.Files</code> replied with <code>Data</code> from the files built into the image, which went straight back to the HTTP server and out over your connection.</p>
             </div>
           </li>
         </ol>
@@ -113,14 +114,16 @@
         </div>
         <div class="showcase">
           <div>
-            <p>Three capabilities: one listener, read-only files, and the console for the access log. The HTTP server reaches the files only through the site.</p>
+            <p>It touches the host in two ways: one listener, whose address the deployer can change, and the console for the access log. The site itself is packed into the image, and the HTTP server reaches it only through the site controller.</p>
             <p>The site also serves a file that exists only in its code. It counts the requests it has forwarded:</p>
             <p><span class="counter" id="hits">&ndash;</span></p>
             <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
           </div>
-          <pre><code>instance net   : Environment.Tcp     { send Listen    { address: "127.0.0.1:8080" } }
-instance files : Environment.Files   { send FilesRoot { path: "./public" } }
+          <pre><code>require listen : Listen { address: "127.0.0.1:8080" }
+
+instance net   : Environment.Tcp     { send listen }
 instance cons  : Environment.Console
+instance files : Packed.Files        { include "./public/" }
 
 instance site : StaticSite {
   mount files /files readonly
@@ -144,7 +147,9 @@ instance http : HttpServer {
           <h2>Serve these docs yourself.</h2>
           <p class="lede">Requires Rust and Node. The site is the README and the design doc, rendered.</p>
           <pre><code>make static     # http://127.0.0.1:8080
-make site       # re-render the docs into examples/static/public</code></pre>
+make site       # re-render the docs into examples/static/public
+cargo run -- build examples/static/static.img -o static.rti
+cargo run -- static.rti --set listen.address=0.0.0.0:8080</code></pre>
         </div>
       </div>
     </section>

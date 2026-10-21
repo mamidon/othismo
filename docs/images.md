@@ -46,8 +46,11 @@ It is the build-time counterpart of `Environment.Files`, which reads the host
 at run time:
 
 ```text
-instance files : Environment.Files { send FilesRoot { path: "/var/www" } }   // the host, live
-instance files : Packed.Files {                                              // a snapshot
+// The host's files, live:
+instance files : Environment.Files { send FilesRoot { path: "/var/www" } }
+
+// A snapshot, taken when the image is built:
+instance files : Packed.Files {
   include "./public/"
   include "./prod/robots.txt" at /robots.txt
 }
@@ -127,14 +130,25 @@ listen {
 }
 ```
 
-`--set` takes the raw text for a `string` field and a literal for anything
-else (`--set listen.address=0.0.0.0:80`, `--set db.port=5432`).
+Value files are relative to the working directory. `--set` takes the raw
+text for a `string` or `ArrayBuffer` field and a literal for anything else
+(`--set listen.address=0.0.0.0:80`, `--set db.port=5432`).
 
 The image refuses to start unless every field of every slot has a value. It
 lists every missing field, e.g. `admin.text: required, not provided`. A slot
 or field that the image doesn't declare is an error, and so is a value of the
 wrong type. `--check` prints each slot's final value and where each field came
-from.
+from, then what each environment object touches on the host:
+
+```text
+$ real_talk --check static.rti --set listen.address=0.0.0.0:80
+slot listen : Listen { address: "0.0.0.0:80" (--set) }
+
+net    listens on 0.0.0.0:80
+cons   reads stdin, writes stdout
+files  serves 9 built-in files, 85.9 KB
+...
+```
 
 A relative `FilesRoot` path resolves against the directory holding the image,
 `.img` or `.rti`.

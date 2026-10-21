@@ -21,6 +21,7 @@
         <div class="nav-links">
           <a class="nav-link" href="/guide/" aria-current="page">Guide</a>
           <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
         </div>
       </nav>
 
@@ -31,7 +32,8 @@
 objects that reach each other only through paths in their own namespaces. If
 the image doesn&#39;t put something in an object&#39;s view, the object can&#39;t reach
 it. Environment objects (console, TCP, files) are the only way out to the
-world.</p>
+world. An image can be built into one file that holds its modules and files
+and runs anywhere.</p>
       </div>
     </div>
   </header>
@@ -54,20 +56,28 @@ world.</p>
     </aside>
 
     <article class="prose">
-<p>The model is described in <a href="/docs/">docs/namespace.md</a>. This README
-covers using it.</p>
+<p>The model is described in <a href="/docs/">docs/namespace.md</a>, and built
+images in <a href="/images/">docs/images.md</a>. This README covers using them.</p>
 <h2 id="quick-start">Quick start</h2>
 <p>Requires Rust and Node.</p>
 <pre><code class="language-sh">make hello            # npm install, asc → scripts/*.wasm, cargo run -- examples/hello/hello.img
 make greeter          # a larger example
 make static           # serves these docs as a site on http://127.0.0.1:8080
+make static-built     # the same, from a built examples/static/static.rti
 make test             # build the wasm, then cargo test
 </code></pre>
-<p>After <code>make wasm</code>, run any image directly:</p>
+<p>After <code>make wasm</code>, run any image directly, or build it first:</p>
 <pre><code class="language-sh">cargo run -- examples/hello/hello.img
 cargo run -- --check image.img          # validate, print every view and what each instance can reach
 cargo run -- --check-shapes image.img   # also check every body&#39;s fields in transit
+
+cargo run -- build image.img -o image.rti       # seal: modules, packed files, sources
+cargo run -- image.rti --set listen.address=0.0.0.0:80 --with prod.vals
+cargo run -- unpack image.rti out/              # out/modules, out/files, out/sources
 </code></pre>
+<p>A <code>.img</code> is built in memory every time it runs, so the two behave the same.
+<code>build -v</code> lists the packed paths a later <code>include</code> replaced, and
+<code>--no-sources</code> leaves out the reference copies of the image&#39;s sources.</p>
 <h2 id="layout">Layout</h2>
 <div class="table"><table>
 <thead>
@@ -86,7 +96,19 @@ cargo run -- --check-shapes image.img   # also check every body&#39;s fields in 
 </tr>
 <tr>
 <td><code>src/check.rs</code></td>
-<td>Resolves imports, mounts, config and startup requests → <code>Program</code></td>
+<td>Resolves imports, slots, mounts, config and startup requests → <code>Program</code></td>
+</tr>
+<tr>
+<td><code>src/pack.rs</code></td>
+<td>A built image: building, sealing to and opening <code>.rti</code> files, unpacking</td>
+</tr>
+<tr>
+<td><code>src/tree.rs</code></td>
+<td>Packed file trees and the <code>include</code> rules</td>
+</tr>
+<tr>
+<td><code>src/slots.rs</code></td>
+<td>Filling <code>require</code> slots from defaults, value files and <code>--set</code></td>
 </tr>
 <tr>
 <td><code>src/ns.rs</code></td>
@@ -102,7 +124,7 @@ cargo run -- --check-shapes image.img   # also check every body&#39;s fields in 
 </tr>
 <tr>
 <td><code>src/env.rs</code></td>
-<td>Environment objects: Console, Tcp, Files</td>
+<td>Environment objects: Console, Tcp, Files, and Packed.Files</td>
 </tr>
 <tr>
 <td><code>src/render.rs</code></td>
@@ -126,18 +148,25 @@ cargo run -- --check-shapes image.img   # also check every body&#39;s fields in 
 </tr>
 <tr>
 <td><code>examples/static/site.mjs</code></td>
-<td>Renders this README and the design doc into the static example&#39;s site (<code>make site</code>)</td>
+<td>Renders this README and the docs into the static example&#39;s site (<code>make site</code>)</td>
 </tr>
 <tr>
 <td><code>docs/namespace.md</code></td>
 <td>The design: model, verbs, SDK, ABI</td>
 </tr>
+<tr>
+<td><code>docs/images.md</code></td>
+<td>Built images: the file format, packed files and slots</td>
+</tr>
 </tbody></table></div>
 <h2 id="the-image-language">The image language</h2>
 <p>An image declares instances. Each instance block holds that instance&#39;s view
-(<code>mount</code>), environment config (<code>send</code>), and requests the image makes of it at
-startup (a verb and a path).</p>
+(<code>mount</code>), environment config (<code>send</code>), files to pack (<code>include</code>), and
+requests the image makes of it at startup (a verb and a path). Slots
+(<code>require</code>) are messages the host fills in when the image runs.</p>
 <pre><code class="language-text">import { Greeting, Stats } from &quot;./messages&quot;   // types the image or its objects use
+
+require greeting : Greeting { prefix: &quot;Hello, &quot; }   // excited must come from the host
 
 instance cons : Environment.Console
 
@@ -148,7 +177,7 @@ instance shouter : Shouter {                   // runs scripts/Shouter.wasm
 instance greeter : Greeter {
   mount cons /dev/cons                         // greeter&#39;s view: two mounts
   mount shouter /shouter
-  write /greeting Greeting { prefix: &quot;Hello, &quot;, excited: true }
+  write /greeting greeting                     // a slot stands in for a message
 }
 </code></pre>
 <ul>
@@ -160,6 +189,17 @@ at <code>&lt;path&gt;</code> in this instance&#39;s view. With <code>readonly</c
 <code>watch</code>, <code>write</code>, <code>create</code>, <code>remove</code> and <code>invoke</code>. Replies are dropped, but
 a failure is printed to stderr as a warning.</li>
 <li><code>send Type { fields }</code> configures an environment object, and only that.</li>
+<li><code>include &quot;&lt;path&gt;&quot; [at /path]</code> packs a file, or everything under a
+directory when the path ends in <code>/</code>, into a <code>Packed.Files</code> instance when
+the image is built. See below.</li>
+<li><code>require &lt;name&gt; : Type [{ defaults }]</code> declares a slot. Its name can stand
+wherever a message can, in <code>send</code> or as a startup request&#39;s body. Fields in
+the block are defaults; the rest must come from the host:
+<code>--with &lt;file&gt;</code> (<code>greeting { excited: true }</code>, in order), then
+<code>--set greeting.excited=true</code>, a later value winning field by field. The
+image won&#39;t start until every field has a value, and <code>--check</code> shows each
+value and where it came from. Slots can&#39;t change mounts, so views are fixed
+when the image is built.</li>
 <li>The runtime&#39;s message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
 <code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope. Other types are
 imported from AssemblyScript files. With <code>--check-shapes</code>, every type an
@@ -177,19 +217,25 @@ redeclares a runtime type with different fields</li>
 gets a field wrong (missing, extra, wrong type, or an integer out of range)</li>
 <li>an environment object is given mounts, or doesn&#39;t get exactly the config
 it needs, or a Wasm instance is given <code>send</code></li>
+<li>a slot reuses a message type&#39;s name or another slot&#39;s, or its defaults get
+a field wrong; or a slot is used with fields of its own</li>
+<li><code>include</code> appears outside a <code>Packed.Files</code> instance</li>
 </ul>
 <p>Errors carry <code>line:col</code> positions.</p>
-<p><code>--check</code> also prints each instance&#39;s view and the most it can ever reach.
-Objects can only bind and expose what they can already see, so this is a
-true upper bound:</p>
+<p><code>--check</code> also prints each slot&#39;s value, what each environment object touches
+on the host, and each instance&#39;s view and the most it can ever reach. Objects
+can only bind and expose what they can already see, so this is a true upper
+bound:</p>
 <pre><code class="language-text">$ cargo run -q -- --check examples/static/static.img
-net    sees nothing
-files  sees nothing
-cons   sees nothing
+slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
+
+net    listens on 127.0.0.1:8080
+cons   reads stdin, writes stdout
+files  serves 9 built-in files, 85.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, files ro (via site), cons rw, site rw
+       can reach at most: net rw, cons rw, files ro (via site), site rw
 </code></pre>
 <h2 id="environment-objects">Environment objects</h2>
 <p>These are servers implemented by the runtime. Their config can only come
@@ -217,6 +263,11 @@ from the image, so no object can open another port or move a files root.</p>
 <td><code>send FilesRoot { path: &quot;./public&quot; }</code></td>
 <td><code>read</code>: <code>Data</code> with a MIME type from the extension, or <code>IsDirectory</code>. <code>stat</code>: <code>Info</code>. <code>list</code>: a stream of <code>Entry</code>, sorted. Read-only</td>
 </tr>
+<tr>
+<td><code>Packed.Files</code></td>
+<td><code>include</code></td>
+<td>The same as <code>Environment.Files</code>, from files packed into the image when it was built. Touches nothing on the host</td>
+</tr>
 </tbody></table></div>
 <ul>
 <li><strong>Console</strong> prints a message whose only field is <code>text: string</code> verbatim,
@@ -227,17 +278,27 @@ started. With several Consoles, lines go to each in turn.</li>
 port 0. Data that arrives before anyone watches a connection is kept for
 the first watcher. Idle connections time out after 30s.</li>
 <li><strong>Files</strong> resolves paths under the root (a relative root is relative to the
-image file). <code>..</code> never gets this far, and symlinks are resolved and must
-stay inside the root. Anything outside it is <code>NotFound</code>.</li>
+directory holding the image, <code>.img</code> or <code>.rti</code>). <code>..</code> never gets this far,
+and symlinks are resolved and must stay inside the root. Anything outside it
+is <code>NotFound</code>.</li>
+<li><strong>Packed.Files</strong> is a snapshot. <code>include &quot;dir/&quot;</code> (or <code>&quot;dir/*&quot;</code>) takes
+everything under <code>dir</code>, hidden files included, and <code>include &quot;a.txt&quot;</code> takes
+one file. Paths are relative to the image, and symlinks are followed
+wherever they point. A directory&#39;s contents land at the root and a file at
+<code>/&lt;name&gt;</code>, unless <code>at /path</code> says otherwise. Later includes win:
+directories merge, and a file and a directory replace each other.</li>
 </ul>
 <h2 id="the-static-http-server">The static HTTP server</h2>
-<p>The static example serves a small site: a landing page plus this README and
-<code>docs/namespace.md</code>, rendered to HTML in the Othismo style by
-<code>examples/static/site.mjs</code>. Run <code>make site</code> after editing either document;
-the rendered pages are committed, so the example itself needs no build step.</p>
-<pre><code class="language-text">instance net   : Environment.Tcp     { send Listen    { address: &quot;127.0.0.1:8080&quot; } }
-instance files : Environment.Files   { send FilesRoot { path: &quot;./public&quot; } }
+<p>The static example serves a small site: a landing page plus this README,
+<code>docs/namespace.md</code> and <code>docs/images.md</code>, rendered to HTML in the Othismo style by
+<code>examples/static/site.mjs</code>. Run <code>make site</code> after editing any of them;
+the rendered pages are committed, so the example itself needs no build step.
+The pages are packed into the image, so <code>static.rti</code> is the whole site.</p>
+<pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }
+
+instance net   : Environment.Tcp     { send listen }
 instance cons  : Environment.Console
+instance files : Packed.Files        { include &quot;./public/&quot; }
 
 instance site : StaticSite {
   mount files /files readonly

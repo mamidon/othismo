@@ -21,6 +21,7 @@
         <div class="nav-links">
           <a class="nav-link" href="/guide/">Guide</a>
           <a class="nav-link" href="/docs/" aria-current="page">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
         </div>
       </nav>
 
@@ -317,6 +318,9 @@ move a files root.</p>
 <td><code>Read</code>: <code>Data</code> with a MIME type from the extension. <code>Stat</code>: <code>Info</code>. <code>List</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>ReadOnly</code></td>
 </tr>
 </tbody></table></div>
+<p><code>Packed.Files</code> answers exactly as <code>Environment.Files</code> does, from files copied
+into the image when it was built (see <a href="/images/">Building images</a>). It isn&#39;t
+an environment object, since it touches nothing outside the image.</p>
 <p>Console reads stdin only if something is watching it by the time the image
 has started. When there are several Console instances, each line goes to the
 next one in turn, and every watcher of that Console gets it.</p>
@@ -327,12 +331,15 @@ a message whose only field is <code>text: string</code> verbatim, and anything e
 JSON-ish.</p>
 <h2 id="the-image">The image</h2>
 <p>What&#39;s left of the image language is instances, the mounts that make up each
-view, environment config, and startup requests:</p>
+view, environment config, and startup requests, plus the packing and slots
+described in <a href="/images/">Building images</a>:</p>
 <pre><code class="language-text">import { Greeting } from &quot;./messages&quot;
 
+require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   // the host may change it
+
 instance cons  : Environment.Console
-instance net   : Environment.Tcp   { send Listen    { address: &quot;127.0.0.1:8080&quot; } }
-instance files : Environment.Files { send FilesRoot { path: &quot;./public&quot; } }
+instance net   : Environment.Tcp { send listen }
+instance files : Packed.Files    { include &quot;./public/&quot; }
 
 instance site : StaticSite {           // scripts/StaticSite.wasm
   mount files /files readonly
@@ -362,13 +369,15 @@ of them only with exactly the same fields.</li>
 So the set of instances it can ever reach is bounded by the transitive closure
 of the image&#39;s mount edges, which can be computed without running anything.
 Read-only flags carry through the closure. <code>real_talk --check</code> prints it:</p>
-<pre><code class="language-text">net    sees nothing
-files  sees nothing
-cons   sees nothing
+<pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
+
+net    listens on 127.0.0.1:8080
+cons   reads stdin, writes stdout
+files  serves 9 built-in files, 85.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, files ro (via site), cons rw, site rw
+       can reach at most: net rw, cons rw, files ro (via site), site rw
 </code></pre>
 <p>What is no longer checked ahead of time is message types along edges: there
 are no edges to check. With <code>--check-shapes</code>, bodies are checked against
