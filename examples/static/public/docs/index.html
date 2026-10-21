@@ -335,13 +335,13 @@ view, environment config, and startup requests, plus the packing and slots
 described in <a href="/images/">Building images</a>:</p>
 <pre><code class="language-text">import { Greeting } from &quot;./messages&quot;
 
-require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   // the host may change it
+require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
 
 instance cons  : Environment.Console
 instance net   : Environment.Tcp { send listen }
 instance files : Packed.Files    { include &quot;./public/&quot; }
 
-instance site : StaticSite {           // scripts/StaticSite.wasm
+instance site : StaticSite {           # scripts/StaticSite.wasm
   mount files /files readonly
 }
 
@@ -349,7 +349,7 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/localhost Text { text: &quot;/www&quot; }   // a startup request to http itself
+  write /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
 }
 </code></pre>
 <ul>
@@ -373,7 +373,7 @@ Read-only flags carry through the closure. <code>real_talk --check</code> prints
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.6 KB
+files  serves 9 built-in files, 75.4 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

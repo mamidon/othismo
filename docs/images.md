@@ -46,10 +46,10 @@ It is the build-time counterpart of `Environment.Files`, which reads the host
 at run time:
 
 ```text
-// The host's files, live:
+# The host's files, live:
 instance files : Environment.Files { send FilesRoot { path: "/var/www" } }
 
-// A snapshot, taken when the image is built:
+# A snapshot, taken when the image is built:
 instance files : Packed.Files {
   include "./public/"
   include "./prod/robots.txt" at /robots.txt
@@ -97,9 +97,9 @@ values; the image supplies the types and, optionally, defaults:
 
 ```text
 require listen : Listen {
-  address: "127.0.0.1:8080"     // a default
+  address: "127.0.0.1:8080"     # a default
 }
-require admin : Text            // no defaults: the host must give it
+require admin : Text            # no defaults: the host must give it
 
 instance net  : Environment.Tcp { send listen }
 instance http : HttpServer {
@@ -146,7 +146,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.6 KB
+files  serves 9 built-in files, 75.4 KB
 ...
 ```
 

@@ -164,7 +164,7 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
         let pos = Pos { line, col };
         if c.is_whitespace() {
             bump!();
-        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
+        } else if c == '#' {
             while i < chars.len() && chars[i] != '\n' {
                 bump!();
             }
@@ -492,7 +492,7 @@ mod tests {
     fn parses_full_syntax() {
         let img = parse(
             r#"
-            import { Greeting, Ping } from "./messages"   // trailing comment
+            import { Greeting, Ping } from "./messages"   # trailing comment
             import { Tick } from "./other"
 
             instance cons : Environment.Console
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn parses_value_files() {
-        let v = parse_values("// prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }").unwrap();
+        let v = parse_values("# prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }").unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!((v[0].slot.name.as_str(), v[0].fields[0].0.pos), ("listen", Pos { line: 2, col: 10 }));
         assert_eq!(v[1].fields[1].1, Value::Bool(true));
@@ -584,9 +584,9 @@ mod tests {
 
     #[test]
     fn comments_are_not_paths() {
-        let img = parse("instance a : A { mount b / // the root\n mount c /c//d }").unwrap();
+        let img = parse("instance a : A { mount b / # the root\n mount c /c#d }").unwrap();
         let ats: Vec<&str> = img.instances[0].mounts.iter().map(|m| m.at.path.as_str()).collect();
-        assert_eq!(ats, ["/", "/c//d"], "`//` only starts a comment at the start of a token");
+        assert_eq!(ats, ["/", "/c#d"], "`#` only starts a comment at the start of a token");
     }
 
     #[test]

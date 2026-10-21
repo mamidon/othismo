@@ -243,13 +243,13 @@ described in [Building images](images.md):
 ```text
 import { Greeting } from "./messages"
 
-require listen : Listen { address: "127.0.0.1:8080" }   // the host may change it
+require listen : Listen { address: "127.0.0.1:8080" }   # the host may change it
 
 instance cons  : Environment.Console
 instance net   : Environment.Tcp { send listen }
 instance files : Packed.Files    { include "./public/" }
 
-instance site : StaticSite {           // scripts/StaticSite.wasm
+instance site : StaticSite {           # scripts/StaticSite.wasm
   mount files /files readonly
 }
 
@@ -257,7 +257,7 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/localhost Text { text: "/www" }   // a startup request to http itself
+  write /hosts/localhost Text { text: "/www" }   # a startup request to http itself
 }
 ```
 
@@ -284,7 +284,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.6 KB
+files  serves 9 built-in files, 75.4 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

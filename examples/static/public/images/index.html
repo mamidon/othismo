@@ -84,10 +84,10 @@ for live edits during development, use <code>Environment.Files</code>.</p>
 <p><code>Packed.Files</code> serves a tree that was copied into the image when it was built.
 It is the build-time counterpart of <code>Environment.Files</code>, which reads the host
 at run time:</p>
-<pre><code class="language-text">// The host&#39;s files, live:
+<pre><code class="language-text"># The host&#39;s files, live:
 instance files : Environment.Files { send FilesRoot { path: &quot;/var/www&quot; } }
 
-// A snapshot, taken when the image is built:
+# A snapshot, taken when the image is built:
 instance files : Packed.Files {
   include &quot;./public/&quot;
   include &quot;./prod/robots.txt&quot; at /robots.txt
@@ -126,9 +126,9 @@ directory where a file was replaces the file.</li>
 <p>An image can require a message from whoever runs it. The deployer supplies the
 values; the image supplies the types and, optionally, defaults:</p>
 <pre><code class="language-text">require listen : Listen {
-  address: &quot;127.0.0.1:8080&quot;     // a default
+  address: &quot;127.0.0.1:8080&quot;     # a default
 }
-require admin : Text            // no defaults: the host must give it
+require admin : Text            # no defaults: the host must give it
 
 instance net  : Environment.Tcp { send listen }
 instance http : HttpServer {
@@ -169,7 +169,7 @@ slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.6 KB
+files  serves 9 built-in files, 75.4 KB
 ...
 </code></pre>
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
