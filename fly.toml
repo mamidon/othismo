@@ -1,8 +1,9 @@
-# Deploys the image built by Dockerfile. Give the app a name with
-# `fly launch --no-deploy -c _fly_io/fly.toml`, or pass `-a <name>` to fly deploy.
+# Deploys the docs site defined in _fly_io/. Run flyctl from this directory,
+# which is also the Docker build context: `fly launch --no-deploy` once to
+# name the app, then `fly deploy`.
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "_fly_io/Dockerfile"
 
 [http_service]
   internal_port = 8080          # where docs.img listens

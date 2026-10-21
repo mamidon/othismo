@@ -3,7 +3,7 @@
 #
 #   docker build -f _fly_io/Dockerfile -t real-talk-docs .
 #   docker run --rm -p 8080:8080 real-talk-docs          # http://localhost:8080
-#   fly deploy -c _fly_io/fly.toml --dockerfile _fly_io/Dockerfile
+#   fly deploy                                            # uses fly.toml at the root
 #
 # Fly runs x86_64 machines, so on Apple Silicon add --platform linux/amd64 to
 # a local `docker build` that you mean to push.
