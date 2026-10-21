@@ -1,8 +1,7 @@
 # Objects
 
-An object is the part of an Othismo program you don't read. It is a
-WebAssembly module, running in a sandbox whose only way out is its namespace,
-and it comes with a header that says exactly what it serves and what it needs.
+An object is a WebAssembly module, running in a sandbox whose only way out is its 
+namespace, and it comes with a header that says exactly what it serves and what it needs.
 The header is what you review; the runtime holds the code to it.
 
 ## What an object is
@@ -53,10 +52,6 @@ object StaticSite {
 }
 ```
 
-The header is the contract the overview talks about. A reviewer reads it, and
-the image that wires it up, and needs nothing else to know what the object can
-be asked and what it can ask of others.
-
 ### Message types
 
 A message type is a name and a list of fields:
@@ -76,12 +71,10 @@ There are no nested messages, arrays or optional fields yet.
 
 On the wire a message is identified only by its name, so a type *is* its
 name together with its exact fields. Two headers may both declare `Greeting`
-if they agree on its fields; if they disagree, an image can't use both. This
-keeps names short until there is a real collision to solve.
+if they agree on its fields; if they disagree, an image can't use both.
 
 A header can import types from other headers, and from `env`, which holds the
-runtime's own types. A file can hold only messages, to share types between
-several objects, or an object as well.
+runtime's own types.
 
 ### Serves and needs
 
@@ -118,19 +111,11 @@ same rule that picks a mount point.
 
 A header describes shapes: which paths exist, which verbs they take, and which
 types go in and come out. It can't describe behaviour, such as whether a
-`read` really changes nothing, or when an object answers `not_found`. That is
-what tests are for.
+`read` really changes nothing, or when an object answers `not_found`.
 
-So headers don't list the failures a request can return. Any request may
+Headers don't list the failures a request can return. Any request may
 fail with any status. Declaring them would be checked exceptions by another
 name, and would promise something nothing can enforce.
-
-Headers are also explicit. StaticSite forwards every read to `/files` and
-passes on whatever comes back, but its header doesn't say "whatever `/files`
-serves"; it names the types. A header can be read on its own, without knowing
-what any particular image mounts. Objects whose interface really is "the same
-as what you give me", such as a logging proxy, would need a way to say so, and
-that is left for when one is needed.
 
 ### Checking the wiring
 
@@ -188,9 +173,8 @@ its declarations, and the project's reference pages are built the same way.
 ### Built-in objects
 
 Console, Tcp, Files and `Packed.Files` have headers like any other object,
-shipped with the runtime and written in the same language. The checker treats
-them the same way, and their reference documentation comes from those
-headers.
+shipped with the runtime. The checker treats them the same way, and their
+reference documentation comes from those headers.
 
 ## The sandbox
 
@@ -229,10 +213,10 @@ points it at, and writes only into a buffer the module hands it.
 
 ### One thing at a time
 
-Delivery is single-threaded. There is one queue for the whole image, each
-delivery runs to completion, and the next starts only when it returns. An
-object never has to think about concurrency, and nothing it does can be
-interrupted by another object.
+Othismo is currently single threaded, with one queue delivering messages for 
+the whole image, each delivery runs to completion, and the next starts only
+when it returns. An object never has to think about concurrency, and nothing
+it does can be interrupted by another object.
 
 A call returns at once with a ticket. Its answer arrives later, as its own
 delivery, and the ticket says which call it answers. A request can be
