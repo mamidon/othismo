@@ -35,7 +35,7 @@ manageable.
 ### Names are the capabilities
 
 A path is resolved in the sender's view. A path that isn't in the view is
-`NotFound`, exactly as if it didn't exist. Paths are plain strings, not
+`not_found`, exactly as if it didn't exist. Paths are plain strings, not
 unforgeable tokens. Putting a path in a message doesn't grant anything: the
 receiver resolves it in its own view. Access is controlled by what each view
 can see, and the image decides that.
@@ -46,7 +46,7 @@ Paths are absolute and `/`-separated. The runtime normalizes `//` and `.`
 segments and keeps a trailing `/`, because `/docs` and `/docs/` can mean
 different things to a server (HTTP certainly treats them differently). A path
 containing a `..` segment, a NUL byte, or one that doesn't start with `/` is
-rejected with `Invalid` before it is resolved. Without that rule,
+rejected with `invalid` before it is resolved. Without that rule,
 `root + clientPath` could step from `/www` into any other part of the sender's
 view.
 
@@ -66,27 +66,27 @@ anything without understanding the body's type.
 
 | Verb | Safe | Idempotent | Body | Reply |
 |---|---|---|---|---|
-| `Read` | yes | yes | none | one message, conventionally `Data { mime, data }` |
-| `Stat` | yes | yes | none | `Info { kind, size, mime }` |
-| `List` | yes | yes | none | a stream of `Entry { name, kind }` |
-| `Watch` | yes | yes | none | a stream, until it ends or is cancelled |
-| `Write` | no | yes | a message | ok |
-| `Create` | no | no | a message | `Entry` for what was made |
-| `Remove` | no | yes | none | ok |
-| `Invoke` | no | no | a message | anything: the escape hatch for RPC-shaped operations |
+| `read` | yes | yes | none | one message, conventionally `Data { mime, data }` |
+| `stat` | yes | yes | none | `Info { kind, size, mime }` |
+| `list` | yes | yes | none | a stream of `Entry { name, kind }` |
+| `watch` | yes | yes | none | a stream, until it ends or is cancelled |
+| `write` | no | yes | a message | ok |
+| `create` | no | no | a message | `Entry` for what was made |
+| `remove` | no | yes | none | ok |
+| `invoke` | no | no | a message | anything: the escape hatch for RPC-shaped operations |
 
 A **safe** verb doesn't change anything. A mount or exposure can be
 **read-only**, in which case the runtime answers every unsafe verb sent
-through it with `ReadOnly` and the server never sees it. The restriction only
+through it with `read_only` and the server never sees it. The restriction only
 accumulates along a chain: something read-only stays read-only however many
 times it is re-bound or re-exposed.
 
-Replies carry a **status**: `Ok`, `NotFound`, `ReadOnly`, `NotSupported`,
-`IsDirectory`, `NotDirectory`, `Exists`, `Invalid` or `Io`. A failure is just
-a reply with a status other than `Ok`.
+Replies carry a **status**: `ok`, `not_found`, `read_only`, `not_supported`,
+`is_directory`, `not_directory`, `exists`, `invalid` or `io`. A failure is just
+a reply with a status other than `ok`.
 
 A request may get several replies (a **stream**): each one says whether it is
-the last. `List` and `Watch` use this, as does accepting connections. There
+the last. `list` and `watch` use this, as does accepting connections. There
 is no other streaming or subscription mechanism.
 
 ## The AssemblyScript SDK
@@ -218,7 +218,7 @@ move a files root.
 |---|---|---|
 | `Environment.Console` | none | `Watch /`: a stream of `Line`, one per line of stdin, ending at EOF. `Write /`: prints the body |
 | `Environment.Tcp` | `Listen { address }` | `Read /address`: `Text` with the bound address. `Watch /accept`: a stream of `Accepted { conn }`. `Watch /<conn>`: a stream of `Data` received, ending when the peer closes. `Write /<conn>`: sends a `Data`'s bytes. `Remove /<conn>`: closes our side |
-| `Environment.Files` | `FilesRoot { path }` | `Read`: `Data` with a MIME type from the extension. `Stat`: `Info`. `List`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `ReadOnly` |
+| `Environment.Files` | `FilesRoot { path }` | `read`: `Data` with a MIME type from the extension. `stat`: `Info`. `list`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `read_only` |
 
 `Packed.Files` answers exactly as `Environment.Files` does, from files copied
 into the image when it was built (see [Building images](images.md)). It isn't
@@ -228,9 +228,9 @@ Console reads stdin only if something is watching it by the time the image
 has started. When there are several Console instances, each line goes to the
 next one in turn, and every watcher of that Console gets it.
 
-A Tcp connection can have one watcher; a second gets `Exists`. Data that
+A Tcp connection can have one watcher; a second gets `exists`. Data that
 arrives before anyone watches is kept for the first watcher. Files answers
-anything outside its root, including through symlinks, with `NotFound`. `Console` prints
+anything outside its root, including through symlinks, with `not_found`. `Console` prints
 a message whose only field is `text: string` verbatim, and anything else
 JSON-ish.
 
@@ -284,7 +284,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

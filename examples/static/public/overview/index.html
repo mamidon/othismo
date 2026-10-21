@@ -94,14 +94,7 @@ safe to repeat; <code>create</code> and <code>invoke</code> may do anything, onc
 verbs are modelled on HTTP&#39;s methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a <code>read</code> is
 simply wrong, as a GET that deletes a record is.</p>
-<p>What the convention buys is that those expectations can be seen without
-understanding the body. A mount can be read-only, and the runtime then turns
-away every request whose verb may change something before it reaches the
-server; an object standing in between can make the same decision about
-messages it has never heard of. That is as strong as the server&#39;s handling of
-its verbs, which is why it matters most at the edge, where the servers are
-the runtime&#39;s own.</p>
-<p>A failure is just an answer with a status other than <code>Ok</code>, and a stream is
+<p>A failure is just an answer with a status other than <code>ok</code>, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.</p>
 <h2 id="namespaces">Namespaces</h2>
@@ -111,7 +104,7 @@ has two sides: its <strong>view</strong>, the paths it can send requests to, and
 another&#39;s view at <code>/www</code> means that when the second sends a request to
 <code>/www/index.html</code>, the first receives a request for <code>/index.html</code>.</p>
 <p>What isn&#39;t in an object&#39;s view doesn&#39;t exist for it. A path it can&#39;t see is
-<code>NotFound</code>, exactly as if nothing were there, and mentioning a path in a
+<code>not_found</code>, exactly as if nothing were there, and mentioning a path in a
 message gives the receiver nothing, because the receiver resolves it in its
 own view. An object can rearrange its view and share parts of it while it
 runs, but only using what it can already see, and a read-only mount stays
@@ -162,7 +155,7 @@ image touches on the host:</p>
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

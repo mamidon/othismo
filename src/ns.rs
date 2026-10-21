@@ -56,7 +56,7 @@ impl Verb {
 
 impl fmt::Display for Verb {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        f.write_str(self.keyword())
     }
 }
 
@@ -90,11 +90,26 @@ impl Status {
     pub fn from_i32(v: i32) -> Option<Status> {
         STATUSES.get(usize::try_from(v).ok()?).copied()
     }
+
+    /// The status's name as written in docs and output: `ok`, `not_found`, ...
+    pub fn name(self) -> &'static str {
+        match self {
+            Status::Ok => "ok",
+            Status::NotFound => "not_found",
+            Status::ReadOnly => "read_only",
+            Status::NotSupported => "not_supported",
+            Status::IsDirectory => "is_directory",
+            Status::NotDirectory => "not_directory",
+            Status::Exists => "exists",
+            Status::Invalid => "invalid",
+            Status::Io => "io",
+        }
+    }
 }
 
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        f.write_str(self.name())
     }
 }
 

@@ -27,7 +27,7 @@ enum Act {
     Expose { at: &'static str, src: &'static str, read_only: bool },
     Unmount(&'static str),
     /// Writes the last status (an answer's or a bind's) to `path` as Text,
-    /// e.g. "NotFound", or "Ok (more)" for a reply that isn't the last.
+    /// e.g. "not_found", or "ok (more)" for a reply that isn't the last.
     Report(&'static str),
     /// Writes the body being handled to `path`.
     Echo(&'static str),
@@ -265,7 +265,7 @@ fn paths_outside_the_view_are_not_found() {
     };
     let b = Script { start: vec![write("/out", text("b has no view"))], ..Default::default() };
     let f = fixture("unseen", &[("a", &a, "mount cons /out"), ("b", &b, "")], "");
-    assert_eq!(run(&f).unwrap(), "NotFound\nInvalid\nNotSupported\n");
+    assert_eq!(run(&f).unwrap(), "not_found\ninvalid\nnot_supported\n");
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn read_only_mounts_refuse_unsafe_verbs() {
         ..Default::default()
     };
     let f = fixture("readonly", &[("a", &a, "mount b /b readonly  mount cons /out"), ("b", &b, "mount cons /out")], "");
-    assert_eq!(run(&f).unwrap(), "ReadOnly\nb served\nOk\n", "b never sees the write");
+    assert_eq!(run(&f).unwrap(), "read_only\nb served\nok\n", "b never sees the write");
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn replies_stream_until_done() {
         ..Default::default()
     };
     let f = fixture("stream", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")], "");
-    assert_eq!(run(&f).unwrap(), "Ok (more)\nOk (more)\nOk\n");
+    assert_eq!(run(&f).unwrap(), "ok (more)\nok (more)\nok\n");
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn forward_hands_the_request_on_in_the_servers_view() {
     let c = Script { serve: Some(Steps::Each(vec![reply(text("from c"))])), ..Default::default() };
     let f = fixture("forward", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "mount c /c"), ("c", &c, "")], "");
     // The failed forward is answered at once; c's answer takes a round trip.
-    assert_eq!(run(&f).unwrap(), "NotFound\nfrom c\n");
+    assert_eq!(run(&f).unwrap(), "not_found\nfrom c\n");
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn exposures_route_past_the_server() {
         "",
     );
     // b's expose reports Ok; the refused write is answered before the reads come back.
-    assert_eq!(run(&f).unwrap(), "Ok\nReadOnly\nfrom c\nfrom b\n");
+    assert_eq!(run(&f).unwrap(), "ok\nread_only\nfrom c\nfrom b\n");
 }
 
 #[test]
@@ -363,7 +363,7 @@ fn bind_and_unmount_rearrange_only_the_own_view() {
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("from b"))])), ..Default::default() };
     let f = fixture("bind", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")], "");
-    assert_eq!(run(&f).unwrap(), "Ok\nNotFound\nOk\nNotFound\nNotFound\nfrom b\n");
+    assert_eq!(run(&f).unwrap(), "ok\nnot_found\nok\nnot_found\nnot_found\nfrom b\n");
 }
 
 #[test]
@@ -406,13 +406,13 @@ fn files_script() -> Script {
 }
 
 const FILES_OUTPUT: &str = "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
-    NotFound\n\
-    IsDirectory\n\
+    not_found\n\
+    is_directory\n\
     Info {\"kind\": \"file\", \"size\": 2, \"mime\": \"text/plain; charset=utf-8\"}\n\
     Entry {\"name\": \"hello.txt\", \"kind\": \"file\"}\n\
     Entry {\"name\": \"sub\", \"kind\": \"dir\"}\n\
-    Ok\n\
-    ReadOnly\n";
+    ok\n\
+    read_only\n";
 
 #[test]
 fn files_read_stat_and_list() {

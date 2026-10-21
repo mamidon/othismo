@@ -61,7 +61,7 @@ reports it as built in.
 
 It answers `read`, `stat` and `list` exactly as `Environment.Files` does
 (`Data`, `Info`, a sorted stream of `Entry`, the same MIME types and statuses).
-Every unsafe verb gets `ReadOnly`.
+Every unsafe verb gets `read_only`.
 
 ### `include`
 
@@ -146,7 +146,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 ...
 ```
 

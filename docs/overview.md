@@ -55,7 +55,7 @@ verbs are modelled on HTTP's methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a `read` is
 simply wrong, as a GET that deletes a record is.
 
-A failure is just an answer with a status other than `Ok`, and a stream is
+A failure is just an answer with a status other than `ok`, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.
 
@@ -68,7 +68,7 @@ another's view at `/www` means that when the second sends a request to
 `/www/index.html`, the first receives a request for `/index.html`.
 
 What isn't in an object's view doesn't exist for it. A path it can't see is
-`NotFound`, exactly as if nothing were there, and mentioning a path in a
+`not_found`, exactly as if nothing were there, and mentioning a path in a
 message gives the receiver nothing, because the receiver resolves it in its
 own view. An object can rearrange its view and share parts of it while it
 runs, but only using what it can already see, and a read-only mount stays
@@ -130,7 +130,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

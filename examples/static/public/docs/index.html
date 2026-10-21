@@ -78,7 +78,7 @@ instances. Conventional names (<code>/dev/cons</code>, <code>/net/tcp</code>, <c
 manageable.</p>
 <h3 id="names-are-the-capabilities">Names are the capabilities</h3>
 <p>A path is resolved in the sender&#39;s view. A path that isn&#39;t in the view is
-<code>NotFound</code>, exactly as if it didn&#39;t exist. Paths are plain strings, not
+<code>not_found</code>, exactly as if it didn&#39;t exist. Paths are plain strings, not
 unforgeable tokens. Putting a path in a message doesn&#39;t grant anything: the
 receiver resolves it in its own view. Access is controlled by what each view
 can see, and the image decides that.</p>
@@ -87,7 +87,7 @@ can see, and the image decides that.</p>
 segments and keeps a trailing <code>/</code>, because <code>/docs</code> and <code>/docs/</code> can mean
 different things to a server (HTTP certainly treats them differently). A path
 containing a <code>..</code> segment, a NUL byte, or one that doesn&#39;t start with <code>/</code> is
-rejected with <code>Invalid</code> before it is resolved. Without that rule,
+rejected with <code>invalid</code> before it is resolved. Without that rule,
 <code>root + clientPath</code> could step from <code>/www</code> into any other part of the sender&#39;s
 view.</p>
 <p>A trailing <code>/</code> means nothing in a mount point: <code>/www/</code> and <code>/www</code> name the
@@ -111,56 +111,56 @@ anything without understanding the body&#39;s type.</p>
 </tr>
 </thead>
 <tbody><tr>
-<td><code>Read</code></td>
+<td><code>read</code></td>
 <td>yes</td>
 <td>yes</td>
 <td>none</td>
 <td>one message, conventionally <code>Data { mime, data }</code></td>
 </tr>
 <tr>
-<td><code>Stat</code></td>
+<td><code>stat</code></td>
 <td>yes</td>
 <td>yes</td>
 <td>none</td>
 <td><code>Info { kind, size, mime }</code></td>
 </tr>
 <tr>
-<td><code>List</code></td>
+<td><code>list</code></td>
 <td>yes</td>
 <td>yes</td>
 <td>none</td>
 <td>a stream of <code>Entry { name, kind }</code></td>
 </tr>
 <tr>
-<td><code>Watch</code></td>
+<td><code>watch</code></td>
 <td>yes</td>
 <td>yes</td>
 <td>none</td>
 <td>a stream, until it ends or is cancelled</td>
 </tr>
 <tr>
-<td><code>Write</code></td>
+<td><code>write</code></td>
 <td>no</td>
 <td>yes</td>
 <td>a message</td>
 <td>ok</td>
 </tr>
 <tr>
-<td><code>Create</code></td>
+<td><code>create</code></td>
 <td>no</td>
 <td>no</td>
 <td>a message</td>
 <td><code>Entry</code> for what was made</td>
 </tr>
 <tr>
-<td><code>Remove</code></td>
+<td><code>remove</code></td>
 <td>no</td>
 <td>yes</td>
 <td>none</td>
 <td>ok</td>
 </tr>
 <tr>
-<td><code>Invoke</code></td>
+<td><code>invoke</code></td>
 <td>no</td>
 <td>no</td>
 <td>a message</td>
@@ -169,14 +169,14 @@ anything without understanding the body&#39;s type.</p>
 </tbody></table></div>
 <p>A <strong>safe</strong> verb doesn&#39;t change anything. A mount or exposure can be
 <strong>read-only</strong>, in which case the runtime answers every unsafe verb sent
-through it with <code>ReadOnly</code> and the server never sees it. The restriction only
+through it with <code>read_only</code> and the server never sees it. The restriction only
 accumulates along a chain: something read-only stays read-only however many
 times it is re-bound or re-exposed.</p>
-<p>Replies carry a <strong>status</strong>: <code>Ok</code>, <code>NotFound</code>, <code>ReadOnly</code>, <code>NotSupported</code>,
-<code>IsDirectory</code>, <code>NotDirectory</code>, <code>Exists</code>, <code>Invalid</code> or <code>Io</code>. A failure is just
-a reply with a status other than <code>Ok</code>.</p>
+<p>Replies carry a <strong>status</strong>: <code>ok</code>, <code>not_found</code>, <code>read_only</code>, <code>not_supported</code>,
+<code>is_directory</code>, <code>not_directory</code>, <code>exists</code>, <code>invalid</code> or <code>io</code>. A failure is just
+a reply with a status other than <code>ok</code>.</p>
 <p>A request may get several replies (a <strong>stream</strong>): each one says whether it is
-the last. <code>List</code> and <code>Watch</code> use this, as does accepting connections. There
+the last. <code>list</code> and <code>watch</code> use this, as does accepting connections. There
 is no other streaming or subscription mechanism.</p>
 <h2 id="the-assemblyscript-sdk">The AssemblyScript SDK</h2>
 <p>Message classes, <code>Writer</code>, <code>Reader</code> and <code>registerMessage</code> stay in
@@ -315,7 +315,7 @@ move a files root.</p>
 <tr>
 <td><code>Environment.Files</code></td>
 <td><code>FilesRoot { path }</code></td>
-<td><code>Read</code>: <code>Data</code> with a MIME type from the extension. <code>Stat</code>: <code>Info</code>. <code>List</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>ReadOnly</code></td>
+<td><code>read</code>: <code>Data</code> with a MIME type from the extension. <code>stat</code>: <code>Info</code>. <code>list</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>read_only</code></td>
 </tr>
 </tbody></table></div>
 <p><code>Packed.Files</code> answers exactly as <code>Environment.Files</code> does, from files copied
@@ -324,9 +324,9 @@ an environment object, since it touches nothing outside the image.</p>
 <p>Console reads stdin only if something is watching it by the time the image
 has started. When there are several Console instances, each line goes to the
 next one in turn, and every watcher of that Console gets it.</p>
-<p>A Tcp connection can have one watcher; a second gets <code>Exists</code>. Data that
+<p>A Tcp connection can have one watcher; a second gets <code>exists</code>. Data that
 arrives before anyone watches is kept for the first watcher. Files answers
-anything outside its root, including through symlinks, with <code>NotFound</code>. <code>Console</code> prints
+anything outside its root, including through symlinks, with <code>not_found</code>. <code>Console</code> prints
 a message whose only field is <code>text: string</code> verbatim, and anything else
 JSON-ish.</p>
 <h2 id="the-image">The image</h2>
@@ -373,7 +373,7 @@ Read-only flags carry through the closure. <code>real_talk --check</code> prints
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

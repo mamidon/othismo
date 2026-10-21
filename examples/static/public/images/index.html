@@ -97,7 +97,7 @@ instance files : Packed.Files {
 reports it as built in.</p>
 <p>It answers <code>read</code>, <code>stat</code> and <code>list</code> exactly as <code>Environment.Files</code> does
 (<code>Data</code>, <code>Info</code>, a sorted stream of <code>Entry</code>, the same MIME types and statuses).
-Every unsafe verb gets <code>ReadOnly</code>.</p>
+Every unsafe verb gets <code>read_only</code>.</p>
 <h3 id="include"><code>include</code></h3>
 <p>Paths are relative to the image file.</p>
 <ul>
@@ -169,7 +169,7 @@ slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.0 KB
+files  serves 9 built-in files, 75.6 KB
 ...
 </code></pre>
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
