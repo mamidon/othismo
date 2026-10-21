@@ -55,14 +55,6 @@ verbs are modelled on HTTP's methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a `read` is
 simply wrong, as a GET that deletes a record is.
 
-What the convention buys is that those expectations can be seen without
-understanding the body. A mount can be read-only, and the runtime then turns
-away every request whose verb may change something before it reaches the
-server; an object standing in between can make the same decision about
-messages it has never heard of. That is as strong as the server's handling of
-its verbs, which is why it matters most at the edge, where the servers are
-the runtime's own.
-
 A failure is just an answer with a status other than `Ok`, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.
