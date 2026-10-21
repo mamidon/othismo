@@ -15,15 +15,13 @@ struct Server {
 }
 
 impl Server {
-    /// Runs a copy of static.img listening on an ephemeral port. The copy
-    /// lives in a temp dir whose scripts and public files are symlinks back
-    /// into examples/static.
+    /// Runs examples/static/static.img listening on an ephemeral port.
     fn start(name: &str) -> Server {
         Server::start_with(name, false)
     }
 
-    /// With `built`, the copy is built into a .rti in a directory of its
-    /// own, and that is run instead.
+    /// With `built`, the image is first built into a .rti in a temp dir of
+    /// its own, and that is run instead.
     fn start_with(name: &str, built: bool) -> Server {
         let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static");
         for m in ["HttpServer", "StaticSite"] {
@@ -32,16 +30,9 @@ impl Server {
         let dir = std::env::temp_dir().join(format!("real_talk_http_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for link in ["scripts", "public"] {
-            std::os::unix::fs::symlink(example.join(link), dir.join(link)).unwrap();
-        }
-        let img = std::fs::read_to_string(example.join("static.img")).unwrap();
-        assert!(img.contains("127.0.0.1:8080"));
-        std::fs::write(dir.join("static.img"), img.replace("127.0.0.1:8080", "127.0.0.1:0")).unwrap();
-        let mut image = dir.join("static.img");
+        let mut image = example.join("static.img");
         if built {
-            std::fs::create_dir_all(dir.join("built")).unwrap();
-            let rti = dir.join("built/static.rti");
+            let rti = dir.join("static.rti");
             let status = Command::new(env!("CARGO_BIN_EXE_real_talk"))
                 .args(["build".as_ref(), image.as_os_str(), "-o".as_ref(), rti.as_os_str()])
                 .status()
@@ -51,6 +42,7 @@ impl Server {
         }
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_real_talk"))
+            .args(["--set", "listen.address=127.0.0.1:0"])
             .arg(image)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

@@ -1,7 +1,11 @@
 // A static file server. It touches the host in only two ways: one TCP
-// listener on 127.0.0.1:8080, and the console for the access log. The site's
-// files are packed into the image when it is built.
-instance net   : Environment.Tcp     { send Listen { address: "127.0.0.1:8080" } }
+// listener, and the console for the access log. The site's files are packed
+// into the image when it is built.
+
+// Where to listen. Deploy with e.g. `--set listen.address=0.0.0.0:80`.
+require listen : Listen { address: "127.0.0.1:8080" }
+
+instance net   : Environment.Tcp     { send listen }
 instance cons  : Environment.Console
 instance files : Packed.Files        { include "./public/" }
 
