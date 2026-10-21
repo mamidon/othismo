@@ -12,11 +12,13 @@
 //! Blobs are named by the SHA-256 of their contents and stored once.
 
 use crate::check::{self, Kind, Program};
+use crate::tree::{Node, Tree};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 pub const MAGIC: &[u8; 8] = b"RTIMAGE\x01";
 
@@ -31,10 +33,14 @@ pub struct Pack {
     /// Reference copies of the image's sources, by path relative to the
     /// image. The runtime never reads them.
     pub sources: BTreeMap<String, Hash>,
-    pub blobs: BTreeMap<Hash, Vec<u8>>,
+    /// Each `Packed.Files` instance's files, by instance name.
+    pub trees: BTreeMap<String, Tree>,
+    pub blobs: BTreeMap<Hash, Rc<[u8]>>,
     /// The directory holding the image, `.img` or `.rti`. Relative host
     /// paths (a `FilesRoot`) resolve against it.
     pub dir: PathBuf,
+    /// Notes from building, for `build -v`: each path an include replaced.
+    pub log: Vec<String>,
 }
 
 /// What a sealed file holds besides the blobs.
@@ -43,6 +49,7 @@ struct Manifest {
     program: Program,
     modules: BTreeMap<String, Hash>,
     sources: BTreeMap<String, Hash>,
+    trees: BTreeMap<String, Tree>,
     /// Each blob's offset from the start of the blobs, and its length.
     blobs: BTreeMap<Hash, (u64, u64)>,
 }
@@ -60,9 +67,7 @@ impl Pack {
 
     /// Stores `bytes`, returning its hash.
     fn add(&mut self, bytes: Vec<u8>) -> Hash {
-        let hash = hash(&bytes);
-        self.blobs.entry(hash.clone()).or_insert(bytes);
-        hash
+        add(&mut self.blobs, bytes)
     }
 
     /// Writes the pack as a sealed `.rti` file.
@@ -77,6 +82,7 @@ impl Pack {
             program: self.program.clone(),
             modules: self.modules.clone(),
             sources: self.sources.clone(),
+            trees: self.trees.clone(),
             blobs: index,
         };
         let doc = bson::serialize_to_document(&manifest).expect("a manifest always serializes");
@@ -92,7 +98,8 @@ impl Pack {
         out
     }
 
-    /// Writes every module, source and packed file under `out`.
+    /// Writes every module, source and packed file under `out`: in
+    /// `modules/`, `sources/` and `files/<instance>/`.
     pub fn unpack(&self, out: &Path) -> Result<()> {
         let mut files: Vec<(PathBuf, &str)> = vec![];
         for (type_name, hash) in &self.modules {
@@ -100,6 +107,19 @@ impl Pack {
         }
         for (rel, hash) in &self.sources {
             files.push((Path::new("sources").join(rel), hash));
+        }
+        for (name, tree) in &self.trees {
+            let root = Path::new("files").join(name);
+            for (path, node) in tree.nodes() {
+                let rel = root.join(path.trim_start_matches('/'));
+                match node {
+                    Node::Dir => {
+                        let dir = out.join(&rel);
+                        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?
+                    }
+                    Node::File { hash, .. } => files.push((rel, hash)),
+                }
+            }
         }
         for (rel, hash) in files {
             let path = out.join(&rel);
@@ -110,8 +130,32 @@ impl Pack {
     }
 }
 
+fn add(blobs: &mut BTreeMap<Hash, Rc<[u8]>>, bytes: Vec<u8>) -> Hash {
+    let hash = hash(&bytes);
+    blobs.entry(hash.clone()).or_insert_with(|| bytes.into());
+    hash
+}
+
 fn hash(bytes: &[u8]) -> Hash {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// [`check::describe`], saying what each packed instance holds.
+pub fn describe(pack: &Pack) -> String {
+    let about = |i: usize| {
+        let inst = &pack.program.instances[i];
+        let (files, size) = pack.trees.get(&inst.name)?.size();
+        Some(format!("serves {files} built-in file{}, {}", if files == 1 { "" } else { "s" }, human_size(size)))
+    };
+    check::describe(&pack.program, &about)
+}
+
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} bytes"),
+        1024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
 }
 
 /// Whether `bytes` start like a sealed image.
@@ -151,24 +195,40 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     let doc = bson::Document::from_reader(manifest).context("malformed manifest")?;
     let m: Manifest = bson::deserialize_from_document(doc).context("malformed manifest")?;
 
-    let mut pack = Pack { program: m.program, modules: m.modules, sources: m.sources, blobs: BTreeMap::new(), dir };
+    let mut pack = Pack {
+        program: m.program,
+        modules: m.modules,
+        sources: m.sources,
+        trees: m.trees,
+        blobs: BTreeMap::new(),
+        dir,
+        log: vec![],
+    };
     for (h, (offset, len)) in m.blobs {
         let range = usize::try_from(offset).ok().zip(usize::try_from(len).ok()).and_then(|(o, l)| Some(o..o.checked_add(l)?));
         let Some(bytes) = range.and_then(|r| blobs.get(r)) else { bail!("blob {h} is out of bounds") };
         if hash(bytes) != h {
             bail!("blob {h} is corrupt");
         }
-        pack.blobs.insert(h, bytes.to_vec());
+        pack.blobs.insert(h, bytes.into());
     }
-    let missing = pack.modules.values().chain(pack.sources.values()).find(|h| !pack.blobs.contains_key(*h));
+    let files = pack.trees.values().flat_map(|t| t.nodes()).filter_map(|(_, n)| match n {
+        Node::File { hash, .. } => Some(hash),
+        Node::Dir => None,
+    });
+    let missing = pack.modules.values().chain(pack.sources.values()).chain(files).find(|h| !pack.blobs.contains_key(*h));
     if let Some(h) = missing {
         bail!("blob {h} is missing");
     }
     for inst in &pack.program.instances {
-        if let Kind::Wasm { type_name } = &inst.kind
-            && !pack.modules.contains_key(type_name)
-        {
-            bail!("instance `{}`: module {type_name} is missing", inst.name);
+        match &inst.kind {
+            Kind::Wasm { type_name } if !pack.modules.contains_key(type_name) => {
+                bail!("instance `{}`: module {type_name} is missing", inst.name)
+            }
+            Kind::Packed { .. } if !pack.trees.contains_key(&inst.name) => {
+                bail!("instance `{}`: its files are missing", inst.name)
+            }
+            _ => {}
         }
     }
     Ok(pack)
@@ -185,9 +245,25 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         program,
         modules: BTreeMap::new(),
         sources: BTreeMap::new(),
+        trees: BTreeMap::new(),
         blobs: BTreeMap::new(),
         dir: dir.clone(),
+        log: vec![],
     };
+
+    for inst in &pack.program.instances {
+        let Kind::Packed { includes } = &inst.kind else { continue };
+        let mut tree = Tree::default();
+        for inc in includes {
+            let replaced = tree
+                .include(&dir, inc, &mut |bytes| add(&mut pack.blobs, bytes))
+                .with_context(|| format!("instance `{}`: include \"{}\"", inst.name, inc.source))?;
+            for path in replaced {
+                pack.log.push(format!("{}: include \"{}\" replaced {path}", inst.name, inc.source));
+            }
+        }
+        pack.trees.insert(inst.name.clone(), tree);
+    }
 
     let mut sources = pack.program.sources.clone();
     for inst in pack.program.instances.clone() {

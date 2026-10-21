@@ -6,10 +6,12 @@
 //! their own threads and report [`Event`]s over a channel. All requests and
 //! replies still happen on the runtime's single thread.
 
-use crate::check::Kind;
+use crate::check::{Instance, Kind};
 use crate::messages::MessageType;
-use crate::ns::{Status, Verb};
+use crate::ns::{self, Status, Verb};
+use crate::pack::{Hash, Pack};
 use crate::render;
+use crate::tree::{Node, Tree};
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, bail};
 use bson::{Bson, Document, doc};
@@ -17,6 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -71,6 +74,7 @@ pub enum EnvObject {
     Console(Console),
     Tcp(Tcp),
     Files(Files),
+    Packed(Packed),
 }
 
 #[derive(Default)]
@@ -106,6 +110,12 @@ pub struct Files {
     root: PathBuf,
 }
 
+/// Files packed into the image when it was built.
+pub struct Packed {
+    tree: Tree,
+    blobs: BTreeMap<Hash, Rc<[u8]>>,
+}
+
 fn msg(type_name: &str, fields: Document) -> Message {
     Message { type_name: type_name.into(), fields }
 }
@@ -113,9 +123,9 @@ fn msg(type_name: &str, fields: Document) -> Message {
 impl EnvObject {
     /// `None` for instances implemented in Wasm. A Tcp listener is bound
     /// here, so its address is known before anything starts. A relative
-    /// files root is relative to `dir`, the image's directory.
-    pub fn new(kind: &Kind, dir: &Path) -> Result<Option<EnvObject>> {
-        Ok(Some(match kind {
+    /// files root is relative to the image's directory.
+    pub fn new(inst: &Instance, pack: &Pack) -> Result<Option<EnvObject>> {
+        Ok(Some(match &inst.kind {
             Kind::Wasm { .. } => return Ok(None),
             Kind::Console => EnvObject::Console(Console::default()),
             Kind::Tcp { address } => {
@@ -124,12 +134,16 @@ impl EnvObject {
                 EnvObject::Tcp(Tcp { listener: Some(listener), address, accept_watchers: vec![], conns: HashMap::new() })
             }
             Kind::Files { root } => {
-                let root = dir.join(root);
+                let root = pack.dir.join(root);
                 let root = root.canonicalize().with_context(|| format!("files root {}", root.display()))?;
                 if !root.is_dir() {
                     bail!("files root {} is not a directory", root.display());
                 }
                 EnvObject::Files(Files { root })
+            }
+            Kind::Packed { .. } => {
+                let tree = pack.trees.get(&inst.name).context("its files are missing")?.clone();
+                EnvObject::Packed(Packed { tree, blobs: pack.blobs.clone() })
             }
         }))
     }
@@ -158,6 +172,7 @@ impl EnvObject {
             EnvObject::Console(c) => c.serve(req, verb, path, body, out, messages)?,
             EnvObject::Tcp(t) => t.serve(req, verb, path, body),
             EnvObject::Files(f) => f.serve(req, verb, path),
+            EnvObject::Packed(p) => p.serve(req, verb, path),
         })
     }
 
@@ -173,7 +188,7 @@ impl EnvObject {
                     }
                 }
             }
-            EnvObject::Files(_) => {}
+            EnvObject::Files(_) | EnvObject::Packed(_) => {}
         }
         vec![Reply::end(req)]
     }
@@ -439,6 +454,46 @@ impl Files {
     }
 }
 
+impl Packed {
+    /// Answers as [`Files`] does, from the tree.
+    fn serve(&self, req: u32, verb: Verb, path: &str) -> Vec<Reply> {
+        if !verb.is_safe() {
+            return vec![Reply::fail(req, Status::ReadOnly)];
+        }
+        let as_dir = path.len() > 1 && path.ends_with('/');
+        let Ok(path) = ns::mount_point(path) else { return vec![Reply::fail(req, Status::Invalid)] };
+        // As on disk, `file/` names nothing.
+        let node = self.tree.get(&path).filter(|n| !as_dir || **n == Node::Dir);
+        let Some(node) = node else { return vec![Reply::fail(req, Status::NotFound)] };
+        let mime = || mime(Path::new(&path));
+        match (verb, node) {
+            (Verb::Read, Node::Dir) => vec![Reply::fail(req, Status::IsDirectory)],
+            (Verb::Read, Node::File { hash, .. }) => {
+                let data = wire::bytes(self.blobs[hash].to_vec());
+                vec![Reply::ok(req, msg("Data", doc! { "mime": mime(), "data": data }))]
+            }
+            (Verb::Stat, Node::Dir) => vec![Reply::ok(req, msg("Info", doc! { "kind": "dir", "size": 0i64, "mime": "" }))],
+            (Verb::Stat, Node::File { size, .. }) => {
+                vec![Reply::ok(req, msg("Info", doc! { "kind": "file", "size": *size as i64, "mime": mime() }))]
+            }
+            (Verb::List, Node::File { .. }) => vec![Reply::fail(req, Status::NotDirectory)],
+            (Verb::List, Node::Dir) => {
+                let mut replies: Vec<Reply> = self
+                    .tree
+                    .children(&path)
+                    .map(|(name, node)| {
+                        let kind = if *node == Node::Dir { "dir" } else { "file" };
+                        Reply::more(req, msg("Entry", doc! { "name": name, "kind": kind }))
+                    })
+                    .collect();
+                replies.push(Reply::end(req));
+                replies
+            }
+            _ => vec![Reply::fail(req, Status::NotSupported)],
+        }
+    }
+}
+
 fn resolve(root: &Path, path: &str) -> std::result::Result<PathBuf, Status> {
     if path.contains('\0') || path.contains('\\') {
         return Err(Status::Invalid);
@@ -520,6 +575,23 @@ mod tests {
         assert_eq!(list, want);
         assert_eq!(status(f.serve(1, Verb::List, "/a.txt")), [Status::NotDirectory]);
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn packed_files_resolve_paths_like_files() {
+        let mut tree = Tree::default();
+        tree.put("/a.txt", Node::File { hash: "h".into(), size: 1 }, &mut vec![]);
+        tree.put("/sub", Node::Dir, &mut vec![]);
+        let p = Packed { tree, blobs: BTreeMap::from([("h".to_string(), Rc::from(&b"A"[..]))]) };
+        let read = |path: &str| status(p.serve(1, Verb::Read, path));
+        assert_eq!(read("/a.txt"), [Status::Ok]);
+        assert_eq!(read("/./a.txt"), [Status::Ok]);
+        assert_eq!(read("/a.txt/"), [Status::NotFound]);
+        assert_eq!(read("/sub/"), [Status::IsDirectory]);
+        assert_eq!(read("/sub/../a.txt"), [Status::Invalid]);
+        assert_eq!(status(p.serve(1, Verb::List, "/sub/")), [Status::Ok]);
+        assert_eq!(status(p.serve(1, Verb::Watch, "/")), [Status::NotSupported]);
+        assert_eq!(status(p.serve(1, Verb::Create, "/b")), [Status::ReadOnly]);
     }
 
     #[test]

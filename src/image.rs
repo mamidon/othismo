@@ -46,6 +46,8 @@ pub struct Instance {
     pub config: Vec<Body>,
     /// `<verb> <path> [T { ... }]`: startup requests to this instance.
     pub requests: Vec<Request>,
+    /// `include "<path>" [at <path>]`: files to pack into the image.
+    pub includes: Vec<Include>,
 }
 
 /// `mount <instance> <path> [readonly]`
@@ -62,6 +64,15 @@ pub struct Request {
     pub verb_pos: Pos,
     pub path: Path,
     pub body: Option<Body>,
+}
+
+/// `include "<source>" [at <path>]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct Include {
+    /// A file or directory on the build machine, relative to the image.
+    pub source: String,
+    pub pos: Pos,
+    pub at: Option<Path>,
 }
 
 /// A path literal, as written.
@@ -226,8 +237,12 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
 // Parser
 
 /// Words that can never be names. Member keywords (`mount`, `send`,
-/// `readonly` and the verbs) only mean something inside an instance block.
+/// `include`, `readonly`, `at` and the verbs) only mean something inside an
+/// instance block.
 const KEYWORDS: &[&str] = &["import", "from", "instance", "true", "false"];
+
+/// Words that start a member of an instance block, besides the verbs.
+const MEMBERS: &[&str] = &["mount", "send", "include"];
 
 struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -333,7 +348,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let type_name = self.ident("instance type", true)?;
-        let mut inst = Instance { name, type_name, mounts: vec![], config: vec![], requests: vec![] };
+        let mut inst = Instance { name, type_name, mounts: vec![], config: vec![], requests: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
@@ -343,7 +358,7 @@ impl Parser {
             let word = match tok {
                 Tok::RBrace => return Ok(inst),
                 Tok::Ident(word) => word,
-                other => bail!("{pos}: expected `mount`, `send`, a verb or `}}`, found {other}"),
+                other => bail!("{pos}: expected `mount`, `send`, `include`, a verb or `}}`, found {other}"),
             };
             if word == "mount" {
                 let target = self.ident("instance name", false)?;
@@ -355,16 +370,28 @@ impl Parser {
                 inst.mounts.push(Mount { target, at, read_only });
             } else if word == "send" {
                 inst.config.push(self.body()?);
+            } else if word == "include" {
+                let source = match self.next() {
+                    (Tok::Str(s), _) => s,
+                    (other, pos) => bail!("{pos}: expected a quoted file or directory to include, found {other}"),
+                };
+                let at = if self.is_kw("at") {
+                    self.next();
+                    Some(self.path()?)
+                } else {
+                    None
+                };
+                inst.includes.push(Include { source, pos, at });
             } else if let Some(verb) = Verb::from_keyword(&word) {
                 let path = self.path()?;
                 let body = match self.peek() {
-                    Tok::Ident(w) if w != "mount" && w != "send" && Verb::from_keyword(w).is_none() => Some(self.body()?),
+                    Tok::Ident(w) if !MEMBERS.contains(&w.as_str()) && Verb::from_keyword(w).is_none() => Some(self.body()?),
                     _ => None,
                 };
                 inst.requests.push(Request { verb, verb_pos: pos, path, body });
             } else {
                 let verbs: Vec<&str> = crate::ns::VERBS.iter().map(|v| v.keyword()).collect();
-                bail!("{pos}: expected `mount`, `send`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
+                bail!("{pos}: expected `mount`, `send`, `include`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
             }
         }
     }
@@ -461,6 +488,24 @@ mod tests {
         assert_eq!(reqs[1].body.as_ref().unwrap().fields, None);
         assert_eq!(reqs[2].body, None, "a verb ends a body-less request");
         assert_eq!(reqs[3].body, None);
+    }
+
+    #[test]
+    fn parses_includes() {
+        let img = parse(
+            r#"instance files : Packed.Files {
+              include "./public/"
+              read /
+              include "robots.txt" at /robots.txt
+            }"#,
+        )
+        .unwrap();
+        let inst = &img.instances[0];
+        let incs: Vec<_> = inst.includes.iter().map(|i| (i.source.as_str(), i.at.as_ref().map(|p| p.path.as_str()))).collect();
+        assert_eq!(incs, [("./public/", None), ("robots.txt", Some("/robots.txt"))]);
+        assert_eq!(inst.requests[0].body, None, "`include` ends a body-less request");
+        let e = parse("instance f : Packed.Files { include public/ }").unwrap_err().to_string();
+        assert!(e.contains("expected a quoted file or directory"), "{e}");
     }
 
     #[test]

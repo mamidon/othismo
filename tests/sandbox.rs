@@ -389,9 +389,9 @@ fn cancel_stops_a_stream() {
     assert_eq!(run_image(&f.image(), "a\nb\nc\n", Options::default()).unwrap(), "a\n");
 }
 
-#[test]
-fn files_read_stat_and_list() {
-    let a = Script {
+/// Reads, stats, lists and tries to remove through `/f`.
+fn files_script() -> Script {
+    Script {
         start: vec![
             call(Verb::Read, "/f/hello.txt"),
             call(Verb::Read, "/f/missing"),
@@ -402,22 +402,40 @@ fn files_read_stat_and_list() {
         ],
         answer: Some(Steps::Each(vec![Act::Show("/out")])),
         ..Default::default()
-    };
+    }
+}
+
+const FILES_OUTPUT: &str = "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
+    NotFound\n\
+    IsDirectory\n\
+    Info {\"kind\": \"file\", \"size\": 2, \"mime\": \"text/plain; charset=utf-8\"}\n\
+    Entry {\"name\": \"hello.txt\", \"kind\": \"file\"}\n\
+    Entry {\"name\": \"sub\", \"kind\": \"dir\"}\n\
+    Ok\n\
+    ReadOnly\n";
+
+#[test]
+fn files_read_stat_and_list() {
     let files = "instance files : Environment.Files { send FilesRoot { path: \"public\" } }";
-    let f = fixture("files", &[("a", &a, "mount files /f  mount cons /out")], files);
+    let f = fixture("files", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
-    assert_eq!(
-        run(&f).unwrap(),
-        "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
-         NotFound\n\
-         IsDirectory\n\
-         Info {\"kind\": \"file\", \"size\": 2, \"mime\": \"text/plain; charset=utf-8\"}\n\
-         Entry {\"name\": \"hello.txt\", \"kind\": \"file\"}\n\
-         Entry {\"name\": \"sub\", \"kind\": \"dir\"}\n\
-         Ok\n\
-         ReadOnly\n"
-    );
+    assert_eq!(run(&f).unwrap(), FILES_OUTPUT);
+}
+
+#[test]
+fn packed_files_answer_like_files() {
+    let files = "instance files : Packed.Files { include \"public/\" }";
+    let f = fixture("packed", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
+    std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
+    f.file("public/hello.txt", "hi");
+    let pack = real_talk::pack::load(&f.image()).unwrap();
+    // Nothing on disk is read once the image is built.
+    std::fs::remove_dir_all(f.dir.join("public")).unwrap();
+    let out = common::Captured::default();
+    let io = real_talk::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(out.clone()) };
+    real_talk::runtime::run(&pack, io, Options::default()).unwrap();
+    assert_eq!(out.text(), FILES_OUTPUT);
 }
 
 #[test]

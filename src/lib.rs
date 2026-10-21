@@ -9,4 +9,5 @@ pub mod ns;
 pub mod pack;
 pub mod render;
 pub mod runtime;
+pub mod tree;
 pub mod wire;

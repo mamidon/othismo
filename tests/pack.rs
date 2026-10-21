@@ -3,7 +3,8 @@
 mod common;
 
 use common::Fixture;
-use real_talk::pack::{self, BuildOptions};
+use real_talk::pack::{self, BuildOptions, Pack};
+use real_talk::tree::Node;
 
 /// Modules aren't run here, so any bytes do.
 fn fixture(name: &str) -> Fixture {
@@ -91,4 +92,131 @@ fn unpacking_writes_modules_and_sources() {
     assert_eq!(read("modules/B.wasm"), "(module)");
     assert_eq!(read("sources/scripts/A.ts"), "// A's source\n");
     assert!(read("sources/test.img").contains("instance a2 : A"));
+}
+
+/// An image whose only instance is `files : Packed.Files { <includes> }`.
+fn packed(f: &Fixture, includes: &str) -> anyhow::Result<Pack> {
+    f.file("test.img", format!("instance files : Packed.Files {{ {includes} }}"));
+    pack::build(&f.image(), BuildOptions::default())
+}
+
+fn listing(p: &Pack) -> Vec<String> {
+    p.trees["files"]
+        .nodes()
+        .map(|(path, node)| match node {
+            Node::Dir => format!("{}/", path.trim_end_matches('/')),
+            Node::File { hash, .. } => format!("{path} = {}", String::from_utf8_lossy(p.blob(hash))),
+        })
+        .collect()
+}
+
+fn dir(f: &Fixture, rel: &str) {
+    std::fs::create_dir_all(f.dir.join(rel)).unwrap();
+}
+
+#[test]
+fn includes_take_files_and_whole_directories() {
+    let f = Fixture::new("pack_includes");
+    dir(&f, "public/css");
+    dir(&f, "public/.well-known");
+    dir(&f, "public/empty");
+    f.file("public/index.html", "home").file("public/css/site.css", "css").file("public/.well-known/x", "hidden");
+    f.file("robots.txt", "bots").file(".env", "dot");
+
+    let p = packed(&f, r#"include "public/" include "robots.txt" include ".env" at /conf/env"#).unwrap();
+    assert_eq!(
+        listing(&p),
+        [
+            "/",
+            "/.well-known/",
+            "/.well-known/x = hidden",
+            "/conf/",
+            "/conf/env = dot",
+            "/css/",
+            "/css/site.css = css",
+            "/empty/",
+            "/index.html = home",
+            "/robots.txt = bots",
+        ]
+    );
+    assert_eq!(listing(&packed(&f, r#"include "public/*""#).unwrap()), listing(&packed(&f, r#"include "public/""#).unwrap()));
+    let under = packed(&f, r#"include "public/css/" at /static"#).unwrap();
+    assert_eq!(listing(&under), ["/", "/static/", "/static/site.css = css"]);
+}
+
+#[test]
+fn later_includes_win() {
+    let f = Fixture::new("pack_later_wins");
+    dir(&f, "public/css");
+    dir(&f, "theme/css");
+    dir(&f, "theme/index.html");
+    f.file("public/css/site.css", "plain").file("public/css/keep.css", "kept").file("public/index.html", "home");
+    f.file("theme/css/site.css", "themed").file("theme/index.html/x", "now a dir");
+    f.file("css.txt", "a file over a directory");
+
+    let p = packed(&f, r#"include "public/" include "theme/""#).unwrap();
+    assert_eq!(
+        listing(&p),
+        ["/", "/css/", "/css/keep.css = kept", "/css/site.css = themed", "/index.html/", "/index.html/x = now a dir"]
+    );
+    assert_eq!(p.log, ["files: include \"theme/\" replaced /css/site.css", "files: include \"theme/\" replaced /index.html"]);
+
+    let p = packed(&f, r#"include "public/" include "css.txt" at /css"#).unwrap();
+    assert_eq!(listing(&p), ["/", "/css = a file over a directory", "/index.html = home"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_are_followed() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new("pack_symlinks");
+    dir(&f, "public");
+    dir(&f, "elsewhere/deep");
+    f.file("elsewhere/deep/a.txt", "via a link").file("secret.txt", "outside");
+    symlink(f.dir.join("elsewhere"), f.dir.join("public/linked")).unwrap();
+    symlink(f.dir.join("secret.txt"), f.dir.join("public/secret.txt")).unwrap();
+    let p = packed(&f, r#"include "public/""#).unwrap();
+    assert_eq!(
+        listing(&p),
+        ["/", "/linked/", "/linked/deep/", "/linked/deep/a.txt = via a link", "/secret.txt = outside"]
+    );
+
+    symlink(f.dir.join("nowhere"), f.dir.join("public/dangling")).unwrap();
+    let e = format!("{:#}", packed(&f, r#"include "public/""#).unwrap_err());
+    assert!(e.contains("include \"public/\"") && e.contains("public/dangling is a symlink to nothing"), "{e}");
+    std::fs::remove_file(f.dir.join("public/dangling")).unwrap();
+
+    symlink(f.dir.join("public"), f.dir.join("elsewhere/deep/up")).unwrap();
+    let e = format!("{:#}", packed(&f, r#"include "public/""#).unwrap_err());
+    assert!(e.contains("links back to"), "{e}");
+}
+
+#[test]
+fn include_mistakes_are_build_errors() {
+    let f = Fixture::new("pack_include_errors");
+    dir(&f, "public");
+    f.file("a.txt", "a");
+    let err = |includes: &str| format!("{:#}", packed(&f, includes).unwrap_err());
+    let e = err(r#"include "public""#);
+    assert!(e.contains("is a directory; write \"public/\" to include everything under it"), "{e}");
+    assert!(err(r#"include "a.txt/""#).contains("a.txt is not a directory"));
+    assert!(err(r#"include "missing.txt""#).contains("cannot include"));
+    assert!(err(r#"include "a.txt" at /"#).contains("a single file can't be the root"));
+    assert!(packed(&f, r#"include "public/""#).is_ok(), "an empty directory is fine");
+}
+
+#[test]
+fn packed_trees_survive_sealing_and_unpacking() {
+    let f = Fixture::new("pack_trees_sealed");
+    dir(&f, "public/empty");
+    f.file("public/a.txt", "A");
+    let built = packed(&f, r#"include "public/""#).unwrap();
+    let opened = pack::unseal(&built.seal(), f.dir.clone()).unwrap();
+    assert_eq!(listing(&opened), listing(&built));
+    assert_eq!(pack::describe(&opened), "files  serves 1 built-in file, 1 bytes\n");
+
+    let out = f.dir.join("out");
+    opened.unpack(&out).unwrap();
+    assert_eq!(std::fs::read_to_string(out.join("files/files/a.txt")).unwrap(), "A");
+    assert!(out.join("files/files/empty").is_dir());
 }

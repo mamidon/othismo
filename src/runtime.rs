@@ -270,7 +270,7 @@ impl<'p> Runtime<'p> {
                     Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))
                 }
                 kind => Object::Env(
-                    EnvObject::new(kind, &pack.dir)?
+                    EnvObject::new(inst, pack)?
                         .ok_or_else(|| anyhow!("no environment object for {kind:?}"))
                         .with_context(|| format!("instance `{}`", inst.name))?,
                 ),

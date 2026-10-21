@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 pub const CONSOLE: &str = "Environment.Console";
 pub const TCP: &str = "Environment.Tcp";
 pub const FILES: &str = "Environment.Files";
+pub const PACKED: &str = "Packed.Files";
 
 /// The import path for the runtime's message types, and their declarations.
 /// These types are always in scope in an image; importing them is optional.
@@ -68,6 +69,16 @@ pub enum Kind {
     /// Serves files under `root` (from `send FilesRoot`, as written; a
     /// relative root is relative to the image).
     Files { root: String },
+    /// Serves the files its includes packed into the image, in order.
+    Packed { includes: Vec<IncludeDecl> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IncludeDecl {
+    /// As written, relative to the image.
+    pub source: String,
+    /// Clean and absolute, without a trailing `/`.
+    pub at: Option<String>,
 }
 
 /// An environment type and the one config message it takes, if any.
@@ -106,6 +117,11 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     let mut instances = vec![];
     for inst in &img.instances {
         let ty = &inst.type_name;
+        if ty.name != PACKED
+            && let Some(inc) = inst.includes.first()
+        {
+            bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, ty.name);
+        }
         let builtin = BUILTINS.iter().find(|(name, _)| *name == ty.name);
         let kind = match builtin {
             Some(&(name, config_type)) => {
@@ -122,9 +138,29 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                 };
                 builtin_kind(name, config.as_ref())
             }
-            None if ty.name.starts_with("Environment.") => {
-                let known: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).collect();
-                bail!(err_at(ty, format!("unknown environment type `{}` (there are: {})", ty.name, known.join(", "))));
+            None if ty.name == PACKED => {
+                if let Some(m) = inst.mounts.first() {
+                    bail!(err_at(&m.target, format!("{PACKED} has no view to mount into; it only serves")));
+                }
+                if let Some(c) = inst.config.first() {
+                    bail!(err_at(&c.type_name, format!("{PACKED} takes no config; `include` the files it serves")));
+                }
+                let mut includes = vec![];
+                for inc in &inst.includes {
+                    let at = match &inc.at {
+                        Some(p) => Some(
+                            ns::mount_point(&p.path)
+                                .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))?,
+                        ),
+                        None => None,
+                    };
+                    includes.push(IncludeDecl { source: inc.source.clone(), at });
+                }
+                Kind::Packed { includes }
+            }
+            None if ty.name.starts_with("Environment.") || ty.name.starts_with("Packed.") => {
+                let known: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).chain([PACKED]).collect();
+                bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {})", ty.name, known.join(", "))));
             }
             None if ty.name.contains('.') => bail!(err_at(ty, format!("`{}` is not a module name", ty.name))),
             None => {
@@ -165,16 +201,24 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     Ok(Program { messages, instances, sources })
 }
 
-/// A summary of each instance's view and the most it can ever reach, for `--check`.
-pub fn describe(p: &Program) -> String {
+/// A summary of each instance's view and the most it can ever reach, for
+/// `--check`. `about` may say more about an instance, on a line of its own.
+pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String {
     let mounts: Vec<Vec<(usize, bool)>> =
         p.instances.iter().map(|i| i.mounts.iter().map(|m| (m.target, m.read_only)).collect()).collect();
     let reach = ns::reach(&mounts);
     let width = p.instances.iter().map(|i| i.name.len()).max().unwrap_or(0);
     let mut out = String::new();
     for (i, inst) in p.instances.iter().enumerate() {
+        let mut name = inst.name.as_str();
+        if let Some(about) = about(i) {
+            writeln!(out, "{name:width$}  {about}").unwrap();
+            name = "";
+        }
         if inst.mounts.is_empty() {
-            writeln!(out, "{:width$}  sees nothing", inst.name).unwrap();
+            if !name.is_empty() {
+                writeln!(out, "{name:width$}  sees nothing").unwrap();
+            }
             continue;
         }
         let sees: Vec<String> = inst
@@ -182,7 +226,7 @@ pub fn describe(p: &Program) -> String {
             .iter()
             .map(|m| format!("{} → {}{}", m.at, p.instances[m.target].name, if m.read_only { " ro" } else { "" }))
             .collect();
-        writeln!(out, "{:width$}  sees {}", inst.name, sees.join(", ")).unwrap();
+        writeln!(out, "{name:width$}  sees {}", sees.join(", ")).unwrap();
         let reaches: Vec<String> = reach[i]
             .iter()
             .map(|(&t, r)| {
@@ -408,7 +452,32 @@ mod tests {
         let e = err(r#"instance c : Environment.Console { send Listen { address: "a" } }"#);
         assert!(e.contains("takes no config"), "{e}");
         let e = err("instance c : Environment.Stdin");
-        assert!(e.contains("unknown environment type `Environment.Stdin`"), "{e}");
+        assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
+    }
+
+    #[test]
+    fn packed_files_take_includes_and_nothing_else() {
+        let p = check_src(
+            r#"instance files : Packed.Files { include "public/" include "a.txt" at /b//c/ }
+            instance site : Site { mount files /files }"#,
+        )
+        .unwrap();
+        let want = [
+            IncludeDecl { source: "public/".into(), at: None },
+            IncludeDecl { source: "a.txt".into(), at: Some("/b/c".into()) },
+        ];
+        assert_eq!(p.instances[0].kind, Kind::Packed { includes: want.to_vec() });
+
+        let e = err(r#"instance s : Site { include "x" }"#);
+        assert!(e.contains("`include` packs files into a Packed.Files instance, and `s` is a Site"), "{e}");
+        let e = err(r#"instance f : Packed.Files { include "x" at /../y }"#);
+        assert!(e.contains("not a clean absolute path"), "{e}");
+        let e = err(r#"instance f : Packed.Files { send FilesRoot { path: "." } }"#);
+        assert!(e.contains("takes no config"), "{e}");
+        let e = err(r#"instance a : A instance f : Packed.Files { mount a /a }"#);
+        assert!(e.contains("only serves"), "{e}");
+        let e = err(r#"instance f : Packed.Dirs"#);
+        assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Environment.Console, Environment.Tcp, Environment.Files, Packed.Files)"), "{e}");
     }
 
     #[test]
@@ -437,7 +506,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            describe(&p),
+            describe(&p, &|_| None),
             "cons   sees nothing\n\
              files  sees nothing\n\
              site   sees /files → files ro\n       can reach at most: files ro\n\
