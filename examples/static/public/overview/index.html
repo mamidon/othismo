@@ -83,16 +83,24 @@ business.</p>
 <p>Objects are single-threaded and share nothing. They react to requests and to
 the answers to their own requests, and that is their whole life.</p>
 <h2 id="messages">Messages</h2>
-<p>A request is a verb, a path and, for some verbs, a typed message as its body.
+<p>A request is a path, a verb and, for some verbs, a typed message as its body.
 The message types are declared alongside the objects and are the interfaces
 you specify: what an object accepts, what it answers, and what each field
 means.</p>
-<p>The verb travels outside the body, and that matters more than it looks. The
-verbs are modelled on HTTP&#39;s: <code>read</code>, <code>stat</code>, <code>list</code> and <code>watch</code> are safe and
-change nothing, while <code>write</code>, <code>create</code>, <code>remove</code> and <code>invoke</code> may. Because
-the runtime sees the verb without having to understand the body, it can hold
-an object to &quot;read only&quot; whatever its code tries, and so can any object
-standing in between.</p>
+<p>The verb is a convention. It states what the sender expects handling the
+request to imply: <code>read</code>, <code>stat</code>, <code>list</code> and <code>watch</code> ask about something
+without changing it; <code>write</code> and <code>remove</code> change something in a way that is
+safe to repeat; <code>create</code> and <code>invoke</code> may do anything, once per request. The
+verbs are modelled on HTTP&#39;s methods, and like those, nothing makes a server
+honour them. A server that changes something when it handles a <code>read</code> is
+simply wrong, as a GET that deletes a record is.</p>
+<p>What the convention buys is that those expectations can be seen without
+understanding the body. A mount can be read-only, and the runtime then turns
+away every request whose verb may change something before it reaches the
+server; an object standing in between can make the same decision about
+messages it has never heard of. That is as strong as the server&#39;s handling of
+its verbs, which is why it matters most at the edge, where the servers are
+the runtime&#39;s own.</p>
 <p>A failure is just an answer with a status other than <code>Ok</code>, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.</p>
@@ -154,7 +162,7 @@ image touches on the host:</p>
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.5 KB
+files  serves 9 built-in files, 76.0 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

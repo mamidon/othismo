@@ -42,17 +42,26 @@ the answers to their own requests, and that is their whole life.
 
 ## Messages
 
-A request is a verb, a path and, for some verbs, a typed message as its body.
+A request is a path, a verb and, for some verbs, a typed message as its body.
 The message types are declared alongside the objects and are the interfaces
 you specify: what an object accepts, what it answers, and what each field
 means.
 
-The verb travels outside the body, and that matters more than it looks. The
-verbs are modelled on HTTP's: `read`, `stat`, `list` and `watch` are safe and
-change nothing, while `write`, `create`, `remove` and `invoke` may. Because
-the runtime sees the verb without having to understand the body, it can hold
-an object to "read only" whatever its code tries, and so can any object
-standing in between.
+The verb is a convention. It states what the sender expects handling the
+request to imply: `read`, `stat`, `list` and `watch` ask about something
+without changing it; `write` and `remove` change something in a way that is
+safe to repeat; `create` and `invoke` may do anything, once per request. The
+verbs are modelled on HTTP's methods, and like those, nothing makes a server
+honour them. A server that changes something when it handles a `read` is
+simply wrong, as a GET that deletes a record is.
+
+What the convention buys is that those expectations can be seen without
+understanding the body. A mount can be read-only, and the runtime then turns
+away every request whose verb may change something before it reaches the
+server; an object standing in between can make the same decision about
+messages it has never heard of. That is as strong as the server's handling of
+its verbs, which is why it matters most at the edge, where the servers are
+the runtime's own.
 
 A failure is just an answer with a status other than `Ok`, and a stream is
 just several answers to one request. There are no exceptions crossing
@@ -129,7 +138,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.5 KB
+files  serves 9 built-in files, 76.0 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
