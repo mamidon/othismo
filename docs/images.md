@@ -47,7 +47,7 @@ at run time:
 
 ```text
 # The host's files, live:
-instance files : Environment.Files { send FilesRoot { path: "/var/www" } }
+instance files : Environment.Files { control / FilesRoot { path: "/var/www" } }
 
 # A snapshot, taken when the image is built:
 instance files : Packed.Files {
@@ -101,17 +101,17 @@ require listen : Listen {
 }
 require admin : Text            # no defaults: the host must give it
 
-instance net  : Environment.Tcp { send listen }
+instance net  : Environment.Tcp { control / listen }
 instance http : HttpServer {
-  write /admin admin
+  control /admin admin
 }
 ```
 
 - `require <name> : <Type>` declares a slot. Fields written in the block are
   defaults, checked like any message literal. Fields left out must come from
   the host. No block, or an empty one, means every field must.
-- A slot's name can stand wherever a message can: in `send` and as a startup
-  request's body. It can't change mounts or instance types, so a built image's
+- A slot's name can stand wherever a message can: as a startup request's
+  body, including an environment object's `control /`. It can't change mounts or instance types, so a built image's
   views are fixed when it is built and `--check` stays a true upper bound.
 - A slot can't share its name with a message type or another slot.
 
@@ -146,7 +146,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.4 KB
+files  serves 9 built-in files, 76.9 KB
 ...
 ```
 

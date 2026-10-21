@@ -74,6 +74,7 @@ anything without understanding the body's type.
 | `create` | no | no | a message | `Entry` for what was made |
 | `remove` | no | yes | none | ok |
 | `invoke` | no | no | a message | anything: the escape hatch for RPC-shaped operations |
+| `control` | no | no | a message or none | anything; only the operator may send it |
 
 A **safe** verb doesn't change anything. A mount or exposure can be
 **read-only**, in which case the runtime answers every unsafe verb sent
@@ -81,9 +82,15 @@ through it with `read_only` and the server never sees it. The restriction only
 accumulates along a chain: something read-only stays read-only however many
 times it is re-bound or re-exposed.
 
+**`control`** is the operator's verb: the image sends it in its startup
+requests, and objects can't. When an object calls with `control`, the runtime
+answers `forbidden` without resolving the path. An object that accepts only
+`control` at a path leaves that path to whoever runs the image; HttpServer's
+`/hosts/<name>` is one.
+
 Replies carry a **status**: `ok`, `not_found`, `read_only`, `not_supported`,
-`is_directory`, `not_directory`, `exists`, `invalid` or `io`. A failure is just
-a reply with a status other than `ok`.
+`is_directory`, `not_directory`, `exists`, `invalid`, `io` or `forbidden`. A
+failure is just a reply with a status other than `ok`.
 
 A request may get several replies (a **stream**): each one says whether it is
 the last. `list` and `watch` use this, as does accepting connections. There
@@ -96,10 +103,10 @@ Message classes, `Writer`, `Reader` and `registerMessage` stay in
 types are in `"real-talk/env"`.
 
 ```ts
-export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
+export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
 export function isSafe(v: Verb): bool
 
-export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io }
+export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
 export enum Flag { None = 0, ReadOnly = 1 }
 
 /** A request made of our served tree. Keep it to answer later if needed. */
@@ -210,14 +217,15 @@ run(new Site())
 ## Environment objects
 
 Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration comes from the image alone,
-through a `send` in the instance block, so no object can open another port or
-move a files root.
+way to reach the outside world. Their configuration is a `control /` from the
+image, and objects can't send `control`, so no object can open another port
+or move a files root. Changing it while the image runs isn't supported yet:
+they answer `control` with `not_supported`.
 
 | Type | Config | Serves |
 |---|---|---|
-| `Environment.Console` | none | `Watch /`: a stream of `Line`, one per line of stdin, ending at EOF. `Write /`: prints the body |
-| `Environment.Tcp` | `Listen { address }` | `Read /address`: `Text` with the bound address. `Watch /accept`: a stream of `Accepted { conn }`. `Watch /<conn>`: a stream of `Data` received, ending when the peer closes. `Write /<conn>`: sends a `Data`'s bytes. `Remove /<conn>`: closes our side |
+| `Environment.Console` | none | `watch /`: a stream of `Line`, one per line of stdin, ending at EOF. `write /`: prints the body |
+| `Environment.Tcp` | `Listen { address }` | `read /address`: `Text` with the bound address. `watch /accept`: a stream of `Accepted { conn }`. `watch /<conn>`: a stream of `Data` received, ending when the peer closes. `write /<conn>`: sends a `Data`'s bytes. `remove /<conn>`: closes our side |
 | `Environment.Files` | `FilesRoot { path }` | `read`: `Data` with a MIME type from the extension. `stat`: `Info`. `list`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `read_only` |
 
 `Packed.Files` answers exactly as `Environment.Files` does, from files copied
@@ -237,7 +245,7 @@ JSON-ish.
 ## The image
 
 What's left of the image language is instances, the mounts that make up each
-view, environment config, and startup requests, plus the packing and slots
+view, and startup requests, plus the packing and slots
 described in [Building images](images.md):
 
 ```text
@@ -246,7 +254,7 @@ import { Greeting } from "./messages"
 require listen : Listen { address: "127.0.0.1:8080" }   # the host may change it
 
 instance cons  : Environment.Console
-instance net   : Environment.Tcp { send listen }
+instance net   : Environment.Tcp { control / listen }
 instance files : Packed.Files    { include "./public/" }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
@@ -257,7 +265,7 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/localhost Text { text: "/www" }   # a startup request to http itself
+  control /hosts/localhost Text { text: "/www" }   # a startup request to http itself
 }
 ```
 
@@ -266,7 +274,9 @@ instance http : HttpServer {
 - `<verb> <path> [Type { fields }]` is a request the image makes of this
   instance at startup, with `<path>` in its served tree. The image ignores
   replies, except that a failure is printed to stderr as a warning.
-- `send Type { fields }` is only for environment config.
+- `control` is the operator's verb, and these startup requests are the only
+  place an image sends it. An environment object's config is a `control /`
+  with its config message; objects can't send `control` themselves.
 - The conventional message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
   `Accepted`, `Listen`, `FilesRoot`) are always in scope. Importing them from
   `"real-talk/env"` is allowed but not needed. An import may redeclare one
@@ -284,7 +294,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.4 KB
+files  serves 9 built-in files, 76.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

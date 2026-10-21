@@ -55,6 +55,13 @@ verbs are modelled on HTTP's methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a `read` is
 simply wrong, as a GET that deletes a record is.
 
+One verb is about who may send it rather than what handling it implies.
+`control` is the operator's: the image sends it at startup to set its objects
+up, and one day so may a person attached to a running image. Objects can't
+send it; the runtime answers an object that tries with `forbidden`, and the
+request goes nowhere. So an object that accepts only `control` at some path
+is saying that only whoever runs the image decides what happens there.
+
 A failure is just an answer with a status other than `ok`, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.
@@ -79,16 +86,15 @@ features of the runtime. The console is at `/dev/cons`, the network at
 `/net/tcp`. An HTTP server is an object that turns HTTP requests into
 namespace requests and knows nothing about files; a static site is an object
 that forwards reads to a files tree it was given read-only, and never sees
-the bytes it serves. An earlier design routed typed messages between objects
-with its own routing syntax, and every new kind of routing needed more of
-it. Namespaces made that syntax unnecessary.
+the bytes it serves.
 
 ## The edge
 
 Some objects are built into the runtime. **Environment objects** are the
 console, TCP and the host's files, and they are the only way any object
-reaches the world outside the image. Their configuration comes from the image
-alone, so no object can open another port or move a files root.
+reaches the world outside the image. They are configured with `control`, so
+no object can open another port or access files not originally visible to the
+image.
 
 These are the side effects you specify. The question "what can this program
 do to the machine it runs on" has a short answer: whatever its environment
@@ -104,7 +110,7 @@ this site:
 ```text
 require listen : Listen { address: "127.0.0.1:8080" }
 
-instance net   : Environment.Tcp     { send listen }
+instance net   : Environment.Tcp     { control / listen }
 instance cons  : Environment.Console
 instance files : Packed.Files        { include "./public/" }
 
@@ -116,7 +122,7 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/* Text { text: "/www" }
+  control /hosts/* Text { text: "/www" }
 }
 ```
 
@@ -130,7 +136,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.6 KB
+files  serves 9 built-in files, 76.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

@@ -11,7 +11,7 @@
 
 require listen : Listen { address: "0.0.0.0:8080" }
 
-instance net   : Environment.Tcp     { send listen }
+instance net   : Environment.Tcp     { control / listen }
 instance cons  : Environment.Console               # the access log, which `fly logs` shows
 instance files : Packed.Files        { include "./public/" }
 
@@ -25,5 +25,5 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/* Text { text: "/www" }
+  control /hosts/* Text { text: "/www" }
 }

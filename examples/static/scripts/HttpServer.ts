@@ -14,8 +14,9 @@ const MAX_BODY: i32 = 1024 * 1024
  * POST is Invoke, at the host's root (a path in our view) plus the URL path.
  * The answer becomes the response. It knows nothing about files.
  *
- * Its own tree is /hosts/<name>: write a Text holding a path in our view to
- * serve that host from there. `*` is used for any host not listed. Every
+ * Its own tree is /hosts/<name>, which only the operator sets: control it
+ * with a Text holding a path in our view to serve that host from there, or
+ * with no body to stop serving it. `*` is used for any host not listed. Every
  * response is logged to /dev/cons. One request per connection; every
  * response closes it.
  */
@@ -44,18 +45,18 @@ class HttpServer extends Server {
     const name = req.path.startsWith("/hosts/") ? req.path.substring(7).toLowerCase() : ""
     if (name.length == 0 || name.includes("/")) {
       req.fail(Status.NotFound)
-    } else if (req.verb == Verb.Write && body instanceof Text) {
+    } else if (req.verb == Verb.Control && body instanceof Text) {
       this.hosts.set(name, (body as Text).text)
       req.end()
-    } else if (req.verb == Verb.Write) {
+    } else if (req.verb == Verb.Control && body === null) {
+      this.hosts.delete(name)
+      req.end()
+    } else if (req.verb == Verb.Control) {
       req.fail(Status.Invalid)
     } else if (!this.hosts.has(name)) {
       req.fail(Status.NotFound)
     } else if (req.verb == Verb.Read) {
       req.reply(new Text(this.hosts.get(name)))
-    } else if (req.verb == Verb.Remove) {
-      this.hosts.delete(name)
-      req.end()
     } else {
       req.fail(Status.NotSupported)
     }
@@ -213,6 +214,8 @@ class Respond extends Then {
       this.send(404, "Not Found", plain, text("404 Not Found\n"))
     } else if (res.status == Status.ReadOnly || res.status == Status.NotSupported) {
       this.send(405, "Method Not Allowed", "Allow: GET, HEAD\r\n" + plain, text("405 Method Not Allowed\n"))
+    } else if (res.status == Status.Forbidden) {
+      this.send(403, "Forbidden", plain, text("403 Forbidden\n"))
     } else if (res.status == Status.Invalid) {
       this.send(400, "Bad Request", plain, text("400 Bad Request\n"))
     } else if (res.status != Status.Ok) {

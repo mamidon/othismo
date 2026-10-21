@@ -51,8 +51,6 @@ pub struct Instance {
     /// e.g. `Environment.Console`.
     pub type_name: Ident,
     pub mounts: Vec<Mount>,
-    /// `send T { ... }`: environment config.
-    pub config: Vec<Body>,
     /// `<verb> <path> [T { ... }]`: startup requests to this instance.
     pub requests: Vec<Request>,
     /// `include "<path>" [at <path>]`: files to pack into the image.
@@ -251,7 +249,7 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
 const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
 
 /// Words that start a member of an instance block, besides the verbs.
-const MEMBERS: &[&str] = &["mount", "send", "include"];
+const MEMBERS: &[&str] = &["mount", "include"];
 
 struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -366,7 +364,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let type_name = self.ident("instance type", true)?;
-        let mut inst = Instance { name, type_name, mounts: vec![], config: vec![], requests: vec![], includes: vec![] };
+        let mut inst = Instance { name, type_name, mounts: vec![], requests: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
@@ -376,7 +374,7 @@ impl Parser {
             let word = match tok {
                 Tok::RBrace => return Ok(inst),
                 Tok::Ident(word) => word,
-                other => bail!("{pos}: expected `mount`, `send`, `include`, a verb or `}}`, found {other}"),
+                other => bail!("{pos}: expected `mount`, `include`, a verb or `}}`, found {other}"),
             };
             if word == "mount" {
                 let target = self.ident("instance name", false)?;
@@ -386,8 +384,6 @@ impl Parser {
                     self.next();
                 }
                 inst.mounts.push(Mount { target, at, read_only });
-            } else if word == "send" {
-                inst.config.push(self.body()?);
             } else if word == "include" {
                 let source = match self.next() {
                     (Tok::Str(s), _) => s,
@@ -404,12 +400,13 @@ impl Parser {
                 let path = self.path()?;
                 let body = match self.peek() {
                     Tok::Ident(w) if !MEMBERS.contains(&w.as_str()) && Verb::from_keyword(w).is_none() => Some(self.body()?),
+                    Tok::LBrace => Some(self.body()?),
                     _ => None,
                 };
                 inst.requests.push(Request { verb, verb_pos: pos, path, body });
             } else {
                 let verbs: Vec<&str> = crate::ns::VERBS.iter().map(|v| v.keyword()).collect();
-                bail!("{pos}: expected `mount`, `send`, `include`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
+                bail!("{pos}: expected `mount`, `include`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
             }
         }
     }
@@ -496,7 +493,7 @@ mod tests {
             import { Tick } from "./other"
 
             instance cons : Environment.Console
-            instance net : Environment.Tcp { send Listen { address: "127.0.0.1:0" } }
+            instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }
             instance echo : Echo {
               mount cons /dev/cons
               mount net /net/tcp readonly
@@ -516,8 +513,8 @@ mod tests {
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].type_name.name, "Environment.Console");
         let net = &img.instances[1];
-        assert_eq!(net.config[0].type_name.name, "Listen");
-        assert_eq!(net.config[0].fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:0".into()));
+        assert_eq!((net.requests[0].verb, net.requests[0].path.path.as_str()), (Verb::Control, "/"));
+        assert_eq!(net.requests[0].body.as_ref().unwrap().type_name.name, "Listen");
 
         let echo = &img.instances[2];
         let mounts: Vec<_> = echo.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
@@ -542,14 +539,15 @@ mod tests {
         let img = parse(
             r#"require listen : Listen { address: "127.0.0.1:8080" }
             require admin : Text
-            instance net : Environment.Tcp { send listen }"#,
+            instance net : Environment.Tcp { control / listen }"#,
         )
         .unwrap();
         let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.body.type_name.name.as_str())).collect();
         assert_eq!(reqs, [("listen", "Listen"), ("admin", "Text")]);
         assert_eq!(img.requires[0].body.fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
         assert_eq!(img.requires[1].body.fields, None);
-        assert_eq!(img.instances[0].config[0].type_name.name, "listen", "a slot is used like a unit message");
+        let body = img.instances[0].requests[0].body.as_ref().unwrap();
+        assert_eq!(body.type_name.name, "listen", "a slot is used like a unit message");
         assert!(parse("require : Text").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
     }
@@ -603,7 +601,7 @@ mod tests {
 
     #[test]
     fn rejects_anonymous_messages() {
-        let err = parse("instance a : P { send { x: 1 } }").unwrap_err();
+        let err = parse("instance a : P { write /a { x: 1 } }").unwrap_err();
         assert!(err.to_string().contains("anonymous"), "{err}");
     }
 

@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// What a request asks for. Safe verbs never change anything.
+/// What a request asks for. Safe verbs never change anything. `Control` is
+/// the operator's: the image sends it, objects can't.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verb {
     Read,
@@ -21,10 +22,20 @@ pub enum Verb {
     Create,
     Remove,
     Invoke,
+    Control,
 }
 
-pub const VERBS: [Verb; 8] =
-    [Verb::Read, Verb::Stat, Verb::List, Verb::Watch, Verb::Write, Verb::Create, Verb::Remove, Verb::Invoke];
+pub const VERBS: [Verb; 9] = [
+    Verb::Read,
+    Verb::Stat,
+    Verb::List,
+    Verb::Watch,
+    Verb::Write,
+    Verb::Create,
+    Verb::Remove,
+    Verb::Invoke,
+    Verb::Control,
+];
 
 impl Verb {
     pub fn from_i32(v: i32) -> Option<Verb> {
@@ -46,6 +57,7 @@ impl Verb {
             Verb::Create => "create",
             Verb::Remove => "remove",
             Verb::Invoke => "invoke",
+            Verb::Control => "control",
         }
     }
 
@@ -72,9 +84,10 @@ pub enum Status {
     Exists,
     Invalid,
     Io,
+    Forbidden,
 }
 
-const STATUSES: [Status; 9] = [
+const STATUSES: [Status; 10] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -84,6 +97,7 @@ const STATUSES: [Status; 9] = [
     Status::Exists,
     Status::Invalid,
     Status::Io,
+    Status::Forbidden,
 ];
 
 impl Status {
@@ -103,6 +117,7 @@ impl Status {
             Status::Exists => "exists",
             Status::Invalid => "invalid",
             Status::Io => "io",
+            Status::Forbidden => "forbidden",
         }
     }
 }
@@ -433,8 +448,8 @@ mod tests {
             assert_eq!(Verb::from_i32(i as i32), Some(*v));
             assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
         }
-        assert_eq!(Verb::from_i32(8), None);
+        assert_eq!(Verb::from_i32(9), None);
         assert_eq!(Status::from_i32(-1), None);
-        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe());
+        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Control.is_safe());
     }
 }

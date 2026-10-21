@@ -166,15 +166,27 @@ anything without understanding the body&#39;s type.</p>
 <td>a message</td>
 <td>anything: the escape hatch for RPC-shaped operations</td>
 </tr>
+<tr>
+<td><code>control</code></td>
+<td>no</td>
+<td>no</td>
+<td>a message or none</td>
+<td>anything; only the operator may send it</td>
+</tr>
 </tbody></table></div>
 <p>A <strong>safe</strong> verb doesn&#39;t change anything. A mount or exposure can be
 <strong>read-only</strong>, in which case the runtime answers every unsafe verb sent
 through it with <code>read_only</code> and the server never sees it. The restriction only
 accumulates along a chain: something read-only stays read-only however many
 times it is re-bound or re-exposed.</p>
+<p><strong><code>control</code></strong> is the operator&#39;s verb: the image sends it in its startup
+requests, and objects can&#39;t. When an object calls with <code>control</code>, the runtime
+answers <code>forbidden</code> without resolving the path. An object that accepts only
+<code>control</code> at a path leaves that path to whoever runs the image; HttpServer&#39;s
+<code>/hosts/&lt;name&gt;</code> is one.</p>
 <p>Replies carry a <strong>status</strong>: <code>ok</code>, <code>not_found</code>, <code>read_only</code>, <code>not_supported</code>,
-<code>is_directory</code>, <code>not_directory</code>, <code>exists</code>, <code>invalid</code> or <code>io</code>. A failure is just
-a reply with a status other than <code>ok</code>.</p>
+<code>is_directory</code>, <code>not_directory</code>, <code>exists</code>, <code>invalid</code>, <code>io</code> or <code>forbidden</code>. A
+failure is just a reply with a status other than <code>ok</code>.</p>
 <p>A request may get several replies (a <strong>stream</strong>): each one says whether it is
 the last. <code>list</code> and <code>watch</code> use this, as does accepting connections. There
 is no other streaming or subscription mechanism.</p>
@@ -182,10 +194,10 @@ is no other streaming or subscription mechanism.</p>
 <p>Message classes, <code>Writer</code>, <code>Reader</code> and <code>registerMessage</code> stay in
 <code>&quot;real-talk&quot;</code>. The namespace SDK is <code>&quot;real-talk/ns&quot;</code>. The conventional message
 types are in <code>&quot;real-talk/env&quot;</code>.</p>
-<pre><code class="language-ts">export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
+<pre><code class="language-ts">export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
 export function isSafe(v: Verb): bool
 
-export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io }
+export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
 export enum Flag { None = 0, ReadOnly = 1 }
 
 /** A request made of our served tree. Keep it to answer later if needed. */
@@ -291,9 +303,10 @@ run(new Site())
 </code></pre>
 <h2 id="environment-objects">Environment objects</h2>
 <p>Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration comes from the image alone,
-through a <code>send</code> in the instance block, so no object can open another port or
-move a files root.</p>
+way to reach the outside world. Their configuration is a <code>control /</code> from the
+image, and objects can&#39;t send <code>control</code>, so no object can open another port
+or move a files root. Changing it while the image runs isn&#39;t supported yet:
+they answer <code>control</code> with <code>not_supported</code>.</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -305,12 +318,12 @@ move a files root.</p>
 <tbody><tr>
 <td><code>Environment.Console</code></td>
 <td>none</td>
-<td><code>Watch /</code>: a stream of <code>Line</code>, one per line of stdin, ending at EOF. <code>Write /</code>: prints the body</td>
+<td><code>watch /</code>: a stream of <code>Line</code>, one per line of stdin, ending at EOF. <code>write /</code>: prints the body</td>
 </tr>
 <tr>
 <td><code>Environment.Tcp</code></td>
 <td><code>Listen { address }</code></td>
-<td><code>Read /address</code>: <code>Text</code> with the bound address. <code>Watch /accept</code>: a stream of <code>Accepted { conn }</code>. <code>Watch /&lt;conn&gt;</code>: a stream of <code>Data</code> received, ending when the peer closes. <code>Write /&lt;conn&gt;</code>: sends a <code>Data</code>&#39;s bytes. <code>Remove /&lt;conn&gt;</code>: closes our side</td>
+<td><code>read /address</code>: <code>Text</code> with the bound address. <code>watch /accept</code>: a stream of <code>Accepted { conn }</code>. <code>watch /&lt;conn&gt;</code>: a stream of <code>Data</code> received, ending when the peer closes. <code>write /&lt;conn&gt;</code>: sends a <code>Data</code>&#39;s bytes. <code>remove /&lt;conn&gt;</code>: closes our side</td>
 </tr>
 <tr>
 <td><code>Environment.Files</code></td>
@@ -331,14 +344,14 @@ a message whose only field is <code>text: string</code> verbatim, and anything e
 JSON-ish.</p>
 <h2 id="the-image">The image</h2>
 <p>What&#39;s left of the image language is instances, the mounts that make up each
-view, environment config, and startup requests, plus the packing and slots
+view, and startup requests, plus the packing and slots
 described in <a href="/images/">Building images</a>:</p>
 <pre><code class="language-text">import { Greeting } from &quot;./messages&quot;
 
 require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
 
 instance cons  : Environment.Console
-instance net   : Environment.Tcp { send listen }
+instance net   : Environment.Tcp { control / listen }
 instance files : Packed.Files    { include &quot;./public/&quot; }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
@@ -349,7 +362,7 @@ instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
-  write /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
+  control /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
 }
 </code></pre>
 <ul>
@@ -358,7 +371,9 @@ at <code>&lt;path&gt;</code> in this instance&#39;s view.</li>
 <li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes of this
 instance at startup, with <code>&lt;path&gt;</code> in its served tree. The image ignores
 replies, except that a failure is printed to stderr as a warning.</li>
-<li><code>send Type { fields }</code> is only for environment config.</li>
+<li><code>control</code> is the operator&#39;s verb, and these startup requests are the only
+place an image sends it. An environment object&#39;s config is a <code>control /</code>
+with its config message; objects can&#39;t send <code>control</code> themselves.</li>
 <li>The conventional message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
 <code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope. Importing them from
 <code>&quot;real-talk/env&quot;</code> is allowed but not needed. An import may redeclare one
@@ -373,7 +388,7 @@ Read-only flags carry through the closure. <code>real_talk --check</code> prints
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 75.4 KB
+files  serves 9 built-in files, 76.9 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

@@ -491,7 +491,12 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             } else {
                 0
             };
-            let to = path.ok_or(Status::Invalid).and_then(|p| shared.ns.resolve(me, &p));
+            // Only the operator controls; an object's control never leaves it.
+            let to = match path {
+                _ if verb == Verb::Control => Err(Status::Forbidden),
+                None => Err(Status::Invalid),
+                Some(p) => shared.ns.resolve(me, &p),
+            };
             shared.request(Requester::Wasm { inst: me, ticket }, to, verb, body);
             HostResult::Ok(ticket as i32)
         },

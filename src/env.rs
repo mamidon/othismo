@@ -169,6 +169,11 @@ impl EnvObject {
         out: &mut dyn Write,
         messages: &BTreeMap<String, MessageType>,
     ) -> Result<Vec<Reply>> {
+        // Their config is taken from the image's `control /` before they are
+        // made; changing it while they run isn't supported yet.
+        if verb == Verb::Control {
+            return Ok(vec![Reply::fail(req, Status::NotSupported)]);
+        }
         Ok(match self {
             EnvObject::Console(c) => c.serve(req, verb, path, body, out, messages)?,
             EnvObject::Tcp(t) => t.serve(req, verb, path, body),

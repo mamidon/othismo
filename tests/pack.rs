@@ -235,8 +235,8 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require root : FilesRoot
-        instance net   : Environment.Tcp   { send listen }
-        instance files : Environment.Files { send root }
+        instance net   : Environment.Tcp   { control / listen }
+        instance files : Environment.Files { control / root }
         instance cons  : Environment.Console"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
@@ -264,7 +264,7 @@ fn the_cli_layers_value_files_then_set() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info
-        instance net : Environment.Tcp { send listen }"#,
+        instance net : Environment.Tcp { control / listen }"#,
     )
     .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");

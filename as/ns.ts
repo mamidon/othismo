@@ -45,14 +45,15 @@ declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, fla
 // ---------------------------------------------------------------------------
 // Verbs, statuses, flags (numbered as in src/ns.rs)
 
-export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
+/** Control is the operator's verb: the image may send it, objects can't. */
+export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
 
 /** Safe verbs never change anything; read-only mounts let only these through. */
 export function isSafe(v: Verb): bool {
   return v < Verb.Write;
 }
 
-export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io }
+export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
 
 export enum Flag { None = 0, ReadOnly = 1 }
 

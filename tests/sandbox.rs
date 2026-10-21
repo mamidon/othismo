@@ -67,7 +67,7 @@ fn reply(body: Message) -> Act {
 }
 
 const INBOX: usize = 65536;
-const STATUSES: [Status; 9] = [
+const STATUSES: [Status; 10] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -77,6 +77,7 @@ const STATUSES: [Status; 9] = [
     Status::Exists,
     Status::Invalid,
     Status::Io,
+    Status::Forbidden,
 ];
 
 /// Builds the data segment and code for a script.
@@ -284,6 +285,21 @@ fn read_only_mounts_refuse_unsafe_verbs() {
 }
 
 #[test]
+fn only_the_image_controls() {
+    let a = Script {
+        start: vec![Act::Call { verb: Verb::Control, path: "/b/x", body: Some(text("x")), expect: true }],
+        answer: Some(Steps::Each(vec![Act::Report("/out")])),
+        ..Default::default()
+    };
+    let b = Script {
+        serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
+        ..Default::default()
+    };
+    let f = fixture("control", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "mount cons /out  control /y Ping")], "");
+    assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's control, never a's");
+}
+
+#[test]
 fn replies_stream_until_done() {
     let a = Script {
         start: vec![call(Verb::List, "/b")],
@@ -416,7 +432,7 @@ const FILES_OUTPUT: &str = "Data {\"mime\": \"text/plain; charset=utf-8\", \"dat
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Environment.Files { send FilesRoot { path: \"public\" } }";
+    let files = "instance files : Environment.Files { control / FilesRoot { path: \"public\" } }";
     let f = fixture("files", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");

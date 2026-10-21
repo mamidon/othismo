@@ -156,7 +156,7 @@ mod tests {
     const IMAGE: &str = r#"
         require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info { kind: "file" }
-        instance net : Environment.Tcp { send listen }
+        instance net : Environment.Tcp { control / listen }
         instance a : A { write /info info  write /x Text { text: "literal" } }
     "#;
 

@@ -172,17 +172,30 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
             bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, ty.name);
         }
         let builtin = BUILTINS.iter().find(|(name, _)| *name == ty.name);
+        // A built-in object's config is the image's `control` of it, taken
+        // before the object is made rather than sent as a request.
+        let (controls, requests): (Vec<_>, Vec<_>) = if builtin.is_some() || ty.name == PACKED {
+            inst.requests.iter().partition(|r| r.verb == Verb::Control)
+        } else {
+            (vec![], inst.requests.iter().collect())
+        };
         let kind = match builtin {
             Some(&(name, config_type)) => {
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
-                let needs = || err_at(&inst.name, format!("{name} needs exactly one config message, `send {t} {{ ... }}`", t = config_type.unwrap()));
-                config = match (config_type, inst.config.as_slice()) {
+                if let Some(c) = controls.iter().find(|c| c.path.path != "/") {
+                    bail!("{}: {name} is configured at its root, with `control /`", c.path.pos);
+                }
+                let needs = || {
+                    let t = config_type.unwrap();
+                    err_at(&inst.name, format!("{name} needs exactly one config message, `control / {t} {{ ... }}`"))
+                };
+                config = match (config_type, controls.as_slice()) {
                     (None, []) => None,
-                    (None, [c, ..]) => bail!(err_at(&c.type_name, format!("{name} takes no config"))),
+                    (None, [c, ..]) => bail!("{}: {name} takes no config", c.verb_pos),
                     (Some(t), [c]) => {
-                        let arg = body_arg(&messages, &slots, c)?;
+                        let arg = body_arg(&messages, &slots, c.body.as_ref().ok_or_else(needs)?)?;
                         if arg_type(&slots, &arg) != t {
                             bail!(needs());
                         }
@@ -196,8 +209,8 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{PACKED} has no view to mount into; it only serves")));
                 }
-                if let Some(c) = inst.config.first() {
-                    bail!(err_at(&c.type_name, format!("{PACKED} takes no config; `include` the files it serves")));
+                if let Some(c) = controls.first() {
+                    bail!("{}: {PACKED} takes no config; `include` the files it serves", c.verb_pos);
                 }
                 let mut includes = vec![];
                 for inc in &inst.includes {
@@ -217,15 +230,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                 bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {})", ty.name, known.join(", "))));
             }
             None if ty.name.contains('.') => bail!(err_at(ty, format!("`{}` is not a module name", ty.name))),
-            None => {
-                if let Some(c) = inst.config.first() {
-                    bail!(err_at(
-                        &c.type_name,
-                        "`send` configures environment objects; use a startup request such as `write /path T { ... }`"
-                    ));
-                }
-                Kind::Wasm { type_name: ty.name.clone() }
-            }
+            None => Kind::Wasm { type_name: ty.name.clone() },
         };
 
         let mut mounts: Vec<MountDecl> = vec![];
@@ -242,7 +247,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         }
 
         let mut startup = vec![];
-        for r in &inst.requests {
+        for r in requests {
             let path = ns::clean(&r.path.path)
                 .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
             let body = r.body.as_ref().map(|b| body_arg(&messages, &slots, b)).transpose()?;
@@ -502,7 +507,6 @@ mod tests {
         assert!(err(&inst("invoke / Missing")).contains("unknown message type"));
         assert!(err(&inst("write / Blob { data: 1 }")).contains("is ArrayBuffer"));
         assert!(err(&inst("read /../x")).contains("not a clean absolute path"));
-        assert!(err(&inst("send Ping")).contains("use a startup request"));
     }
 
     #[test]
@@ -516,8 +520,8 @@ mod tests {
     #[test]
     fn environment_objects_take_config_from_the_image() {
         let p = check_src(
-            r#"instance net : Environment.Tcp { send Listen { address: "127.0.0.1:0" } }
-            instance fs : Environment.Files { send FilesRoot { path: "public" } }"#,
+            r#"instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }
+            instance fs : Environment.Files { control / FilesRoot { path: "public" } }"#,
         )
         .unwrap();
         assert_eq!(p.instances[0].kind, Kind::Tcp);
@@ -527,11 +531,13 @@ mod tests {
         assert!(p.instances[0].startup.is_empty(), "config isn't a request");
 
         let e = err("instance net : Environment.Tcp");
-        assert!(e.contains("needs exactly one config message, `send Listen"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp { send Listen { address: "a" } send Listen { address: "b" } }"#);
+        assert!(e.contains("needs exactly one config message, `control / Listen"), "{e}");
+        let e = err(r#"instance net : Environment.Tcp { control / Listen { address: "a" } control / Listen { address: "b" } }"#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(r#"instance c : Environment.Console { send Listen { address: "a" } }"#);
+        let e = err(r#"instance c : Environment.Console { control / Listen { address: "a" } }"#);
         assert!(e.contains("takes no config"), "{e}");
+        let e = err(r#"instance net : Environment.Tcp { control /x Listen { address: "a" } }"#);
+        assert!(e.contains("configured at its root"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
     }
@@ -553,7 +559,7 @@ mod tests {
         assert!(e.contains("`include` packs files into a Packed.Files instance, and `s` is a Site"), "{e}");
         let e = err(r#"instance f : Packed.Files { include "x" at /../y }"#);
         assert!(e.contains("not a clean absolute path"), "{e}");
-        let e = err(r#"instance f : Packed.Files { send FilesRoot { path: "." } }"#);
+        let e = err(r#"instance f : Packed.Files { control / FilesRoot { path: "." } }"#);
         assert!(e.contains("takes no config"), "{e}");
         let e = err(r#"instance a : A instance f : Packed.Files { mount a /a }"#);
         assert!(e.contains("only serves"), "{e}");
@@ -567,7 +573,7 @@ mod tests {
             r#"{HEADER}
             require listen : Listen
             require config : Config {{ name: "x", count: 3 }}
-            instance net : Environment.Tcp {{ send listen }}
+            instance net : Environment.Tcp {{ control / listen }}
             instance e : Echo {{ write /config config }}"#
         ))
         .unwrap();
@@ -589,8 +595,8 @@ mod tests {
         assert!(e.contains("unknown message type `Nope`"), "{e}");
         let e = err(&inst("require g : Greeting", "write / g { text: \"x\" }"));
         assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
-        let e = err("require t : Text instance net : Environment.Tcp { send t }");
-        assert!(e.contains("needs exactly one config message, `send Listen"), "{e}");
+        let e = err("require t : Text instance net : Environment.Tcp { control / t }");
+        assert!(e.contains("needs exactly one config message, `control / Listen"), "{e}");
     }
 
     #[test]
@@ -613,7 +619,7 @@ mod tests {
     fn describes_views_and_reach() {
         let p = check_src(
             r#"instance cons : Environment.Console
-            instance files : Environment.Files { send FilesRoot { path: "." } }
+            instance files : Environment.Files { control / FilesRoot { path: "." } }
             instance site : Site { mount files /files readonly }
             instance http : Http { mount site /www  mount cons /dev/cons }"#,
         )
