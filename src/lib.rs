@@ -6,6 +6,7 @@ pub mod env;
 pub mod image;
 pub mod messages;
 pub mod ns;
+pub mod pack;
 pub mod render;
 pub mod runtime;
 pub mod wire;

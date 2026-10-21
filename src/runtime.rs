@@ -1,4 +1,4 @@
-//! Instantiates a checked [`Program`] and runs its message loop.
+//! Instantiates a built [`Pack`] and runs its message loop.
 //!
 //! Every message is a request to a path or a reply to one. A request is
 //! resolved in the sender's view (see [`crate::ns`]) when it is made, and
@@ -13,6 +13,7 @@
 //! module asks for is refused before it is instantiated.
 
 use crate::check::{Kind, Program};
+use crate::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
 use crate::messages::MessageType;
 use crate::ns::{self, Namespace, Resolved, Status, Verb};
@@ -228,16 +229,17 @@ pub struct Runtime<'p> {
     output: Box<dyn Write>,
 }
 
-/// Runs `program` until no outside event can arrive any more (stdin is
+/// Runs `pack` until no outside event can arrive any more (stdin is
 /// exhausted and nothing is listening) and every queued message is delivered.
-pub fn run(program: &Program, io: Io, options: Options) -> Result<()> {
-    Runtime::new(program, io, options)?.run()
+pub fn run(pack: &Pack, io: Io, options: Options) -> Result<()> {
+    Runtime::new(pack, io, options)?.run()
 }
 
 impl<'p> Runtime<'p> {
     /// Builds every view and instantiates every object. Requests made by
     /// module top-level code are queued, not yet delivered.
-    pub fn new(program: &'p Program, io: Io, options: Options) -> Result<Runtime<'p>> {
+    pub fn new(pack: &'p Pack, io: Io, options: Options) -> Result<Runtime<'p>> {
+        let program = &pack.program;
         let n = program.instances.len();
         let mut ns = Namespace::new(n);
         for (i, inst) in program.instances.iter().enumerate() {
@@ -262,8 +264,9 @@ impl<'p> Runtime<'p> {
         let mut objects = vec![];
         for (i, inst) in program.instances.iter().enumerate() {
             let obj = match &inst.kind {
-                Kind::Wasm { type_name, module } => {
+                Kind::Wasm { type_name } => {
                     let state = HostState { me: i, shared: shared.clone() };
+                    let module = &pack.modules[type_name];
                     Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))
                 }
                 kind => Object::Env(
@@ -391,14 +394,12 @@ fn instantiate(
     linker: &Linker<HostState>,
     name: &str,
     type_name: &str,
-    path: &std::path::Path,
+    bytes: &[u8],
     state: HostState,
 ) -> Result<WasmObject> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("instance `{name}`: cannot read {} (did you compile {type_name}.ts?)", path.display()))?;
     let module = Module::new(engine, bytes)
         .map_err(anyhow::Error::from)
-        .with_context(|| format!("instance `{name}`: invalid module {}", path.display()))?;
+        .with_context(|| format!("instance `{name}`: invalid module {type_name}"))?;
     for imp in module.imports() {
         if !ALLOWED_IMPORTS.contains(&(imp.module(), imp.name())) {
             bail!(

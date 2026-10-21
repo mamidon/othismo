@@ -1,4 +1,4 @@
-use real_talk::{check, runtime};
+use real_talk::{check, pack, runtime};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -32,14 +32,11 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    let result = check::load(&image).and_then(|program| {
-        if check_only {
-            print!("{}", check::describe(&program));
-            Ok(())
-        } else {
-            runtime::run(&program, runtime::Io::std(), options)
-        }
-    });
+    let result = if check_only {
+        check::load(&image).map(|program| print!("{}", check::describe(&program)))
+    } else {
+        pack::build(&image).and_then(|pack| runtime::run(&pack, runtime::Io::std(), options))
+    };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

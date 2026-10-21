@@ -56,7 +56,7 @@ pub struct Startup {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     /// `instance x : Name` runs `scripts/Name.wasm`.
-    Wasm { type_name: String, module: PathBuf },
+    Wasm { type_name: String },
     Console,
     /// Listens on `address` (from the image's `send Listen`).
     Tcp { address: String },
@@ -126,7 +126,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                         "`send` configures environment objects; use a startup request such as `write /path T { ... }`"
                     ));
                 }
-                Kind::Wasm { type_name: ty.name.clone(), module: dir.join("scripts").join(format!("{}.wasm", ty.name)) }
+                Kind::Wasm { type_name: ty.name.clone() }
             }
         };
 
@@ -324,8 +324,7 @@ mod tests {
         let p = check_src(&format!("{HEADER} instance echo : Echo {{ mount cons /dev/cons }}")).unwrap();
         assert_eq!(p.instances.len(), 2);
         assert_eq!(p.instances[0].kind, Kind::Console);
-        assert!(matches!(&p.instances[1].kind, Kind::Wasm { type_name, module }
-            if type_name == "Echo" && module.ends_with("scripts/Echo.wasm")));
+        assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
         assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
         assert!(p.messages.contains_key("Line"), "runtime types are always in scope");
         assert!(p.messages.contains_key("Greeting"));
