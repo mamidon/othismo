@@ -4,6 +4,7 @@ mod common;
 
 use common::Fixture;
 use real_talk::pack::{self, BuildOptions, Pack};
+use real_talk::slots::{self, Given, GivenValue};
 use real_talk::tree::Node;
 
 /// Modules aren't run here, so any bytes do.
@@ -219,4 +220,33 @@ fn packed_trees_survive_sealing_and_unpacking() {
     opened.unpack(&out).unwrap();
     assert_eq!(std::fs::read_to_string(out.join("files/files/a.txt")).unwrap(), "A");
     assert!(out.join("files/files/empty").is_dir());
+}
+
+#[test]
+fn slots_are_sealed_unbound_and_described_once_bound() {
+    let f = Fixture::new("pack_slots");
+    f.file(
+        "test.img",
+        r#"require listen : Listen { address: "127.0.0.1:8080" }
+        require root : FilesRoot
+        instance net   : Environment.Tcp   { send listen }
+        instance files : Environment.Files { send root }
+        instance cons  : Environment.Console"#,
+    );
+    let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
+    let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
+    let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &[]).unwrap_err());
+    assert!(e.ends_with("root.path: required, not provided"), "{e}");
+
+    let given = Given { origin: "--set".into(), slot: "root".into(), field: "path".into(), value: GivenValue::Text("www".into()) };
+    slots::bind(&mut opened.program, &[given]).unwrap();
+    assert_eq!(
+        pack::describe(&opened),
+        "slot listen : Listen { address: \"127.0.0.1:8080\" (default) }\n\
+         slot root : FilesRoot { path: \"www\" (--set) }\n\
+         \n\
+         net    listens on 127.0.0.1:8080\n\
+         files  reads host files under www\n\
+         cons   reads stdin, writes stdout\n"
+    );
 }

@@ -286,7 +286,8 @@ impl<'p> Runtime<'p> {
             for s in &inst.startup {
                 let what = format!("{} {} {}", s.verb.keyword(), inst.name, s.path);
                 let to = Ok(Resolved { inst: i, path: s.path.clone(), read_only: false });
-                self.shared.borrow_mut().request(Requester::Image(what), to, s.verb, s.body.clone());
+                let body = s.body.as_ref().map(|b| b.message().cloned()).transpose()?;
+                self.shared.borrow_mut().request(Requester::Image(what), to, s.verb, body);
             }
         }
         self.drain()?;

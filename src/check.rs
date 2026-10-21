@@ -25,6 +25,8 @@ const ENV_SOURCE: &str = include_str!("../as/env.ts");
 pub struct Program {
     /// Every message type the image knows: the runtime's plus its imports.
     pub messages: BTreeMap<String, MessageType>,
+    /// Values the host provides, in image order; [`Arg::Slot`] refers to them by index.
+    pub slots: Vec<Slot>,
     /// Instances in image order; everything else refers to them by index.
     pub instances: Vec<Instance>,
     /// The files the image was checked from: the `.img` and its imports.
@@ -37,6 +39,8 @@ pub struct Program {
 pub struct Instance {
     pub name: String,
     pub kind: Kind,
+    /// An environment object's config.
+    pub config: Option<Arg>,
     /// The initial view.
     pub mounts: Vec<MountDecl>,
     /// Requests the image makes of this instance at startup.
@@ -56,7 +60,38 @@ pub struct Startup {
     pub verb: Verb,
     /// Clean, in the instance's served tree.
     pub path: String,
-    pub body: Option<Message>,
+    pub body: Option<Arg>,
+}
+
+/// A message the image gives, or a slot standing for one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Arg {
+    Message(Message),
+    Slot(usize),
+}
+
+impl Arg {
+    /// The message, once any slot has been bound (see [`crate::slots::bind`]).
+    pub fn message(&self) -> Result<&Message> {
+        match self {
+            Arg::Message(m) => Ok(m),
+            Arg::Slot(i) => bail!("slot {i} has no value; the image hasn't been bound"),
+        }
+    }
+}
+
+/// `require <name> : <Type> { defaults }`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Slot {
+    pub name: String,
+    pub type_name: String,
+    /// The image's defaults: some, all or none of the type's fields.
+    pub defaults: Document,
+    /// Once bound: the value, and where each field came from, in field order.
+    #[serde(skip)]
+    pub value: Option<Message>,
+    #[serde(skip)]
+    pub origins: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,11 +99,11 @@ pub enum Kind {
     /// `instance x : Name` runs `scripts/Name.wasm`.
     Wasm { type_name: String },
     Console,
-    /// Listens on `address` (from the image's `send Listen`).
-    Tcp { address: String },
-    /// Serves files under `root` (from `send FilesRoot`, as written; a
-    /// relative root is relative to the image).
-    Files { root: String },
+    /// Listens on the address in its `Listen` config.
+    Tcp,
+    /// Serves files under the path in its `FilesRoot` config. A relative
+    /// path is relative to the image.
+    Files,
     /// Serves the files its includes packed into the image, in order.
     Packed { includes: Vec<IncludeDecl> },
 }
@@ -107,6 +142,19 @@ pub fn env_messages() -> BTreeMap<String, MessageType> {
 pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     let (messages, sources) = resolve_imports(img, dir)?;
 
+    let mut slots: Vec<Slot> = vec![];
+    for req in &img.requires {
+        let name = &req.name.name;
+        if messages.contains_key(name) {
+            bail!(err_at(&req.name, format!("`{name}` is a message type; a slot needs a name of its own")));
+        }
+        if slots.iter().any(|s| s.name == *name) {
+            bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
+        }
+        let (type_name, defaults) = body_fields(&messages, &req.body, false)?;
+        slots.push(Slot { name: name.clone(), type_name, defaults, value: None, origins: vec![] });
+    }
+
     let mut index: HashMap<&str, usize> = HashMap::new();
     for (i, inst) in img.instances.iter().enumerate() {
         if index.insert(&inst.name.name, i).is_some() {
@@ -117,6 +165,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     let mut instances = vec![];
     for inst in &img.instances {
         let ty = &inst.type_name;
+        let mut config = None;
         if ty.name != PACKED
             && let Some(inc) = inst.includes.first()
         {
@@ -128,15 +177,20 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
-                let config = match (config_type, inst.config.as_slice()) {
+                let needs = || err_at(&inst.name, format!("{name} needs exactly one config message, `send {t} {{ ... }}`", t = config_type.unwrap()));
+                config = match (config_type, inst.config.as_slice()) {
                     (None, []) => None,
                     (None, [c, ..]) => bail!(err_at(&c.type_name, format!("{name} takes no config"))),
-                    (Some(t), [c]) if c.type_name.name == t => Some(body_message(&messages, c)?),
-                    (Some(t), _) => {
-                        bail!(err_at(&inst.name, format!("{name} needs exactly one config message, `send {t} {{ ... }}`")))
+                    (Some(t), [c]) => {
+                        let arg = body_arg(&messages, &slots, c)?;
+                        if arg_type(&slots, &arg) != t {
+                            bail!(needs());
+                        }
+                        Some(arg)
                     }
+                    (Some(_), _) => bail!(needs()),
                 };
-                builtin_kind(name, config.as_ref())
+                builtin_kind(name)
             }
             None if ty.name == PACKED => {
                 if let Some(m) = inst.mounts.first() {
@@ -191,14 +245,14 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         for r in &inst.requests {
             let path = ns::clean(&r.path.path)
                 .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
-            let body = r.body.as_ref().map(|b| body_message(&messages, b)).transpose()?;
+            let body = r.body.as_ref().map(|b| body_arg(&messages, &slots, b)).transpose()?;
             startup.push(Startup { verb: r.verb, path, body });
         }
 
-        instances.push(Instance { name: inst.name.name.clone(), kind, mounts, startup });
+        instances.push(Instance { name: inst.name.name.clone(), kind, config, mounts, startup });
     }
 
-    Ok(Program { messages, instances, sources })
+    Ok(Program { messages, slots, instances, sources })
 }
 
 /// A summary of each instance's view and the most it can ever reach, for
@@ -242,12 +296,11 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
     out
 }
 
-fn builtin_kind(name: &str, config: Option<&Message>) -> Kind {
-    let config_str = |key: &str| config.and_then(|m| m.fields.get_str(key).ok()).unwrap_or_default().to_string();
+fn builtin_kind(name: &str) -> Kind {
     match name {
         CONSOLE => Kind::Console,
-        TCP => Kind::Tcp { address: config_str("address") },
-        FILES => Kind::Files { root: config_str("path") },
+        TCP => Kind::Tcp,
+        FILES => Kind::Files,
         other => unreachable!("unknown builtin {other}"),
     }
 }
@@ -307,7 +360,28 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<(BTreeMap<String, MessageT
     Ok((out, sources))
 }
 
-fn body_message(messages: &BTreeMap<String, MessageType>, body: &image::Body) -> Result<Message> {
+/// A message literal, or a slot's name standing alone.
+fn body_arg(messages: &BTreeMap<String, MessageType>, slots: &[Slot], body: &image::Body) -> Result<Arg> {
+    let tid = &body.type_name;
+    if let Some(i) = slots.iter().position(|s| s.name == tid.name) {
+        if body.fields.is_some() {
+            bail!(err_at(tid, format!("`{}` is a slot; its fields come from the host, so use it alone", tid.name)));
+        }
+        return Ok(Arg::Slot(i));
+    }
+    let (type_name, fields) = body_fields(messages, body, true)?;
+    Ok(Arg::Message(Message { type_name, fields }))
+}
+
+fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
+    match arg {
+        Arg::Message(m) => &m.type_name,
+        Arg::Slot(i) => &slots[*i].type_name,
+    }
+}
+
+/// A message literal's type and fields. With `complete`, every field must be given.
+fn body_fields(messages: &BTreeMap<String, MessageType>, body: &image::Body, complete: bool) -> Result<(String, Document)> {
     let tid = &body.type_name;
     let Some(ty) = messages.get(&tid.name) else {
         bail!(err_at(tid, format!("unknown message type `{}`; is it imported?", tid.name)));
@@ -315,33 +389,37 @@ fn body_message(messages: &BTreeMap<String, MessageType>, body: &image::Body) ->
     let given = body.fields.as_deref().unwrap_or(&[]);
     let mut fields = Document::new();
     for (fname, value) in given {
-        let Some(fty) = ty.field(&fname.name) else {
-            bail!(err_at(fname, format!("`{}` has no field `{}`", tid.name, fname.name)));
-        };
         if fields.contains_key(&fname.name) {
             bail!(err_at(fname, format!("field `{}` given twice", fname.name)));
         }
-        let bson = match (fty, value) {
-            (FieldType::String, Value::Str(s)) => Bson::String(s.clone()),
-            (FieldType::Bool, Value::Bool(b)) => Bson::Boolean(*b),
-            (FieldType::F32 | FieldType::F64, Value::Float(x)) => Bson::Double(*x),
-            (FieldType::F32 | FieldType::F64, Value::Int(i)) => Bson::Double(*i as f64),
-            (FieldType::Bytes, Value::Str(s)) => wire::bytes(s.as_bytes().to_vec()),
-            (t, Value::Int(i)) if t.int_range().is_some() => {
-                let (lo, hi) = t.int_range().unwrap();
-                if !(lo..=hi).contains(i) {
-                    bail!(err_at(fname, format!("{i} does not fit in {t}")));
-                }
-                wire::int_to_bson(t, *i)
-            }
-            (t, v) => bail!(err_at(fname, format!("`{}.{}` is {t}, but was given {v:?}", tid.name, fname.name))),
-        };
-        fields.insert(fname.name.clone(), bson);
+        fields.insert(fname.name.clone(), field_bson(ty, &fname.name, value).map_err(|e| err_at(fname, e))?);
     }
-    if let Some((missing, _)) = ty.fields.iter().find(|(n, _)| !fields.contains_key(n)) {
+    if complete && let Some((missing, _)) = ty.fields.iter().find(|(n, _)| !fields.contains_key(n)) {
         bail!(err_at(tid, format!("`{}` is missing field `{missing}`", tid.name)));
     }
-    Ok(Message { type_name: tid.name.clone(), fields })
+    Ok((tid.name.clone(), fields))
+}
+
+/// The BSON for `value` as field `field` of `ty`, if it fits the field's type.
+pub fn field_bson(ty: &MessageType, field: &str, value: &Value) -> std::result::Result<Bson, String> {
+    let Some(fty) = ty.field(field) else {
+        return Err(format!("`{}` has no field `{field}`", ty.name));
+    };
+    Ok(match (fty, value) {
+        (FieldType::String, Value::Str(s)) => Bson::String(s.clone()),
+        (FieldType::Bool, Value::Bool(b)) => Bson::Boolean(*b),
+        (FieldType::F32 | FieldType::F64, Value::Float(x)) => Bson::Double(*x),
+        (FieldType::F32 | FieldType::F64, Value::Int(i)) => Bson::Double(*i as f64),
+        (FieldType::Bytes, Value::Str(s)) => wire::bytes(s.as_bytes().to_vec()),
+        (t, Value::Int(i)) if t.int_range().is_some() => {
+            let (lo, hi) = t.int_range().unwrap();
+            if !(lo..=hi).contains(i) {
+                return Err(format!("{i} does not fit in {t}"));
+            }
+            wire::int_to_bson(t, *i)
+        }
+        (t, v) => return Err(format!("`{}.{field}` is {t}, but was given {v:?}", ty.name)),
+    })
 }
 
 #[cfg(test)]
@@ -411,10 +489,10 @@ mod tests {
         let s = &p.instances[1].startup;
         assert_eq!(s.len(), 3);
         assert_eq!((s[0].verb, s[0].path.as_str()), (Verb::Write, "/config"));
-        let body = s[0].body.as_ref().unwrap();
+        let body = s[0].body.as_ref().unwrap().message().unwrap();
         assert_eq!(body.fields.get_i32("count").unwrap(), 3);
         assert_eq!(body.fields.get_f64("ratio").unwrap(), 2.0);
-        assert_eq!(s[1].body.as_ref().unwrap().type_name, "Ping");
+        assert_eq!(s[1].body.as_ref().unwrap().message().unwrap().type_name, "Ping");
         assert_eq!((s[2].verb, s[2].path.as_str(), &s[2].body), (Verb::Remove, "/a/b/", &None));
 
         assert!(err(&inst("write /c Config { name: \"x\" }")).contains("missing field `count`"));
@@ -430,7 +508,8 @@ mod tests {
     #[test]
     fn bytes_fields_take_string_literals_as_utf8() {
         let p = check_src(&format!("{HEADER} instance e : Echo {{ write / Blob {{ data: \"hé\" }} }}")).unwrap();
-        let data = p.instances[1].startup[0].body.as_ref().unwrap().fields.get_binary_generic("data").unwrap();
+        let body = p.instances[1].startup[0].body.as_ref().unwrap().message().unwrap();
+        let data = body.fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
     }
 
@@ -441,8 +520,10 @@ mod tests {
             instance fs : Environment.Files { send FilesRoot { path: "public" } }"#,
         )
         .unwrap();
-        assert_eq!(p.instances[0].kind, Kind::Tcp { address: "127.0.0.1:0".into() });
-        assert_eq!(p.instances[1].kind, Kind::Files { root: "public".into() });
+        assert_eq!(p.instances[0].kind, Kind::Tcp);
+        let config = p.instances[0].config.as_ref().unwrap().message().unwrap();
+        assert_eq!(config.fields.get_str("address").unwrap(), "127.0.0.1:0");
+        assert_eq!(p.instances[1].kind, Kind::Files);
         assert!(p.instances[0].startup.is_empty(), "config isn't a request");
 
         let e = err("instance net : Environment.Tcp");
@@ -478,6 +559,38 @@ mod tests {
         assert!(e.contains("only serves"), "{e}");
         let e = err(r#"instance f : Packed.Dirs"#);
         assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Environment.Console, Environment.Tcp, Environment.Files, Packed.Files)"), "{e}");
+    }
+
+    #[test]
+    fn slots_stand_in_for_messages() {
+        let p = check_src(&format!(
+            r#"{HEADER}
+            require listen : Listen
+            require config : Config {{ name: "x", count: 3 }}
+            instance net : Environment.Tcp {{ send listen }}
+            instance e : Echo {{ write /config config }}"#
+        ))
+        .unwrap();
+        assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
+        assert_eq!(p.slots[1].defaults, bson::doc! { "name": "x", "count": 3 }, "defaults may be partial");
+        assert_eq!(p.instances[1].config, Some(Arg::Slot(0)));
+        assert_eq!(p.instances[2].startup[0].body, Some(Arg::Slot(1)));
+
+        let inst = |decls: &str, member: &str| format!("{HEADER} {decls} instance e : Echo {{ {member} }}");
+        let e = err(&inst("require Greeting : Greeting", ""));
+        assert!(e.contains("`Greeting` is a message type; a slot needs a name of its own"), "{e}");
+        let e = err(&inst("require g : Greeting require g : Ping", ""));
+        assert!(e.contains("slot `g` is declared twice"), "{e}");
+        let e = err(&inst("require g : Greeting { text: 1 }", ""));
+        assert!(e.contains("`Greeting.text` is string"), "{e}");
+        let e = err(&inst("require g : Greeting { nope: 1 }", ""));
+        assert!(e.contains("`Greeting` has no field `nope`"), "{e}");
+        let e = err(&inst("require g : Nope", ""));
+        assert!(e.contains("unknown message type `Nope`"), "{e}");
+        let e = err(&inst("require g : Greeting", "write / g { text: \"x\" }"));
+        assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
+        let e = err("require t : Text instance net : Environment.Tcp { send t }");
+        assert!(e.contains("needs exactly one config message, `send Listen"), "{e}");
     }
 
     #[test]

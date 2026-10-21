@@ -12,6 +12,7 @@
 //! Blobs are named by the SHA-256 of their contents and stored once.
 
 use crate::check::{self, Kind, Program};
+use crate::render;
 use crate::tree::{Node, Tree};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -140,14 +141,45 @@ fn hash(bytes: &[u8]) -> Hash {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// [`check::describe`], saying what each packed instance holds.
+/// [`check::describe`], after each slot's value and where its fields came
+/// from, and saying what each environment object touches on the host and
+/// what each packed instance holds.
 pub fn describe(pack: &Pack) -> String {
-    let about = |i: usize| {
-        let inst = &pack.program.instances[i];
-        let (files, size) = pack.trees.get(&inst.name)?.size();
-        Some(format!("serves {files} built-in file{}, {}", if files == 1 { "" } else { "s" }, human_size(size)))
+    let p = &pack.program;
+    let mut out = String::new();
+    for slot in &p.slots {
+        let fields: Vec<String> = match &slot.value {
+            Some(value) => slot
+                .origins
+                .iter()
+                .map(|(f, origin)| format!("{f}: {} ({origin})", render::json_value(&value.fields[f])))
+                .collect(),
+            None => vec!["unbound".into()],
+        };
+        out.push_str(&format!("slot {} : {} {{ {} }}\n", slot.name, slot.type_name, fields.join(", ")));
+    }
+    if !p.slots.is_empty() {
+        out.push('\n');
+    }
+    let config = |inst: &check::Instance, field: &str| {
+        let config = inst.config.as_ref().and_then(|c| c.message().ok());
+        config.and_then(|c| c.fields.get_str(field).ok()).unwrap_or("?").to_string()
     };
-    check::describe(&pack.program, &about)
+    let about = |i: usize| {
+        let inst = &p.instances[i];
+        Some(match &inst.kind {
+            Kind::Wasm { .. } => return None,
+            Kind::Console => "reads stdin, writes stdout".to_string(),
+            Kind::Tcp => format!("listens on {}", config(inst, "address")),
+            Kind::Files => format!("reads host files under {}", config(inst, "path")),
+            Kind::Packed { .. } => {
+                let (files, size) = pack.trees.get(&inst.name)?.size();
+                format!("serves {files} built-in file{}, {}", if files == 1 { "" } else { "s" }, human_size(size))
+            }
+        })
+    };
+    out.push_str(&check::describe(p, &about));
+    out
 }
 
 fn human_size(bytes: u64) -> String {

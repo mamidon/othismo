@@ -128,13 +128,14 @@ impl EnvObject {
         Ok(Some(match &inst.kind {
             Kind::Wasm { .. } => return Ok(None),
             Kind::Console => EnvObject::Console(Console::default()),
-            Kind::Tcp { address } => {
-                let listener = TcpListener::bind(address).with_context(|| format!("listening on {address}"))?;
+            Kind::Tcp => {
+                let address = config_str(inst, "address")?;
+                let listener = TcpListener::bind(&address).with_context(|| format!("listening on {address}"))?;
                 let address = listener.local_addr()?.to_string();
                 EnvObject::Tcp(Tcp { listener: Some(listener), address, accept_watchers: vec![], conns: HashMap::new() })
             }
-            Kind::Files { root } => {
-                let root = pack.dir.join(root);
+            Kind::Files => {
+                let root = pack.dir.join(config_str(inst, "path")?);
                 let root = root.canonicalize().with_context(|| format!("files root {}", root.display()))?;
                 if !root.is_dir() {
                     bail!("files root {} is not a directory", root.display());
@@ -229,6 +230,12 @@ impl EnvObject {
             _ => unreachable!("event for the wrong kind of object"),
         }
     }
+}
+
+/// A string field of an environment object's config.
+fn config_str(inst: &Instance, field: &str) -> Result<String> {
+    let config = inst.config.as_ref().context("no config")?.message()?;
+    Ok(config.fields.get_str(field).with_context(|| format!("config has no `{field}`"))?.to_string())
 }
 
 fn data_msg(data: Vec<u8>) -> Message {

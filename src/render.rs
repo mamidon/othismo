@@ -33,7 +33,7 @@ pub fn render(msg: &Message, messages: &BTreeMap<String, MessageType>) -> String
     out
 }
 
-fn json_value(v: &Bson) -> String {
+pub fn json_value(v: &Bson) -> String {
     match v {
         Bson::String(s) => json_string(s),
         Bson::Boolean(b) => b.to_string(),

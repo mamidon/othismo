@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use real_talk::{pack, runtime};
+use real_talk::{pack, runtime, slots};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -86,7 +86,8 @@ fn run(args: &[String]) -> Result<Result<()>, Usage> {
         }
     }
     let image = image.ok_or(Usage)?;
-    Ok(pack::load(&image).and_then(|pack| {
+    Ok(pack::load(&image).and_then(|mut pack| {
+        slots::bind(&mut pack.program, &[])?;
         if check_only {
             print!("{}", pack::describe(&pack));
             Ok(())

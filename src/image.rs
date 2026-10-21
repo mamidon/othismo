@@ -19,6 +19,7 @@ impl std::fmt::Display for Pos {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     pub imports: Vec<Import>,
+    pub requires: Vec<Require>,
     pub instances: Vec<Instance>,
 }
 
@@ -27,6 +28,14 @@ pub struct Import {
     pub names: Vec<Ident>,
     pub path: String,
     pub pos: Pos,
+}
+
+/// `require <name> : <Type> [{ defaults }]`: a slot the host fills in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Require {
+    pub name: Ident,
+    /// The slot's type and any default fields, which need not be all of them.
+    pub body: Body,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,7 +248,7 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
 /// Words that can never be names. Member keywords (`mount`, `send`,
 /// `include`, `readonly`, `at` and the verbs) only mean something inside an
 /// instance block.
-const KEYWORDS: &[&str] = &["import", "from", "instance", "true", "false"];
+const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
 
 /// Words that start a member of an instance block, besides the verbs.
 const MEMBERS: &[&str] = &["mount", "send", "include"];
@@ -315,17 +324,18 @@ impl Parser {
     }
 
     fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], instances: vec![] };
+        let mut image = Image { imports: vec![], requires: vec![], instances: vec![] };
         loop {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
+                Tok::Ident(kw) if kw == "require" => image.requires.push(self.require()?),
                 Tok::Ident(kw) if kw == "protocol" => bail!(
                     "{}: protocols are gone; an instance's type names its module, and requests are addressed by path",
                     self.pos()
                 ),
-                other => bail!("{}: expected `import` or `instance`, found {other}", self.pos()),
+                other => bail!("{}: expected `import`, `require` or `instance`, found {other}", self.pos()),
             }
         }
     }
@@ -341,6 +351,14 @@ impl Parser {
             (other, pos) => bail!("{pos}: expected import path string, found {other}"),
         };
         Ok(Import { names, path, pos })
+    }
+
+    fn require(&mut self) -> Result<Require> {
+        self.expect_kw("require")?;
+        let name = self.ident("slot name", false)?;
+        self.expect(Tok::Colon)?;
+        let body = self.body()?;
+        Ok(Require { name, body })
     }
 
     fn instance(&mut self) -> Result<Instance> {
@@ -488,6 +506,23 @@ mod tests {
         assert_eq!(reqs[1].body.as_ref().unwrap().fields, None);
         assert_eq!(reqs[2].body, None, "a verb ends a body-less request");
         assert_eq!(reqs[3].body, None);
+    }
+
+    #[test]
+    fn parses_requires() {
+        let img = parse(
+            r#"require listen : Listen { address: "127.0.0.1:8080" }
+            require admin : Text
+            instance net : Environment.Tcp { send listen }"#,
+        )
+        .unwrap();
+        let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.body.type_name.name.as_str())).collect();
+        assert_eq!(reqs, [("listen", "Listen"), ("admin", "Text")]);
+        assert_eq!(img.requires[0].body.fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
+        assert_eq!(img.requires[1].body.fields, None);
+        assert_eq!(img.instances[0].config[0].type_name.name, "listen", "a slot is used like a unit message");
+        assert!(parse("require : Text").is_err());
+        assert!(parse("instance require : P").is_err(), "`require` is a keyword");
     }
 
     #[test]
