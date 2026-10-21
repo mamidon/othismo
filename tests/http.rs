@@ -19,6 +19,12 @@ impl Server {
     /// lives in a temp dir whose scripts and public files are symlinks back
     /// into examples/static.
     fn start(name: &str) -> Server {
+        Server::start_with(name, false)
+    }
+
+    /// With `built`, the copy is built into a .rti in a directory of its
+    /// own, and that is run instead.
+    fn start_with(name: &str, built: bool) -> Server {
         let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static");
         for m in ["HttpServer", "StaticSite"] {
             assert!(example.join(format!("scripts/{m}.wasm")).exists(), "run `make wasm` first");
@@ -32,9 +38,20 @@ impl Server {
         let img = std::fs::read_to_string(example.join("static.img")).unwrap();
         assert!(img.contains("127.0.0.1:8080"));
         std::fs::write(dir.join("static.img"), img.replace("127.0.0.1:8080", "127.0.0.1:0")).unwrap();
+        let mut image = dir.join("static.img");
+        if built {
+            std::fs::create_dir_all(dir.join("built")).unwrap();
+            let rti = dir.join("built/static.rti");
+            let status = Command::new(env!("CARGO_BIN_EXE_real_talk"))
+                .args(["build".as_ref(), image.as_os_str(), "-o".as_ref(), rti.as_os_str()])
+                .status()
+                .unwrap();
+            assert!(status.success());
+            image = rti;
+        }
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_real_talk"))
-            .arg(dir.join("static.img"))
+            .arg(image)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .spawn()
@@ -164,7 +181,7 @@ fn error_statuses() {
 }
 
 #[test]
-fn cannot_climb_out_of_the_host_root() {
+fn cannot_climb_out_of_the_files_root() {
     // `..` never reaches the namespace: ns.join refuses it, and the runtime would too.
     let srv = Server::start("escape");
     assert_eq!(srv.get("/../Cargo.toml").status, 400);
@@ -241,4 +258,15 @@ fn many_concurrent_clients() {
     for h in handles {
         h.join().unwrap();
     }
+}
+
+#[test]
+fn serves_from_a_built_image() {
+    let mut srv = Server::start_with("built", true);
+    let r = srv.get("/");
+    assert_eq!((r.status, r.body), (200, public("index.html")));
+    let r = srv.get("/assets/logo.png");
+    assert_eq!((r.status, r.header("Content-Type")), (200, Some("image/png")));
+    assert_eq!(r.body, public("assets/logo.png"));
+    assert_eq!(srv.log_line(), "GET / 200");
 }

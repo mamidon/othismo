@@ -4,7 +4,7 @@ WASM    := $(SCRIPTS:.ts=.wasm)
 # Any library or message change rebuilds every module; there are few of them.
 AS_DEPS := as/index.ts as/ns.ts as/env.ts $(wildcard examples/*/*.ts) node_modules/.installed
 
-.PHONY: wasm hello greeter static site test clean
+.PHONY: wasm hello greeter static static-built site test clean
 
 wasm: $(WASM)
 
@@ -24,6 +24,13 @@ greeter: wasm
 static: wasm
 	cargo run -- examples/static/static.img
 
+# The static example sealed into one file, modules and site included.
+examples/static/static.rti: examples/static/static.img $(WASM) $(shell find examples/static/public -type f)
+	cargo run -- build $< -o $@
+
+static-built: examples/static/static.rti
+	cargo run -- $<
+
 # Re-renders README.md and docs/namespace.md into the static example's site.
 site: node_modules/.installed
 	node examples/static/site.mjs
@@ -32,4 +39,4 @@ test: wasm
 	cargo test
 
 clean:
-	rm -f $(WASM)
+	rm -f $(WASM) examples/static/static.rti
