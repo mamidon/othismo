@@ -6,8 +6,9 @@ use crate::check::{self, Arg, Program};
 use crate::image::Value;
 use crate::messages::FieldType;
 use crate::wire::Message;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bson::Document;
+use std::path::Path;
 
 /// One field's value from the host.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +27,33 @@ pub enum GivenValue {
     /// Raw text, from `--set`: kept as is for a `string` or `ArrayBuffer`
     /// field, and read as a literal for any other.
     Text(String),
+}
+
+/// The values in a value file, in order.
+pub fn read_values(path: &Path) -> Result<Vec<Given>> {
+    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let blocks = crate::image::parse_values(&src).with_context(|| format!("parsing {}", path.display()))?;
+    let mut out = vec![];
+    for block in blocks {
+        for (field, value) in block.fields {
+            out.push(Given {
+                origin: format!("{}:{}", path.display(), field.pos),
+                slot: block.slot.name.clone(),
+                field: field.name,
+                value: GivenValue::Literal(value),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The value in a `--set slot.field=value` argument.
+pub fn parse_set(arg: &str) -> Result<Given> {
+    let parsed = arg.split_once('=').and_then(|(key, value)| Some((key.split_once('.')?, value)));
+    let Some(((slot, field), value)) = parsed.filter(|((s, f), _)| !s.is_empty() && !f.is_empty()) else {
+        bail!("--set {arg}: expected slot.field=value");
+    };
+    Ok(Given { origin: "--set".into(), slot: slot.into(), field: field.into(), value: GivenValue::Text(value.into()) })
 }
 
 /// Fills every slot: the image's defaults first, then `given` in order, a
@@ -180,6 +208,26 @@ mod tests {
              info.size: required, not provided\n  \
              info.mime: required, not provided"
         );
+    }
+
+    #[test]
+    fn values_come_from_files_and_set() {
+        let dir = std::env::temp_dir().join(format!("real_talk_values_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prod.vals");
+        std::fs::write(&file, "listen {\n  address: \"0.0.0.0:80\"\n}\ninfo { size: 1 }").unwrap();
+        let values = read_values(&file).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].origin, format!("{}:2:3", file.display()));
+        assert_eq!((values[1].slot.as_str(), values[1].field.as_str()), ("info", "size"));
+        assert_eq!(values[1].value, GivenValue::Literal(Value::Int(1)));
+
+        assert_eq!(parse_set("listen.address=0.0.0.0:80=x").unwrap(), text("--set", "listen", "address", "0.0.0.0:80=x"));
+        assert_eq!(parse_set("a.b=").unwrap(), text("--set", "a", "b", ""));
+        for bad in ["listen=1", "listen.address", ".address=1", "listen.=1"] {
+            assert!(parse_set(bad).unwrap_err().to_string().contains("expected slot.field=value"), "{bad}");
+        }
     }
 
     #[test]

@@ -422,7 +422,12 @@ impl Parser {
         if *self.peek() != Tok::LBrace {
             return Ok(Body { type_name, fields: None });
         }
-        self.next();
+        Ok(Body { type_name, fields: Some(self.fields()?) })
+    }
+
+    /// `{ field: value, ... }`
+    fn fields(&mut self) -> Result<Vec<(Ident, Value)>> {
+        self.expect(Tok::LBrace)?;
         let mut fields = vec![];
         while *self.peek() != Tok::RBrace {
             let field = self.ident("field name", false)?;
@@ -443,12 +448,36 @@ impl Parser {
             }
         }
         self.next();
-        Ok(Body { type_name, fields: Some(fields) })
+        Ok(fields)
+    }
+
+    /// A value file: `slot { field: value, ... }`, any number of times.
+    fn values(&mut self) -> Result<Vec<SlotValues>> {
+        let mut out = vec![];
+        while *self.peek() != Tok::Eof {
+            let slot = self.ident("slot name", false)?;
+            let fields = self.fields()?;
+            out.push(SlotValues { slot, fields });
+        }
+        Ok(out)
     }
 }
 
 pub fn parse(src: &str) -> Result<Image> {
     Parser { toks: lex(src)?, i: 0 }.image()
+}
+
+/// One block of a value file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotValues {
+    pub slot: Ident,
+    pub fields: Vec<(Ident, Value)>,
+}
+
+/// Parses a value file, which gives slots their values in the image's own
+/// block syntax: `listen { address: "0.0.0.0:80" }`.
+pub fn parse_values(src: &str) -> Result<Vec<SlotValues>> {
+    Parser { toks: lex(src)?, i: 0 }.values()
 }
 
 #[cfg(test)]
@@ -523,6 +552,16 @@ mod tests {
         assert_eq!(img.instances[0].config[0].type_name.name, "listen", "a slot is used like a unit message");
         assert!(parse("require : Text").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
+    }
+
+    #[test]
+    fn parses_value_files() {
+        let v = parse_values("// prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].slot.name.as_str(), v[0].fields[0].0.pos), ("listen", Pos { line: 2, col: 10 }));
+        assert_eq!(v[1].fields[1].1, Value::Bool(true));
+        assert!(parse_values("listen address: 1").is_err());
+        assert!(parse_values("listen : Listen { address: \"x\" }").is_err(), "the image knows the type");
     }
 
     #[test]

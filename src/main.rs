@@ -3,7 +3,7 @@ use real_talk::{pack, runtime, slots};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: real_talk [run] [--check] [--check-shapes] <image>
+const USAGE: &str = "usage: real_talk [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
        real_talk build [-v] [--no-sources] <image.img> -o <out.rti>
        real_talk unpack <image> <dir>
 
@@ -12,6 +12,9 @@ An image is a .img source, which is built in memory, or a built .rti file.
   --check         validate the image, print each instance's view and what
                   it can reach at most, and exit without running it
   --check-shapes  verify every message's fields against its declaration
+  --with          give slots values from a file: `listen { address: \"0.0.0.0:80\" }`
+  --set           give one slot field a value, after any files; raw text for
+                  a string, a literal otherwise
   --no-sources    leave the reference copies of the sources out of a build
   -v              list each packed path that a later include replaced";
 
@@ -77,17 +80,29 @@ fn run(args: &[String]) -> Result<Result<()>, Usage> {
     let mut image = None;
     let mut options = runtime::Options::default();
     let mut check_only = false;
-    for arg in args {
+    let (mut files, mut sets) = (vec![], vec![]);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--check" => check_only = true,
             "--check-shapes" => options.check_shapes = true,
+            "--with" => files.push(PathBuf::from(args.next().ok_or(Usage)?)),
+            "--set" => sets.push(args.next().ok_or(Usage)?),
             _ if arg.starts_with('-') || image.is_some() => return Err(Usage),
             _ => image = Some(PathBuf::from(arg)),
         }
     }
     let image = image.ok_or(Usage)?;
     Ok(pack::load(&image).and_then(|mut pack| {
-        slots::bind(&mut pack.program, &[])?;
+        // Files first, in order, then --set: later values win.
+        let mut given = vec![];
+        for file in &files {
+            given.extend(slots::read_values(file)?);
+        }
+        for set in sets {
+            given.push(slots::parse_set(set)?);
+        }
+        slots::bind(&mut pack.program, &given)?;
         if check_only {
             print!("{}", pack::describe(&pack));
             Ok(())
