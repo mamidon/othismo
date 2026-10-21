@@ -67,6 +67,12 @@ fn corrupt_and_truncated_files_are_refused() {
     assert!(err(&sealed[..sealed.len() - 1]).contains("out of bounds"));
     assert!(err(&sealed[..20]).contains("truncated manifest"));
     assert!(err(b"instance a : A").contains("not a built image"));
+
+    let mut old = sealed.clone();
+    old[7] = 1;
+    let e = err(&old);
+    assert!(e.contains("built by another version of real_talk (format 1, and this one reads 2); rebuild it"), "{e}");
+    assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
 }
 
 #[test]

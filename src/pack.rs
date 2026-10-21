@@ -6,7 +6,7 @@
 //! the blobs it refers to (see `docs/images.md`):
 //!
 //! ```text
-//! "RTIMAGE" 0x01   u64 LE manifest length   manifest   blobs
+//! "RTIMAGE" version   u64 LE manifest length   manifest   blobs
 //! ```
 //!
 //! Blobs are named by the SHA-256 of their contents and stored once.
@@ -21,7 +21,12 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x01";
+/// The magic number: `RTIMAGE`, then the format version.
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x02";
+
+/// The format version, bumped whenever the manifest's layout changes. An
+/// image built in another format is refused, with a request to rebuild it.
+pub const VERSION: u8 = MAGIC[7];
 
 /// The hex SHA-256 of a blob's contents.
 pub type Hash = String;
@@ -190,9 +195,9 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Whether `bytes` start like a sealed image.
+/// Whether `bytes` start like a sealed image, of any format version.
 pub fn is_sealed(bytes: &[u8]) -> bool {
-    bytes.starts_with(MAGIC)
+    bytes.len() >= MAGIC.len() && bytes.starts_with(&MAGIC[..7])
 }
 
 /// Whether the file at `path` is a sealed image, going by its first bytes.
@@ -219,13 +224,18 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     if !is_sealed(bytes) {
         bail!("not a built image (bad magic number)");
     }
+    let rebuild = "rebuild it from its .img with this real_talk's `build`";
+    if bytes[7] != VERSION {
+        bail!("it was built by another version of real_talk (format {}, and this one reads {VERSION}); {rebuild}", bytes[7]);
+    }
     let rest = &bytes[MAGIC.len()..];
     let Some((len, rest)) = rest.split_first_chunk::<8>() else { bail!("truncated header") };
     let len = usize::try_from(u64::from_le_bytes(*len)).ok().filter(|&n| n <= rest.len());
     let Some(len) = len else { bail!("truncated manifest") };
     let (manifest, blobs) = rest.split_at(len);
-    let doc = bson::Document::from_reader(manifest).context("malformed manifest")?;
-    let m: Manifest = bson::deserialize_from_document(doc).context("malformed manifest")?;
+    let malformed = || format!("malformed manifest; if it was built by another version of real_talk, {rebuild}");
+    let doc = bson::Document::from_reader(manifest).with_context(malformed)?;
+    let m: Manifest = bson::deserialize_from_document(doc).with_context(malformed)?;
 
     let mut pack = Pack {
         program: m.program,

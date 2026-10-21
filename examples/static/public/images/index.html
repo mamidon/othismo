@@ -169,17 +169,20 @@ slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 88.7 KB
+files  serves 9 built-in files, 88.9 KB
 ...
 </code></pre>
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
 <code>.img</code> or <code>.rti</code>.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x01        magic and version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x02        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back
 </code></pre>
+<p>The version changes whenever the manifest&#39;s layout does. An image built in
+another format is refused with a request to rebuild it from its <code>.img</code>;
+built images are for deploying, not for keeping across versions.</p>
 <p>Every module, packed file and source is a blob named by the SHA-256 of its
 contents, and stored once however often it appears. The manifest refers to
 blobs by hash and records each one&#39;s offset and length. Building the same

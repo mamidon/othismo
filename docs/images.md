@@ -146,7 +146,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 88.7 KB
+files  serves 9 built-in files, 88.9 KB
 ...
 ```
 
@@ -156,11 +156,15 @@ A relative `FilesRoot` path resolves against the directory holding the image,
 ## The file format
 
 ```text
-"RTIMAGE" 0x01        magic and version
+"RTIMAGE" 0x02        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back
 ```
+
+The version changes whenever the manifest's layout does. An image built in
+another format is refused with a request to rebuild it from its `.img`;
+built images are for deploying, not for keeping across versions.
 
 Every module, packed file and source is a blob named by the SHA-256 of its
 contents, and stored once however often it appears. The manifest refers to
