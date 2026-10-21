@@ -20,6 +20,7 @@
         <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
         <div class="nav-links">
           <a class="nav-link" href="/overview/" aria-current="page">Overview</a>
+          <a class="nav-link" href="/objects/">Objects</a>
           <a class="nav-link" href="/docs/">Design</a>
           <a class="nav-link" href="/images/">Building</a>
         </div>
@@ -82,10 +83,16 @@ answer requests made of its own. Everything else about it is its own
 business.</p>
 <p>Objects are single-threaded and share nothing. They react to requests and to
 the answers to their own requests, and that is their whole life.</p>
+<p>What you read instead of the code is the object&#39;s <strong>interface</strong>, a header
+that travels inside the module. It declares the message types the object
+uses, the paths it serves and what each takes and answers, what it needs to
+find in its view, and its documentation. The checker holds every image to its
+objects&#39; interfaces, and the runtime holds every object to its own while it
+runs. <a href="/objects/">Objects</a> covers them in detail.</p>
 <h2 id="messages">Messages</h2>
 <p>A request is a path, a verb and, for some verbs, a typed message as its body.
-The message types are declared alongside the objects and are the interfaces
-you specify: what an object accepts, what it answers, and what each field
+The message types are declared in the objects&#39; interfaces and are what you
+specify: what an object accepts, what it answers, and what each field
 means.</p>
 <p>The verb is a convention. It states what the sender expects handling the
 request to imply: <code>read</code>, <code>stat</code>, <code>list</code> and <code>watch</code> ask about something
@@ -94,12 +101,6 @@ safe to repeat; <code>create</code> and <code>invoke</code> may do anything, onc
 verbs are modelled on HTTP&#39;s methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a <code>read</code> is
 simply wrong, as a GET that deletes a record is.</p>
-<p>One verb is about who may send it rather than what handling it implies.
-<code>control</code> is the operator&#39;s: the image sends it at startup to set its objects
-up, and one day so may a person attached to a running image. Objects can&#39;t
-send it; the runtime answers an object that tries with <code>forbidden</code>, and the
-request goes nowhere. So an object that accepts only <code>control</code> at some path
-is saying that only whoever runs the image decides what happens there.</p>
 <p>A failure is just an answer with a status other than <code>ok</code>, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.</p>
@@ -124,22 +125,27 @@ the bytes it serves.</p>
 <h2 id="the-edge">The edge</h2>
 <p>Some objects are built into the runtime. <strong>Environment objects</strong> are the
 console, TCP and the host&#39;s files, and they are the only way any object
-reaches the world outside the image. They are configured with <code>control</code>, so
-no object can open another port or access files not originally visible to the
-image.</p>
+reaches the world outside the image. Their configuration comes from the image
+alone, so no object can open another port or access files not originally
+visible to the image.</p>
 <p>These are the side effects you specify. The question &quot;what can this program
 do to the machine it runs on&quot; has a short answer: whatever its environment
 objects allow, and nothing else.</p>
 <h2 id="images">Images</h2>
-<p>An image is a file that declares the objects, what each one&#39;s view contains,
-and the requests made of each at startup. It is the part you review, and it
-is meant to be short enough that you can. This one, slightly trimmed, serves
-this site:</p>
-<pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }
+<p>An image is a file that declares the objects, what each one can see, and
+optionally configures them by sending them some initial messages. Those use
+<code>control</code>, a verb only the image may send: objects can&#39;t configure each
+other, or the environment.</p>
+<p>This one, slightly trimmed, serves this site:</p>
+<pre><code class="language-text"># parameters that must be provided to run this image; optional here, since
+# there are defaults
+require listen : Listen { address: &quot;127.0.0.1:8080&quot; }
 
+# creates a socket, configured to listen to localhost on port 8080 by default
 instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console
+# brings the host&#39;s ./public folder into the image, at build time
 instance files : Packed.Files        { include &quot;./public/&quot; }
+instance cons  : Environment.Console
 
 instance site : StaticSite {
   mount files /files readonly
@@ -154,13 +160,13 @@ instance http : HttpServer {
 </code></pre>
 <p>Because an object can only pass on what it can see, the most any object can
 ever reach is fixed by the image&#39;s mounts and can be worked out without
-running anything. <code>real_talk --check</code> prints it, along with everything the
+running anything. <code>othismo --check</code> prints it, along with everything the
 image touches on the host:</p>
 <pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.9 KB
+files  serves 10 built-in files, 95.0 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
@@ -195,10 +201,10 @@ only by sending each other messages, kept and shipped as an image.</li>
 <p>Othismo is a work in progress, and the runtime here, <code>real_talk</code>, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used. Some things the premise needs aren&#39;t
-there yet. A trapped object stops the whole run, calls never time out, and
-there is no support yet for testing an image&#39;s objects against stand-in
-environment objects.</p>
-<p>The details of the current design are in <a href="/docs/">Namespaces</a> and
+there yet. Interfaces are designed but not built, a trapped object stops the
+whole run, calls never time out, and there is no support yet for testing an
+image&#39;s objects against stand-in environment objects.</p>
+<p>The details are in <a href="/objects/">Objects</a>, <a href="/docs/">Namespaces</a> and
 <a href="/images/">Building images</a>.</p>
 
     </article>

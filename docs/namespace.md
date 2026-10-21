@@ -294,7 +294,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 94.4 KB
+files  serves 10 built-in files, 95.0 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

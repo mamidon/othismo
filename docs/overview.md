@@ -40,11 +40,18 @@ business.
 Objects are single-threaded and share nothing. They react to requests and to
 the answers to their own requests, and that is their whole life.
 
+What you read instead of the code is the object's **interface**, a header
+that travels inside the module. It declares the message types the object
+uses, the paths it serves and what each takes and answers, what it needs to
+find in its view, and its documentation. The checker holds every image to its
+objects' interfaces, and the runtime holds every object to its own while it
+runs. [Objects](objects.md) covers them in detail.
+
 ## Messages
 
 A request is a path, a verb and, for some verbs, a typed message as its body.
-The message types are declared alongside the objects and are the interfaces
-you specify: what an object accepts, what it answers, and what each field
+The message types are declared in the objects' interfaces and are what you
+specify: what an object accepts, what it answers, and what each field
 means.
 
 The verb is a convention. It states what the sender expects handling the
@@ -54,13 +61,6 @@ safe to repeat; `create` and `invoke` may do anything, once per request. The
 verbs are modelled on HTTP's methods, and like those, nothing makes a server
 honour them. A server that changes something when it handles a `read` is
 simply wrong, as a GET that deletes a record is.
-
-One verb is about who may send it rather than what handling it implies.
-`control` is the operator's: the image sends it at startup to set its objects
-up, and one day so may a person attached to a running image. Objects can't
-send it; the runtime answers an object that tries with `forbidden`, and the
-request goes nowhere. So an object that accepts only `control` at some path
-is saying that only whoever runs the image decides what happens there.
 
 A failure is just an answer with a status other than `ok`, and a stream is
 just several answers to one request. There are no exceptions crossing
@@ -92,9 +92,9 @@ the bytes it serves.
 
 Some objects are built into the runtime. **Environment objects** are the
 console, TCP and the host's files, and they are the only way any object
-reaches the world outside the image. They are configured with `control`, so
-no object can open another port or access files not originally visible to the
-image.
+reaches the world outside the image. Their configuration comes from the image
+alone, so no object can open another port or access files not originally
+visible to the image.
 
 These are the side effects you specify. The question "what can this program
 do to the machine it runs on" has a short answer: whatever its environment
@@ -102,17 +102,23 @@ objects allow, and nothing else.
 
 ## Images
 
-An image is a file that declares the objects, what each one's view contains,
-and the requests made of each at startup. It is the part you review, and it
-is meant to be short enough that you can. This one, slightly trimmed, serves
-this site:
+An image is a file that declares the objects, what each one can see, and
+optionally configures them by sending them some initial messages. Those use
+`control`, a verb only the image may send: objects can't configure each
+other, or the environment.
+
+This one, slightly trimmed, serves this site:
 
 ```text
+# parameters that must be provided to run this image; optional here, since
+# there are defaults
 require listen : Listen { address: "127.0.0.1:8080" }
 
+# creates a socket, configured to listen to localhost on port 8080 by default
 instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console
+# brings the host's ./public folder into the image, at build time
 instance files : Packed.Files        { include "./public/" }
+instance cons  : Environment.Console
 
 instance site : StaticSite {
   mount files /files readonly
@@ -128,7 +134,7 @@ instance http : HttpServer {
 
 Because an object can only pass on what it can see, the most any object can
 ever reach is fixed by the image's mounts and can be worked out without
-running anything. `real_talk --check` prints it, along with everything the
+running anything. `othismo --check` prints it, along with everything the
 image touches on the host:
 
 ```text
@@ -136,7 +142,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 76.9 KB
+files  serves 10 built-in files, 95.0 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
@@ -177,9 +183,9 @@ file still tells the whole story.
 Othismo is a work in progress, and the runtime here, `real_talk`, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used. Some things the premise needs aren't
-there yet. A trapped object stops the whole run, calls never time out, and
-there is no support yet for testing an image's objects against stand-in
-environment objects.
+there yet. Interfaces are designed but not built, a trapped object stops the
+whole run, calls never time out, and there is no support yet for testing an
+image's objects against stand-in environment objects.
 
-The details of the current design are in [Namespaces](namespace.md) and
+The details are in [Objects](objects.md), [Namespaces](namespace.md) and
 [Building images](images.md).
