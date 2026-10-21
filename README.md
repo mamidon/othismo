@@ -12,31 +12,93 @@ images in [docs/images.md](docs/images.md). This README covers using them.
 
 ## Quick start
 
-Requires Rust and Node.
+Requires Rust and Node. The first `make` runs `npm install` and compiles each
+example's `scripts/*.ts` to `scripts/*.wasm` with the AssemblyScript compiler.
 
 ```sh
-make hello            # npm install, asc → scripts/*.wasm, cargo run -- examples/hello/hello.img
-make greeter          # a larger example
-make static           # serves these docs as a site on http://127.0.0.1:8080
-make static-built     # the same, from a built examples/static/static.rti
-make test             # build the wasm, then cargo test
+make hello            # run examples/hello: echoes each line you type (Ctrl-D to end)
+make greeter          # run examples/greeter: greets each name you type
+make static           # run examples/static: serves these docs on http://127.0.0.1:8080
+make static-built     # build examples/static/static.rti, then run that
+make test             # compile the wasm, then cargo test
 ```
 
-After `make wasm`, run any image directly, or build it first:
+## Running the examples
+
+Every example is an image, a `.img` file next to its `scripts/`. After
+`make wasm`, run one from source with `cargo run -- <image>`. Running a
+`.img` builds it in memory first, so nothing is written to disk.
+
+To deploy an image, build it into one `.rti` file and run that instead. The
+file holds the compiled modules, any packed files and the parsed message
+types, so it runs anywhere `real_talk` does, with nothing else beside it.
+
+### hello
+
+Echo watches the console and writes back each line.
 
 ```sh
-cargo run -- examples/hello/hello.img
-cargo run -- --check image.img          # validate, print every view and what each instance can reach
-cargo run -- --check-shapes image.img   # also check every body's fields in transit
+cargo run -- examples/hello/hello.img                     # type lines; Ctrl-D ends the run
+printf 'hello\nworld\n' | cargo run -- examples/hello/hello.img
 
-cargo run -- build image.img -o image.rti       # seal: modules, packed files, sources
-cargo run -- image.rti --set listen.address=0.0.0.0:80 --with prod.vals
-cargo run -- unpack image.rti out/              # out/modules, out/files, out/sources
+cargo run -- build examples/hello/hello.img -o hello.rti
+printf 'hello\n' | cargo run -- hello.rti
 ```
 
-A `.img` is built in memory every time it runs, so the two behave the same.
+### greeter
+
+Greeter is configured by a startup request. It greets each name, keeps
+running statistics, and has a second object shout the greeting.
+
+```sh
+printf 'world\n' | cargo run -- examples/greeter/greeter.img
+# Hello, world!
+# Stats {"lines": 1, "chars": 5, "average": 5.0}
+# HELLO, WORLD!
+
+cargo run -- build examples/greeter/greeter.img -o greeter.rti
+printf 'Ada\n' | cargo run -- greeter.rti
+```
+
+### static
+
+An HTTP server for a small site: these docs, rendered. The site is packed
+into the image when it is built, and the address to listen on is a slot with
+`127.0.0.1:8080` as its default. Stop it with Ctrl-C.
+
+```sh
+cargo run -- examples/static/static.img                   # http://127.0.0.1:8080
+cargo run -- examples/static/static.img --set listen.address=127.0.0.1:9000
+
+cargo run -- build examples/static/static.img -o static.rti
+cargo run -- static.rti --set listen.address=0.0.0.0:8080 # e.g. on the machine you deploy to
+```
+
+`make static-built` builds `examples/static/static.rti` (rebuilding it when
+the image, a module or a page changes) and runs it on the default address.
+Run `make site` after editing this README or the docs, so the site serves the
+new text.
+
+### Inspecting an image
+
+These work on a `.img` and a `.rti` alike:
+
+```sh
+cargo run -- --check static.rti                 # slots, what it touches on the host, views and reach
+cargo run -- --check-shapes examples/hello/hello.img   # run, checking every body's fields in transit
+cargo run -- unpack static.rti out/             # out/modules, out/files/<instance>, out/sources
+```
+
+Slot values can also come from a file, applied in order before any `--set`:
+
+```sh
+printf 'listen { address: "0.0.0.0:8080" }\n' > prod.vals
+cargo run -- static.rti --with prod.vals
+```
+
 `build -v` lists the packed paths a later `include` replaced, and
 `--no-sources` leaves out the reference copies of the image's sources.
+`run` before the image is optional: `cargo run -- run static.rti` is the same.
 
 ## Layout
 
@@ -139,7 +201,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 85.9 KB
+files  serves 9 built-in files, 88.7 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons

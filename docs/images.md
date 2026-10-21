@@ -146,7 +146,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 85.9 KB
+files  serves 9 built-in files, 88.7 KB
 ...
 ```
 

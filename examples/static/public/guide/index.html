@@ -44,6 +44,7 @@ and runs anywhere.</p>
         <div class="eyebrow">Contents</div>
         <ol>
           <li><a href="#quick-start">Quick start</a></li>
+          <li><a href="#running-the-examples">Running the examples</a></li>
           <li><a href="#layout">Layout</a></li>
           <li><a href="#the-image-language">The image language</a></li>
           <li><a href="#environment-objects">Environment objects</a></li>
@@ -59,25 +60,67 @@ and runs anywhere.</p>
 <p>The model is described in <a href="/docs/">docs/namespace.md</a>, and built
 images in <a href="/images/">docs/images.md</a>. This README covers using them.</p>
 <h2 id="quick-start">Quick start</h2>
-<p>Requires Rust and Node.</p>
-<pre><code class="language-sh">make hello            # npm install, asc → scripts/*.wasm, cargo run -- examples/hello/hello.img
-make greeter          # a larger example
-make static           # serves these docs as a site on http://127.0.0.1:8080
-make static-built     # the same, from a built examples/static/static.rti
-make test             # build the wasm, then cargo test
+<p>Requires Rust and Node. The first <code>make</code> runs <code>npm install</code> and compiles each
+example&#39;s <code>scripts/*.ts</code> to <code>scripts/*.wasm</code> with the AssemblyScript compiler.</p>
+<pre><code class="language-sh">make hello            # run examples/hello: echoes each line you type (Ctrl-D to end)
+make greeter          # run examples/greeter: greets each name you type
+make static           # run examples/static: serves these docs on http://127.0.0.1:8080
+make static-built     # build examples/static/static.rti, then run that
+make test             # compile the wasm, then cargo test
 </code></pre>
-<p>After <code>make wasm</code>, run any image directly, or build it first:</p>
-<pre><code class="language-sh">cargo run -- examples/hello/hello.img
-cargo run -- --check image.img          # validate, print every view and what each instance can reach
-cargo run -- --check-shapes image.img   # also check every body&#39;s fields in transit
+<h2 id="running-the-examples">Running the examples</h2>
+<p>Every example is an image, a <code>.img</code> file next to its <code>scripts/</code>. After
+<code>make wasm</code>, run one from source with <code>cargo run -- &lt;image&gt;</code>. Running a
+<code>.img</code> builds it in memory first, so nothing is written to disk.</p>
+<p>To deploy an image, build it into one <code>.rti</code> file and run that instead. The
+file holds the compiled modules, any packed files and the parsed message
+types, so it runs anywhere <code>real_talk</code> does, with nothing else beside it.</p>
+<h3 id="hello">hello</h3>
+<p>Echo watches the console and writes back each line.</p>
+<pre><code class="language-sh">cargo run -- examples/hello/hello.img                     # type lines; Ctrl-D ends the run
+printf &#39;hello\nworld\n&#39; | cargo run -- examples/hello/hello.img
 
-cargo run -- build image.img -o image.rti       # seal: modules, packed files, sources
-cargo run -- image.rti --set listen.address=0.0.0.0:80 --with prod.vals
-cargo run -- unpack image.rti out/              # out/modules, out/files, out/sources
+cargo run -- build examples/hello/hello.img -o hello.rti
+printf &#39;hello\n&#39; | cargo run -- hello.rti
 </code></pre>
-<p>A <code>.img</code> is built in memory every time it runs, so the two behave the same.
-<code>build -v</code> lists the packed paths a later <code>include</code> replaced, and
-<code>--no-sources</code> leaves out the reference copies of the image&#39;s sources.</p>
+<h3 id="greeter">greeter</h3>
+<p>Greeter is configured by a startup request. It greets each name, keeps
+running statistics, and has a second object shout the greeting.</p>
+<pre><code class="language-sh">printf &#39;world\n&#39; | cargo run -- examples/greeter/greeter.img
+# Hello, world!
+# Stats {&quot;lines&quot;: 1, &quot;chars&quot;: 5, &quot;average&quot;: 5.0}
+# HELLO, WORLD!
+
+cargo run -- build examples/greeter/greeter.img -o greeter.rti
+printf &#39;Ada\n&#39; | cargo run -- greeter.rti
+</code></pre>
+<h3 id="static">static</h3>
+<p>An HTTP server for a small site: these docs, rendered. The site is packed
+into the image when it is built, and the address to listen on is a slot with
+<code>127.0.0.1:8080</code> as its default. Stop it with Ctrl-C.</p>
+<pre><code class="language-sh">cargo run -- examples/static/static.img                   # http://127.0.0.1:8080
+cargo run -- examples/static/static.img --set listen.address=127.0.0.1:9000
+
+cargo run -- build examples/static/static.img -o static.rti
+cargo run -- static.rti --set listen.address=0.0.0.0:8080 # e.g. on the machine you deploy to
+</code></pre>
+<p><code>make static-built</code> builds <code>examples/static/static.rti</code> (rebuilding it when
+the image, a module or a page changes) and runs it on the default address.
+Run <code>make site</code> after editing this README or the docs, so the site serves the
+new text.</p>
+<h3 id="inspecting-an-image">Inspecting an image</h3>
+<p>These work on a <code>.img</code> and a <code>.rti</code> alike:</p>
+<pre><code class="language-sh">cargo run -- --check static.rti                 # slots, what it touches on the host, views and reach
+cargo run -- --check-shapes examples/hello/hello.img   # run, checking every body&#39;s fields in transit
+cargo run -- unpack static.rti out/             # out/modules, out/files/&lt;instance&gt;, out/sources
+</code></pre>
+<p>Slot values can also come from a file, applied in order before any <code>--set</code>:</p>
+<pre><code class="language-sh">printf &#39;listen { address: &quot;0.0.0.0:8080&quot; }\n&#39; &gt; prod.vals
+cargo run -- static.rti --with prod.vals
+</code></pre>
+<p><code>build -v</code> lists the packed paths a later <code>include</code> replaced, and
+<code>--no-sources</code> leaves out the reference copies of the image&#39;s sources.
+<code>run</code> before the image is optional: <code>cargo run -- run static.rti</code> is the same.</p>
 <h2 id="layout">Layout</h2>
 <div class="table"><table>
 <thead>
@@ -231,7 +274,7 @@ slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 9 built-in files, 85.9 KB
+files  serves 9 built-in files, 88.7 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
