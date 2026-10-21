@@ -1,0 +1,7 @@
+# Keeps the build context small for _fly_io/Dockerfile, which compiles
+# everything it needs itself.
+.git/
+target/
+node_modules/
+**/*.wasm
+**/*.rti
