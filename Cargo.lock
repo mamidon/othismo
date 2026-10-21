@@ -100,6 +100,7 @@ dependencies = [
  "indexmap",
  "js-sys",
  "rand",
+ "serde",
  "serde_bytes",
  "simdutf8",
  "thiserror 2.0.21",
@@ -979,6 +980,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bson",
+ "serde",
+ "sha2",
  "wasmtime",
 ]
 

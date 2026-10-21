@@ -54,3 +54,24 @@ fn greeter_uses_a_startup_request_and_a_second_object() {
          HELLO, ADA!\n"
     );
 }
+
+#[test]
+fn a_built_image_runs_without_its_sources() {
+    let dir = std::env::temp_dir().join(format!("real_talk_built_hello_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let rti = dir.join("hello.rti");
+    let bin = env!("CARGO_BIN_EXE_real_talk");
+    let built = Command::new(bin).arg("build").arg(example("hello/hello.img")).arg("-o").arg(&rti).output().unwrap();
+    assert!(built.status.success(), "stderr: {}", String::from_utf8_lossy(&built.stderr));
+
+    // Nothing but the .rti is next to it, and it runs the same.
+    let out = run_image(&rti, "a\nb\n", Options { check_shapes: true }).unwrap();
+    assert_eq!(out, "a\nb\n");
+
+    let unpacked = Command::new(bin).arg("unpack").arg(&rti).arg(dir.join("out")).output().unwrap();
+    assert!(unpacked.status.success(), "stderr: {}", String::from_utf8_lossy(&unpacked.stderr));
+    assert!(dir.join("out/modules/Echo.wasm").exists());
+    assert!(dir.join("out/sources/scripts/Echo.ts").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

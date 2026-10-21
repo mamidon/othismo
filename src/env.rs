@@ -112,8 +112,9 @@ fn msg(type_name: &str, fields: Document) -> Message {
 
 impl EnvObject {
     /// `None` for instances implemented in Wasm. A Tcp listener is bound
-    /// here, so its address is known before anything starts.
-    pub fn new(kind: &Kind) -> Result<Option<EnvObject>> {
+    /// here, so its address is known before anything starts. A relative
+    /// files root is relative to `dir`, the image's directory.
+    pub fn new(kind: &Kind, dir: &Path) -> Result<Option<EnvObject>> {
         Ok(Some(match kind {
             Kind::Wasm { .. } => return Ok(None),
             Kind::Console => EnvObject::Console(Console::default()),
@@ -123,6 +124,7 @@ impl EnvObject {
                 EnvObject::Tcp(Tcp { listener: Some(listener), address, accept_watchers: vec![], conns: HashMap::new() })
             }
             Kind::Files { root } => {
+                let root = dir.join(root);
                 let root = root.canonicalize().with_context(|| format!("files root {}", root.display()))?;
                 if !root.is_dir() {
                     bail!("files root {} is not a directory", root.display());

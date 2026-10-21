@@ -6,11 +6,12 @@
 //! (parts of its own view it has spliced into its served tree) until the
 //! request lands on the instance that will serve it.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// What a request asks for. Safe verbs never change anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verb {
     Read,
     Stat,

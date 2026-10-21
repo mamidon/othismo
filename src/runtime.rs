@@ -266,11 +266,11 @@ impl<'p> Runtime<'p> {
             let obj = match &inst.kind {
                 Kind::Wasm { type_name } => {
                     let state = HostState { me: i, shared: shared.clone() };
-                    let module = &pack.modules[type_name];
+                    let module = pack.blob(&pack.modules[type_name]);
                     Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))
                 }
                 kind => Object::Env(
-                    EnvObject::new(kind)?
+                    EnvObject::new(kind, &pack.dir)?
                         .ok_or_else(|| anyhow!("no environment object for {kind:?}"))
                         .with_context(|| format!("instance `{}`", inst.name))?,
                 ),

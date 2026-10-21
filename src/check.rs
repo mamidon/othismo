@@ -6,6 +6,7 @@ use crate::ns::{self, Verb};
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, bail};
 use bson::{Bson, Document};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -19,15 +20,19 @@ pub const FILES: &str = "Environment.Files";
 pub const ENV_MODULE: &str = "real-talk/env";
 const ENV_SOURCE: &str = include_str!("../as/env.ts");
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     /// Every message type the image knows: the runtime's plus its imports.
     pub messages: BTreeMap<String, MessageType>,
     /// Instances in image order; everything else refers to them by index.
     pub instances: Vec<Instance>,
+    /// The files the image was checked from: the `.img` and its imports.
+    /// Not kept in a built image, which has copies under its sources.
+    #[serde(skip)]
+    pub sources: Vec<PathBuf>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub name: String,
     pub kind: Kind,
@@ -37,7 +42,7 @@ pub struct Instance {
     pub startup: Vec<Startup>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MountDecl {
     /// Clean, absolute.
     pub at: String,
@@ -45,7 +50,7 @@ pub struct MountDecl {
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Startup {
     pub verb: Verb,
     /// Clean, in the instance's served tree.
@@ -53,15 +58,16 @@ pub struct Startup {
     pub body: Option<Message>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Kind {
     /// `instance x : Name` runs `scripts/Name.wasm`.
     Wasm { type_name: String },
     Console,
     /// Listens on `address` (from the image's `send Listen`).
     Tcp { address: String },
-    /// Serves files under `root` (from `send FilesRoot`, relative to the image).
-    Files { root: PathBuf },
+    /// Serves files under `root` (from `send FilesRoot`, as written; a
+    /// relative root is relative to the image).
+    Files { root: String },
 }
 
 /// An environment type and the one config message it takes, if any.
@@ -76,7 +82,9 @@ pub fn load(path: &Path) -> Result<Program> {
     let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let img = image::parse(&src).with_context(|| format!("parsing {}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
-    check(&img, dir).with_context(|| format!("checking {}", path.display()))
+    let mut program = check(&img, dir).with_context(|| format!("checking {}", path.display()))?;
+    program.sources.insert(0, path.to_path_buf());
+    Ok(program)
 }
 
 /// The runtime's own message types (`as/env.ts`).
@@ -84,9 +92,9 @@ pub fn env_messages() -> BTreeMap<String, MessageType> {
     messages::parse(ENV_SOURCE).expect("as/env.ts parses")
 }
 
-/// Validates `img`; relative paths (imports, `scripts/`, `FilesRoot`) resolve against `dir`.
+/// Validates `img`; relative import paths resolve against `dir`.
 pub fn check(img: &Image, dir: &Path) -> Result<Program> {
-    let messages = resolve_imports(img, dir)?;
+    let (messages, sources) = resolve_imports(img, dir)?;
 
     let mut index: HashMap<&str, usize> = HashMap::new();
     for (i, inst) in img.instances.iter().enumerate() {
@@ -112,7 +120,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                         bail!(err_at(&inst.name, format!("{name} needs exactly one config message, `send {t} {{ ... }}`")))
                     }
                 };
-                builtin_kind(name, config.as_ref(), dir)
+                builtin_kind(name, config.as_ref())
             }
             None if ty.name.starts_with("Environment.") => {
                 let known: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).collect();
@@ -154,7 +162,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         instances.push(Instance { name: inst.name.name.clone(), kind, mounts, startup });
     }
 
-    Ok(Program { messages, instances })
+    Ok(Program { messages, instances, sources })
 }
 
 /// A summary of each instance's view and the most it can ever reach, for `--check`.
@@ -190,21 +198,23 @@ pub fn describe(p: &Program) -> String {
     out
 }
 
-fn builtin_kind(name: &str, config: Option<&Message>, dir: &Path) -> Kind {
+fn builtin_kind(name: &str, config: Option<&Message>) -> Kind {
     let config_str = |key: &str| config.and_then(|m| m.fields.get_str(key).ok()).unwrap_or_default().to_string();
     match name {
         CONSOLE => Kind::Console,
         TCP => Kind::Tcp { address: config_str("address") },
-        FILES => Kind::Files { root: dir.join(config_str("path")) },
+        FILES => Kind::Files { root: config_str("path") },
         other => unreachable!("unknown builtin {other}"),
     }
 }
 
-fn resolve_imports(img: &Image, dir: &Path) -> Result<BTreeMap<String, MessageType>> {
+/// Every message type in scope, and the files they were read from.
+fn resolve_imports(img: &Image, dir: &Path) -> Result<(BTreeMap<String, MessageType>, Vec<PathBuf>)> {
     let mut parsed: HashMap<PathBuf, BTreeMap<String, MessageType>> = HashMap::new();
     let env = env_messages();
     let mut out = env.clone();
     let mut imported: HashMap<String, PathBuf> = HashMap::new();
+    let mut sources = vec![];
     for imp in &img.imports {
         let path = if imp.path == ENV_MODULE {
             PathBuf::from(ENV_MODULE)
@@ -224,6 +234,9 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<BTreeMap<String, MessageTy
                 std::fs::read_to_string(&path).with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?
             };
             let decls = messages::parse(&src).with_context(|| format!("in {}", path.display()))?;
+            if imp.path != ENV_MODULE {
+                sources.push(path.clone());
+            }
             parsed.insert(path.clone(), decls);
         }
         let decls = &parsed[&path];
@@ -247,7 +260,7 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<BTreeMap<String, MessageTy
             out.insert(name.name.clone(), ty.clone());
         }
     }
-    Ok(out)
+    Ok((out, sources))
 }
 
 fn body_message(messages: &BTreeMap<String, MessageType>, body: &image::Body) -> Result<Message> {
@@ -385,7 +398,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.instances[0].kind, Kind::Tcp { address: "127.0.0.1:0".into() });
-        assert!(matches!(&p.instances[1].kind, Kind::Files { root } if root.ends_with("public")));
+        assert_eq!(p.instances[1].kind, Kind::Files { root: "public".into() });
         assert!(p.instances[0].startup.is_empty(), "config isn't a request");
 
         let e = err("instance net : Environment.Tcp");

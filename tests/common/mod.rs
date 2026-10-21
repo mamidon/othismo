@@ -28,7 +28,7 @@ impl Write for Captured {
 
 /// Loads `image` and runs it with `input` as stdin; returns what it printed.
 pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<String> {
-    let pack = real_talk::pack::build(image)?;
+    let pack = real_talk::pack::load(image)?;
     let out = Captured::default();
     let io = Io { input: Box::new(Cursor::new(input.as_bytes().to_vec())), output: Box::new(out.clone()) };
     runtime::run(&pack, io, options)?;

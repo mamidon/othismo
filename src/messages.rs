@@ -5,10 +5,11 @@
 //! Methods, constructors, static members and top-level statements are skipped.
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Bool,
@@ -83,7 +84,7 @@ impl fmt::Display for FieldType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageType {
     pub name: String,
     /// Fields in declaration order.

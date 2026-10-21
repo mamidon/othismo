@@ -16,11 +16,12 @@
 use crate::messages::{FieldType, MessageType};
 use anyhow::{Context, Result, bail};
 use bson::{Bson, Document};
+use serde::{Deserialize, Serialize};
 
 pub const TYPE_KEY: &str = "$type";
 
 /// A decoded message in flight.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub type_name: String,
     /// The message's fields, without `$type`.
