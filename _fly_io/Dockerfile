@@ -27,6 +27,8 @@ FROM rust:1.95-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+# The checker embeds the runtime's message types from here (src/check.rs).
+COPY as/env.ts as/env.ts
 RUN cargo build --release --locked
 COPY _fly_io/docs.img /ship/docs.img
 COPY --from=web /src/examples/static/scripts/HttpServer.wasm /src/examples/static/scripts/StaticSite.wasm /ship/scripts/
@@ -36,8 +38,12 @@ RUN target/release/real_talk build /ship/docs.img -o /ship/docs.rti \
 
 # 3. What runs: the binary and the one built image, nothing else.
 FROM debian:bookworm-slim
+# As PID 1, real_talk would ignore SIGTERM (it installs no handlers), so a
+# stop would wait out the timeout; tini passes signals on.
+RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/real_talk /usr/local/bin/real_talk
 COPY --from=build /ship/docs.rti /srv/docs.rti
 USER 65534
 EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["real_talk", "/srv/docs.rti"]
