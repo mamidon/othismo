@@ -1,0 +1,9 @@
+(struct P
+  (field x u64)
+  (field y Str))
+
+(func <file> () -> P
+  (slot 0 t0 P temp)
+  (block 0
+    (assign t0 (struct (const 1u64) (const "b")))
+    (return t0)))   ; the file's top level (§statements)

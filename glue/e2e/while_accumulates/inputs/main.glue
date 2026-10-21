@@ -1,0 +1,7 @@
+let mut i = 0u64;
+let mut sum = 0u64;
+while i < 5u64 {
+  sum = sum + i;
+  i = i + 1u64;
+}
+sum

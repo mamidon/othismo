@@ -1,0 +1,369 @@
+# §statements — Statements and Declarations
+
+> Part of the Glue construct checklist. Index and legend: [`../language-constructs.md`](../language-constructs.md)
+
+## Summary
+
+Whether the language has a statement/expression split at all is the most structural
+syntax decision available. Lox has one; many languages don't, and make everything an
+expression instead.
+
+This section is where goal §one-language bites hardest: "a bare expression is a valid
+program" and "no required `main`, no module preamble" are both claims about what the top
+level of `program` accepts.
+
+## Status
+
+Legend in the [index](../language-constructs.md). *Syntax* and *Semantics* track what has
+been **decided**; *Implementation* tracks what is **built** in `glue/`.
+
+| Area | Syntax | Semantics | Implementation |
+| --- | --- | --- | --- |
+| The statement/expression split | ✓ | ✓ | ✓ |
+| Bindings — `let`, `mut`, annotations | ✓ | ✓ | ✓ |
+| Constants — an unassigned constant binding stays unpinned | ✓ | ✓ | ✓ |
+| Shadowing, including in the same scope | ✓ | ✓ | ✓ |
+| Assignment (`=`) and places | ✓ | ✓ | ◑ |
+| Compound assignment (`+=` …) | ✓ | ✓ | ✂ |
+| Expression statements | ✓ | ✓ | ✓ |
+| The top level — a file is a block | ✓ | ✓ | ✓ |
+| Scope and lifetime | · | ✓ | ✓ |
+| Initialization | · | ✓ | ✓ |
+| Mutation — what `mut` gates | · | ✓ | ✓ |
+| Destructuring patterns in `let` | — | — | — |
+| Top-level bindings as globals; hoisting; initialization order | ✓ | ✓ | ✓ |
+
+Assignment is ◑ only because an index is a place the spec admits and elaboration does not
+(§types). The top-level row was ◑ across the board until 2026-09-07, when *Top-level
+bindings are globals* settled it: a `fn` may read any binding in its file, declarations
+hoist, initializers run in order, and reading one too early is refused before the program
+starts.
+
+---
+
+## Lox's grammar **[Lox]**
+
+```
+program     → declaration* EOF
+declaration → classDecl | funDecl | varDecl | statement
+statement   → exprStmt | forStmt | ifStmt | printStmt | returnStmt | whileStmt | block
+```
+
+## Checklist
+
+- **Statement/expression split** — Lox has one; many languages don't. This is the single
+  most structural syntax decision (see Design Note: Expressions and Statements, ch. 3)
+- **Expression statement** — `expression ";"` **[Lox]**
+  - Rule for discarding non-unit values: silent, warning, or requires explicit discard
+- **Block** — `"{" declaration* "}"` **[Lox]**, introduces a scope
+- **Variable declaration** — `var IDENTIFIER ( "=" expression )? ";"` **[Lox]**
+  - Default-initialize to `nil` **[Lox]** vs. require initializer vs. definite-assignment analysis
+  - Mutable vs. immutable bindings (`let` / `const` / `var`)
+  - Shadowing rules: allowed in inner scope, banned in same scope
+  - Implicit declaration on first assignment (see Design Note: Implicit Variable Declaration, ch. 8)
+  - Type annotations
+  - Declaration *statements* vs. only-in-blocks: Lox bans `if (x) var y = 1;` by
+    splitting `declaration` from `statement` — a subtle but load-bearing grammar trick
+- **Constants** — compile-time constants, and whether they're a separate construct
+- **`print` statement** **[Lox]** — a deliberate crutch so Lox needs no stdlib. In a real
+  language this is a library function, not syntax. Decide what your equivalent bootstrap is
+  (for a wasm guest: probably a host import)
+
+## Glue Syntax
+
+> Decided 2026-08-02. Items marked **Open** are known gaps, not oversights.
+
+### The statement/expression split
+
+Glue has one, with §expressions' carve-out: blocks, `if`, and `match` are expressions.
+What remains a statement is everything that binds a name or performs an effect in
+sequence.
+
+```
+statement  → exprStmt | declStmt | assignStmt | controlStmt
+exprStmt   → expression ";"
+declStmt   → "let" "mut"? pattern ( ":" type )? "=" expression ";"
+assignStmt → place assignOp expression ";"
+```
+
+**Lox's declaration/statement split is unnecessary here.** Lox separates the two
+productions purely to reject `if (x) var y = 1;`. Braces are mandatory in Glue (§control),
+so that program is already unwriteable — `if x { let y = 1; }` is the only spelling, and
+it scopes correctly on its own. One less grammar rule for the same guarantee.
+
+### Bindings
+
+```
+let n = 42;              // binding
+let n: u32 = 42;         // with annotation
+let mut count = 0;       // mutable binding
+```
+
+- **One keyword.** There is no `var` and no `const`. A binding is `let`, optionally `mut`.
+- **`mut` gates mutation, not rebinding.** Every binding is rebindable regardless; `mut`
+  decides only whether the value can be changed in place. See *Mutation* below.
+- **An initializer is always required.** There is no declare-then-assign, and no
+  definite-assignment analysis to specify or implement. Blocks being expressions makes
+  this painless — the case that would otherwise need it is written as a value:
+
+  ```
+  let mode = if verbose { Mode.Loud } else { Mode.Quiet };
+  ```
+
+- **No implicit declaration.** Assigning to an unbound name is an error, never a
+  declaration.
+- **The left side is a pattern** (§unions), so destructuring falls out of `let` rather
+  than needing its own form. Until §unions exists, the only pattern is a plain name.
+  Patterns in `let` must be irrefutable.
+
+### Constants
+
+**There is no `const` keyword.** §lexical already gives the useful half: a binding with a
+constant initializer that is never assigned to stays an unpinned constant, folded at
+compile time and usable wherever a constant is expected. A second keyword would name the
+same thing twice.
+
+What that does *not* provide is a way to **require** compile-time evaluation — the thing
+you need if an array length or a type parameter must be a constant.
+
+**Answered 2026-08-18 by §comptime, and not with a binding form.** `comptime` is that
+requirement, and it is spelled where the requirement lives rather than on the binding: on
+a parameter whose argument must be known at compile time, and as a prefix on an expression
+that must be evaluated at compile time.
+
+```
+fn List(comptime T: Type) -> Type { … }     // the type parameter must be a constant
+let table = comptime build_table(256);      // this expression must be folded
+```
+
+That leaves this section's rule exactly as it was — a non-`mut` `let` is comptime-known
+when its initializer is, and there is still no `const`. §comptime declines a `comptime
+let` for the same reason §statements declines `const`: it would name the same thing twice.
+
+### Shadowing
+
+A new `let` may shadow an existing binding, **including in the same scope**:
+
+```
+let input = read();          // Str
+let input = parse(input);    // u64 — same name, new binding
+```
+
+This is deliberate and it earns its keep twice. It's the natural way to write a
+narrowing pipeline without inventing `input2`, and it's what makes redefinition at a
+prompt behave the way anyone would expect — goal §image wants a live session where you
+restate a binding, and shadowing is that, with no special REPL rule.
+
+Shadowing creates a *new* binding; it does not mutate the old one. Anything that captured
+the old binding still sees the old value (§scope).
+
+### Assignment
+
+Assignment is a **statement**, so `if x = 1 { … }` does not compile — the typo class is
+gone by construction rather than by lint.
+
+```
+count = count + 1;
+count += 1;
+```
+
+Compound forms: `+= -= *= /= %= &= |= ^= <<= >>=`. Each is exactly `a = a op b` with the
+place evaluated once, and each traps on overflow like the operator it wraps
+(§expressions).
+
+> **Cut from the core.** `=` is the only assignment operator implemented. Ten tokens for a
+> rewrite the reader can do, and half of them are spelled from operators that are
+> themselves cut. "The place is evaluated once" has no observable consequence until a place
+> can have side effects, which needs §objects. See
+> [Deferred decisions](deferred.md#compound-assignment).
+
+The left side is a **place**: a name, a field, or an index — not a pattern. Parallel
+assignment (`a, b = b, a`) is declined; `let` destructuring covers the real need, and a
+statement that assigns to several places at once interacts badly with evaluation order
+being fully specified (§expressions).
+
+### Expression statements
+
+An expression statement evaluates its expression and discards the value.
+
+```
+log("hello");
+counter.next();        // whatever it returns is discarded
+```
+
+No rule requires the value to be unit, and nothing marks a discard as deliberate.
+
+### The top level
+
+**A file is a block.** It holds statements, and it may end in a trailing expression with
+no `;`, which is the file's value under §expressions' rule.
+
+```
+let x = 2;
+x * 21          // the value of this file: 42
+```
+
+That is the whole of goal §one-language's "a bare expression is a valid program" — not a
+REPL special case, just the block rule applied to the outermost block. A prompt and a file
+accept the same input because they *are* the same construct.
+
+### Top-level bindings are globals
+
+**Decided 2026-09-07.** A top-level `let` is not a local of the file's block the way a
+`let` inside `{ … }` is. It is a **global**: storage that outlives every frame, which is
+§scope's locals-versus-globals distinction and, on wasm, a `global.get` rather than a
+frame slot.
+
+That is what lets a function read one:
+
+```
+let x = foo();
+
+fn foo() -> u64 { 42 }
+fn bar() -> u64 { 3 + x }
+
+bar()                        // 45
+```
+
+Three rules, and a reader already has all three from elsewhere:
+
+- **A file executes top down.** Statements run in written order, initializers included.
+- **Declarations hoist; invocations do not.** `fn`, `struct`, and `type` are visible
+  throughout the file and may be mutually recursive. A `fn` *body* is elaborated after the
+  rest of its block, which is why it sees every top-level binding rather than only the
+  ones written above it.
+- **Reading a binding before its `let` has run is a compile error**, below.
+
+**Reading a global is not a capture**, and that is the whole reason this costs §functions
+nothing. A capture is a frame reached from another frame; a global is a location. So a
+`fn` naming one still compiles to a plain function with no environment, and §functions'
+rule stands exactly as written. A binding inside a block is still a local, and a nested
+`fn` still cannot see one.
+
+`mut` needs no new rule either. Rebinding a global is unrestricted, exactly as for a
+local, and assigning a *field* of one requires the binding to be `mut`, exactly as §types
+says:
+
+```
+let mut hits = 0u64;
+fn record() { hits = hits + 1u64; }     // rebinding — no permission needed
+```
+
+That is the first side effect Glue can express without a host, and the closest thing it
+has to module state until §modules arrives.
+
+#### Reading before initialization
+
+Hoisting declarations while running initializers in order leaves exactly one shape open: a
+top-level statement that *invokes* something which reads a binding declared below it.
+
+```
+let x = foo();
+fn foo() -> u64 { y }
+let y = 1u64;
+// `foo` reads `y`, which is not initialized until later in this file
+```
+
+This is JavaScript's temporal dead zone, and JavaScript answers it at run time with a
+`ReferenceError` — the loudest answer available to a language with `eval` and no static
+call graph, and itself a correction of `var`, which returned `undefined` and said nothing.
+Glue has the call graph, so it answers before the program starts: elaboration computes,
+per function, the globals it may read — following direct calls to a fixed point, and
+answering a call through a function *value* with the union over every function whose value
+is taken — and refuses a top-level call that could reach one that has not been initialized
+yet.
+
+Same decision as JavaScript's, in other words, taken as far as the target allows.
+
+It leaves *Initialization* below true as written: there is still no uninitialized state to
+observe and no default-value rule to write. It is also not the definite-assignment
+analysis this section declines — an initializer is still always required, and this pass
+asks only which top-level statement runs first.
+
+There is no `print` statement. Output is a host import (§modules); the interactive front
+end displays the top-level trailing expression, which is a property of the language rather
+than a feature of the REPL. What a *deployed* module does with a top-level value — and
+whether it has one — is §modules', along with the entry point.
+
+---
+
+## Glue Semantics
+
+> Decided 2026-08-02. Items marked **Open** are known gaps, not oversights.
+
+### Scope and lifetime
+
+- A block introduces a scope (§scope). A binding is visible from its declaration to the
+  end of the enclosing block — not before, which makes use-before-declaration a static
+  error rather than a runtime surprise.
+- Shadowing introduces a new binding. The shadowed one is not destroyed, merely
+  unreachable by name; a closure that captured it (§functions) still sees it.
+- **A top-level binding is visible to every function in the file**, whichever order the
+  two are written in, because it is a global rather than a local of the file's block (*The
+  top level*, above). Statements still run in order; what hoists is the declaration, not
+  the initializer. This replaces an Open item that framed the question as ordering — it is
+  not ordering, since a `fn` could not see a module-level binding declared *above* it
+  either.
+- **Open:** what a top-level binding means once there are modules. Whether it is private
+  to its file, whether it can be exported, and when it initializes relative to an import
+  are §modules', and none of them changes the rule above.
+
+### Initialization
+
+Every binding is initialized at its declaration, so there is no uninitialized state to
+observe and no default-value rule to write. This is a direct consequence of §lexical
+having no `nil`: without a universal absent value, "declared but unset" has nothing to
+hold.
+
+### Mutation
+
+`mut` gates **in-place mutation only**. Rebinding is always allowed, on any binding. There
+is no type-level `mut` qualifier.
+
+```
+let x = Foo::create();
+x.mutating_method();     // error — mutates, and x is not mut
+x = Foo::create();       // fine — rebinding is unrestricted
+
+let mut y = Foo::create();
+y.mutating_method();     // fine
+y = Foo::create();       // fine
+```
+
+The two operations are genuinely different, which is why one keyword covers only one of
+them: rebinding replaces what a *name* refers to and can affect nothing else, while
+mutation changes a value that other names may also observe. Only the second needs
+guarding.
+
+Assignment must match the binding's type — `x = v` requires `v` to have `x`'s type. To
+give a name a value of a different type, declare it again; that's shadowing, above, and it
+is why both forms remain useful.
+
+This rests on a function being able to declare that it mutates its receiver or a
+parameter, which is §functions' and §objects' to design. §statements fixes only the rule
+that consumes it: calling such a function requires a `mut` binding.
+
+**Open:** where `mut` attaches once patterns exist — `let mut (a, b) = …` marking the
+whole binding, or `let (mut a, b) = …` marking each. §unions decides when destructuring
+does.
+
+**What this does not give us.** Rust's version carries a real guarantee because borrow
+checking forbids a second, mutable path to the same value. Glue is not adopting ownership
+or borrowing (§non-goals), so `let` means "you cannot mutate through *this* name" — not
+"this value will not change". If §types gives aggregates reference semantics, then
+
+```
+let a = obj;
+let mut b = obj;
+b.mutate();        // a observes the change
+```
+
+is possible, and `let` is an ergonomic guard rather than a guarantee. If §types chooses
+value semantics, the situation can't arise. **Open for §types** — and the answer decides
+how strong a claim the documentation is allowed to make about `let`.
+
+### Evaluation
+
+Statements execute in written order. The initializer of a declaration is evaluated before
+the binding exists, so `let x = x;` refers to the *outer* `x` if there is one, and is an
+error if there isn't — which is what makes the shadowing idiom above work.

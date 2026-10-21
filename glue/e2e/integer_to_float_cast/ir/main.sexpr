@@ -1,0 +1,12 @@
+(func <file> () -> f64
+  (slot 0 t0 f64 temp)
+  (block 0
+    (assign t0 (call widen (const 3u64)))
+    (return t0)))   ; the file's top level (§statements)
+
+(func widen (u64) -> f64
+  (slot 0 n  u64 param)
+  (slot 1 t1 f64 temp)
+  (block 0
+    (assign t1 (cast n))
+    (return t1)))

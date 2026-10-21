@@ -1,0 +1,4 @@
+fn give_up(skip: bool) {
+  if skip { return; }
+}
+give_up(true)

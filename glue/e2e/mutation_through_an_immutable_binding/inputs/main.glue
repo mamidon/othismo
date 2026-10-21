@@ -1,0 +1,5 @@
+struct C { hits: u64 }
+fn bump(c: mut C) { c.hits = c.hits + 1u64; }
+let c = C { hits: 0 };
+bump(c);
+c.hits

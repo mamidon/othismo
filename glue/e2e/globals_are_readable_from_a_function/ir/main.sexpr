@@ -1,0 +1,16 @@
+(global @total u64)
+
+(func <file> () -> u64
+  (slot 0 t0 u64 temp)
+  (block 0
+    (store @total (const 41u64))
+    (assign t0 (call total_plus_one))
+    (return t0)))   ; the file's top level (§statements)
+
+(func total_plus_one () -> u64
+  (slot 0 t0 u64 temp)
+  (slot 1 t1 u64 temp)
+  (block 0
+    (assign t0 (globalget @total))
+    (assign t1 (add t0 (const 1u64)))
+    (return t1)))

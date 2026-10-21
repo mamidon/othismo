@@ -1,0 +1,2 @@
+fn forever(n: u64) -> u64 { forever(n + 1u64) }
+forever(0)

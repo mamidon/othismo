@@ -19,3 +19,7 @@ Cargo.lock
 
 .DS_Store
 playground/
+
+# VS Code extension build output
+node_modules/
+glue/vscode/out/

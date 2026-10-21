@@ -1,0 +1,8 @@
+(func <file> () -> ?
+  (block 0
+    (return (const ()))))   ; the file's top level (§statements)
+
+(func f (u64) -> u64
+  (slot 0 a u64 param)
+  (block 0
+    (return a)))

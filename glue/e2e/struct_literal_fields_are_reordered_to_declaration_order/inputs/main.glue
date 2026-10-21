@@ -1,0 +1,2 @@
+struct P { x: u64, y: Str }
+P { y: "b", x: 1 }

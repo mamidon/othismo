@@ -1,0 +1,56 @@
+(SourceFile
+  (FnDecl
+    (Fn "fn")
+    (Whitespace " ")
+    (Ident "add")
+    (ParamList
+      (ParenLeft "(")
+      (Param
+        (Ident "a")
+        (Colon ":")
+        (NameType
+          (Whitespace " ")
+          (Ident "u64")))
+      (Comma ",")
+      (Param
+        (Whitespace " ")
+        (Ident "b")
+        (Colon ":")
+        (NameType
+          (Whitespace " ")
+          (Ident "u64")))
+      (ParenRight ")"))
+    (RetType
+      (Whitespace " ")
+      (Arrow "->")
+      (NameType
+        (Whitespace " ")
+        (Ident "u64")))
+    (BlockExpr
+      (Whitespace " ")
+      (BraceLeft "{")
+      (BinaryExpr
+        (NameExpr
+          (Whitespace " ")
+          (Ident "a"))
+        (Whitespace " ")
+        (Plus "+")
+        (NameExpr
+          (Whitespace " ")
+          (Ident "b")))
+      (Whitespace " ")
+      (BraceRight "}")))
+  (CallExpr
+    (NameExpr
+      (Whitespace "\n")
+      (Ident "add"))
+    (ArgList
+      (ParenLeft "(")
+      (LiteralExpr
+        (Int "2"))
+      (Comma ",")
+      (LiteralExpr
+        (Whitespace " ")
+        (Int "40"))
+      (ParenRight ")")))
+  (Whitespace "\n"))

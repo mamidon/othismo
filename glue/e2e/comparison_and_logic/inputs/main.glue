@@ -1,0 +1,3 @@
+let a = 3u64;
+let b = 4u64;
+a < b && b >= a && a != b

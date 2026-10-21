@@ -1,0 +1,4 @@
+(tokens
+  (Int "42" 0..2)
+  (Whitespace "\n" 2..3)
+  (Eof "" 3..3))

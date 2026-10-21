@@ -1,0 +1,22 @@
+(global @n s64)
+(global @flag bool)
+
+(func <file> () -> bool
+  (slot 0 t0 bool temp)
+  (slot 1 t1 s64 temp)
+  (slot 2 t2 s64 temp)
+  (slot 3 t3 s64 temp)
+  (slot 4 t4 bool temp)
+  (block 0
+    (store @n (const 5s64))
+    (store @flag (const false))
+    (assign t1 (globalget @n))
+    (assign t2 (neg t1))
+    (assign t3 (neg (const 5s64)))
+    (assign t0 (eq t2 t3))
+    (if t0
+      (then 1
+        (assign t4 (globalget @flag))
+        (assign t0 (not t4)))
+      (else 2))
+    (return t0)))   ; the file's top level (§statements)

@@ -1,0 +1,18 @@
+(global @x u64)
+(global @y u64)
+
+(func <file> () -> u64
+  (slot 0 x  u64 local)
+  (slot 1 t1 u64 temp)
+  (slot 2 t2 u64 temp)
+  (slot 3 t3 u64 temp)
+  (slot 4 t4 u64 temp)
+  (block 0
+    (store @x (const 1u64))
+    (assign x (const 10u64))
+    (assign t1 (add x (const 1u64)))
+    (store @y t1)
+    (assign t2 (globalget @x))
+    (assign t3 (globalget @y))
+    (assign t4 (add t2 t3))
+    (return t4)))   ; the file's top level (§statements)

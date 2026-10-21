@@ -1,0 +1,190 @@
+// §functions and §types — functions, data, and types.
+//
+// §statements collapses Lox's declaration/statement split, so every
+// declaration here is a statement and may appear anywhere one may.
+
+// ---- Functions ------------------------------------------------------------
+
+// Parameter types are required, and the return type is required when it isn't
+// unit. That is §inference's local-inference boundary: signatures are
+// annotated, bodies are inferred — which keeps a function's meaning readable
+// without reading its body.
+fn add(a: u64, b: u64) -> u64 {
+  a + b
+}
+
+// A stand-in for §modules' host. A program has no way to reach the outside
+// world yet, so the functions here that would print or fetch something do
+// nothing — and unit, which is what they return, is a real value rather than
+// an absence.
+fn emit(text: Str) { }
+
+// The return type is omitted when it is unit (§functions).
+fn log(message: Str) {
+  emit(message);
+}
+
+fn nothing() { }
+
+fn work() { }
+
+// `mut` on a parameter means the function may mutate the caller's value, and
+// the caller must pass a `mut` binding. It belongs to the parameter, not to
+// the type, even though it is written where a type modifier would be
+// (§functions).
+//
+// `Counter` is declared further down: a declaration is order-independent
+// within its block, which is what mutual recursion needs (§functions, §scope).
+fn advance(c: mut Counter, by: u64) {
+  c.steps = c.steps + by;
+}
+
+// There is no overloading, by arity or by type: one name, one function. The
+// cost of `add_u64` versus `add_f64` is smaller than the cost of resolution
+// rules nobody can predict (§functions).
+fn add_f64(a: f64, b: f64) -> f64 {
+  a + b
+}
+
+// A `fn` may be declared inside a block. It is scoped to that block and
+// captures nothing — it is an ordinary function that happens to be private.
+// To capture, use a lambda (§functions).
+fn outer(n: u64) -> u64 {
+  fn double(x: u64) -> u64 {
+    x * 2
+  }
+  double(n)
+}
+
+// Recursion is permitted (§functions).
+fn countdown(n: u64) -> u64 {
+  if n == 0 {
+    return 0;
+  }
+  countdown(n - 1)
+}
+
+// ---- Functions as values --------------------------------------------------
+// The type of a function is `fn(T, …) -> R`, with `-> R` omitted for unit.
+
+let f = add;
+let g: fn(u64, u64) -> u64 = add;
+let h: fn() = nothing;
+let logger: fn(Str) = log;
+
+fn apply(callback: fn(u64) -> u64, x: u64) -> u64 {
+  callback(x)
+}
+
+fn compose(callback: fn(u64) -> u64) -> fn(u64) -> u64 {
+  callback
+}
+
+// ---- Lambdas --------------------------------------------------------------
+// Lambdas capture by reference, implicitly — there is no capture list
+// (§functions).
+//
+// A lambda's types come from context, so each of these has to have some: an
+// annotation on the parameter, or a type on the binding it is being given to,
+// or — for `mapped` below — the signature of the function it is passed to.
+
+let inc = (x: u64) -> x + 1;
+let inferred: fn(u64) -> u64 = (x) -> x + 1;
+let several = (x: u64, y: u64) -> x + y;
+let nullary = () -> work();
+let with_block: fn(u64) -> u64 = (x) -> {
+  let y = x * 2;
+  y + 1
+};
+
+let mapped = apply((x) -> x * 3, 4);
+
+// ---- Structs --------------------------------------------------------------
+// Nominal, not structural: two structs with identical fields are different
+// types. A name is a decision, and structural typing makes every field name
+// load-bearing forever (§types).
+
+// A point in two dimensions.
+struct Point {
+  x: s64,
+  y: s64,
+}
+
+struct Empty { }
+
+struct Counter {
+  steps: u64,
+}
+
+struct Line {
+  from: Point,
+  to: Point,
+  label: Str,
+}
+
+// Field mutability follows the binding, not the field: a `mut` binding permits
+// assigning any field, a non-`mut` binding permits none. There is no per-field
+// `mut` (§types).
+let origin = Point { x: 0, y: 0 };
+let mut moving = Point { x: 1, y: 2 };
+moving.x = 5;
+moving.y = 6;
+
+let mut steps = Counter { steps: 0 };
+advance(steps, 2);
+
+let diagonal = Line {
+  from: Point { x: 0, y: 0 },
+  to: Point { x: 1, y: 1 },
+  label: "diagonal",
+};
+
+// The named form is sugar, and works. §comptime makes a type a value, so
+// `struct Point { … }` above means `let Point = struct { … };` — the same
+// declaration, and a reader who never needs to know that never has to see it.
+//
+// The anonymous half is what a generic returns, since it has a type to produce
+// and no name to give it in advance. The binding lends its name to the type,
+// so the two forms produce the same IR and not merely the same meaning. The
+// one thing they do not share is position: a `struct` declaration hoists
+// (§scope) and a `let` runs in order, so only the named form can be used above
+// where it is written.
+let Pixel = struct { on: bool };
+let dark = Pixel { on: false };
+
+// An instantiation is a call, in a type position as anywhere else (§comptime,
+// §generics) — no angle brackets, and nothing for `<` to be ambiguous about.
+// Elaboration says "generic instantiation is not supported yet": evaluating
+// one needs a comptime call and a cache keyed on its arguments.
+//
+// `Pair` here is a stand-in with the wrong signature, because the right one —
+// `fn Pair(comptime A: Type, comptime B: Type) -> Type` — names two things
+// that do not exist yet. What the line below demonstrates is the *grammar*: a
+// call is a type. See `generics.glue` for what it is for.
+fn Pair(a: u64, b: u64) -> u64 { a + b }
+
+fn first_of(p: Pair(1, 2)) -> u64 { 0 }
+
+// ---- Type aliases ---------------------------------------------------------
+// An alias is a second name for one type, not a new one — `InstanceId` and
+// `u64` are interchangeable everywhere. A distinct type sharing a
+// representation is a different feature, and isn't here yet (§types).
+
+// Identifies a live instance in the Othismo namespace.
+type InstanceId = u64;
+type Handler = fn(Str);
+type Transform = fn(u64) -> u64;
+type Nothing = ();
+
+// ---- Unit -----------------------------------------------------------------
+// A function with no `-> T` returns unit. Unit is a real value with one
+// inhabitant, not an absence: it can be bound, returned, and stored, which
+// keeps `fn` types uniform (§functions).
+
+let nil: () = ();
+
+fn returns_unit() -> () {
+  ()
+}
+
+add(1, 2) + 3

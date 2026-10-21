@@ -1,0 +1,4 @@
+struct Counter { hits: u64 }
+let mut c = Counter { hits: 0 };
+c.hits = c.hits + 7u64;
+c.hits

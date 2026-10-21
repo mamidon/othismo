@@ -1,0 +1,8 @@
+(global @n u64)
+
+(func <file> () -> u64
+  (slot 0 t0 u64 temp)
+  (block 0
+    (store @n (const 7u64))
+    (assign t0 (globalget @n))
+    (return t0)))   ; the file's top level (§statements)

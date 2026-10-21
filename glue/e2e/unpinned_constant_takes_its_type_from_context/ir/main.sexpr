@@ -1,0 +1,10 @@
+(func <file> () -> u32
+  (slot 0 t0 u32 temp)
+  (block 0
+    (assign t0 (call takes (const 7u32)))
+    (return t0)))   ; the file's top level (§statements)
+
+(func takes (u32) -> u32
+  (slot 0 n u32 param)
+  (block 0
+    (return n)))

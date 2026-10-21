@@ -1,0 +1,10 @@
+(global @greeting Str)
+
+(func <file> () -> Str
+  (slot 0 t0 Str temp)
+  (slot 1 t1 Str temp)
+  (block 0
+    (store @greeting (const "hi"))
+    (assign t0 (globalget @greeting))
+    (assign t1 (add t0 (const "!")))
+    (return t1)))   ; the file's top level (§statements)

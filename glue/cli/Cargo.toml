@@ -1,0 +1,25 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+elab = { path = "../elab" }
+eval = { path = "../eval" }
+ir = { path = "../ir" }
+parser = { path = "../parser" }
+tokenizer = { path = "../tokenizer" }
+
+[[bin]]
+name = "glue"
+path = "src/main.rs"
+
+[dev-dependencies]
+libtest-mimic = "0.8.2"
+
+# `harness = false` hands `main` to libtest-mimic, which is what lets one
+# scenario on disk be one test case in cargo's output.
+[[test]]
+name = "e2e"
+harness = false
