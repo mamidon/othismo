@@ -1,6 +1,7 @@
 // Renders the project's docs into the static example's site:
 //
 //   docs/overview.md   -> public/overview/index.html
+//   docs/objects.md    -> public/objects/index.html
 //   docs/namespace.md  -> public/docs/index.html
 //   docs/images.md     -> public/images/index.html
 //
@@ -23,6 +24,13 @@ const PAGES = [
     nav: "/overview/",
     eyebrow: "Overview",
     description: "What Othismo is and why: sandboxed objects, namespaces and images you can review instead of the code.",
+  },
+  {
+    source: "docs/objects.md",
+    out: "objects/index.html",
+    nav: "/objects/",
+    eyebrow: "Objects",
+    description: "Objects: the sandboxed modules you don't read, and the interfaces you do.",
   },
   {
     source: "docs/namespace.md",
@@ -48,6 +56,8 @@ const LINKS = {
   "images.md": "/images/",
   "docs/overview.md": "/overview/",
   "overview.md": "/overview/",
+  "docs/objects.md": "/objects/",
+  "objects.md": "/objects/",
 }
 
 function slug(text) {
@@ -124,6 +134,7 @@ function page(p, doc) {
         <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
         <div class="nav-links">
           ${navLink("/overview/", "Overview")}
+          ${navLink("/objects/", "Objects")}
           ${navLink("/docs/", "Design")}
           ${navLink("/images/", "Building")}
         </div>
