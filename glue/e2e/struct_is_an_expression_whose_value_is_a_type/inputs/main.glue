@@ -1,0 +1,3 @@
+let Pixel = struct { on: bool };
+let lit = Pixel { on: true };
+lit.on

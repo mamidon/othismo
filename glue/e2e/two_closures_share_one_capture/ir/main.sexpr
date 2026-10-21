@@ -1,0 +1,33 @@
+(global @next (fn () -> u64))
+
+(func <file> () -> u64
+  (slot 0 t0 (fn () -> u64) temp)
+  (slot 1 t1 (fn () -> u64) temp)
+  (slot 2 t2 u64 temp)
+  (block 0
+    (assign t0 (call pair))
+    (store @next t0)
+    (assign t1 (globalget @next))
+    (assign t2 (call-indirect t1))
+    (return t2)))   ; the file's top level (§statements)
+
+(func pair () -> (fn () -> u64)
+  (slot 0 count (cell u64) local mut)
+  (slot 1 bump  (fn () -> u64) local)
+  (block 0
+    (assign count (makecell (const 0u64)))
+    (assign bump (closure pair.λ0 (captures count)))
+    (drop (call-indirect bump))
+    (return bump)))
+
+(func pair.λ0 () -> u64
+  (slot 0 count (cell u64) capture mut)
+  (slot 1 t1    u64 temp)
+  (slot 2 t2    u64 temp)
+  (slot 3 t3    u64 temp)
+  (block 0
+    (assign t1 (cellget count))
+    (assign t2 (add t1 (const 1u64)))
+    (store (cell count) t2)
+    (assign t3 (cellget count))
+    (return t3)))

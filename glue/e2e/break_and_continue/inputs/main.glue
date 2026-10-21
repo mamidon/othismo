@@ -1,0 +1,9 @@
+let mut i = 0u64;
+let mut seen = 0u64;
+while true {
+  i = i + 1u64;
+  if i > 10u64 { break; }
+  if i % 2u64 == 0u64 { continue; }
+  seen = seen + i;
+}
+seen

@@ -1,0 +1,22 @@
+(struct Point
+  (field x s64)
+  (field y s64))
+
+(global @p Point)
+
+(func <file> () -> s64
+  (slot 0 t0 Point temp)
+  (slot 1 t1 Point temp)
+  (slot 2 t2 s64 temp)
+  (slot 3 t3 Point temp)
+  (slot 4 t4 s64 temp)
+  (slot 5 t5 s64 temp)
+  (block 0
+    (assign t0 (struct (const 3s64) (const 4s64)))
+    (store @p t0)
+    (assign t1 (globalget @p))
+    (assign t2 (field t1 x))
+    (assign t3 (globalget @p))
+    (assign t4 (field t3 y))
+    (assign t5 (add t2 t4))
+    (return t5)))   ; the file's top level (§statements)

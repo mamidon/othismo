@@ -1,0 +1,29 @@
+(global @adder (fn (u64) -> (fn (u64) -> u64)))
+
+(func <file> () -> u64
+  (slot 0 t0 (fn (u64) -> (fn (u64) -> u64)) temp)
+  (slot 1 t1 (fn (u64) -> (fn (u64) -> u64)) temp)
+  (slot 2 t2 (fn (u64) -> u64) temp)
+  (slot 3 t3 u64 temp)
+  (block 0
+    (assign t0 (closure <file>.λ0))
+    (store @adder t0)
+    (assign t1 (globalget @adder))
+    (assign t2 (call-indirect t1 (const 20u64)))
+    (assign t3 (call-indirect t2 (const 22u64)))
+    (return t3)))   ; the file's top level (§statements)
+
+(func <file>.λ0 (u64) -> (fn (u64) -> u64)
+  (slot 0 a  u64 param)
+  (slot 1 t1 (fn (u64) -> u64) temp)
+  (block 0
+    (assign t1 (closure <file>.λ0.λ0 (captures a)))
+    (return t1)))
+
+(func <file>.λ0.λ0 (u64) -> u64
+  (slot 0 b  u64 param)
+  (slot 1 a  u64 capture)
+  (slot 2 t2 u64 temp)
+  (block 0
+    (assign t2 (add a b))
+    (return t2)))

@@ -1,0 +1,3 @@
+// A line comment above.
+let x = 1; // and one beside
+x

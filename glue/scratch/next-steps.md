@@ -1,4 +1,4 @@
-# Next steps — tooling, pass structure, and a corpus
+# Next steps — the pass structure
 
 > **Status:** Notes, 2026-09-08. Not decisions. This records a plan and the
 > argument behind it so that picking it up later does not mean rediscovering
@@ -26,12 +26,9 @@ current pass structure does not obviously survive that.
 
 ## The plan
 
-Two items. 2 is what makes 1 safe to attempt, so 1 is written down first and
-built second.
+### Redesign the pass data structures
 
-### 1. Redesign the pass data structures
-
-This is the ZIR question, and it is the item with real design content.
+This is the ZIR question.
 
 **Zig's shape.** AstGen lowers the AST to **ZIR** — untyped, desugared, names
 already flattened to operand indices, produced once per file. **Sema** then
@@ -88,40 +85,3 @@ making instantiation work by re-walking the CST. Re-walking is cheaper to build
 and hits the re-entrancy problem head-on; the split is more work and makes the
 problem not exist. Doing it *before* means designing ZIR against a comptime
 implementation that does not exist yet.
-
-### 2. An end-to-end corpus, independent of the implementation
-
-A body of Glue with expected output per pass, as plain files rather than Rust.
-Current coverage is decent but every test is written against a crate API, so it
-moves whenever the crates move.
-
-Shape that worked:
-
-```
-corpus/
-  <case>/
-    input.glue
-    tokens.expected
-    cst.expected
-    ir.expected
-    value.expected
-```
-
-An expected file holds the stage's stdout; if the stage also reported
-diagnostics they follow a `--- diagnostics ---` line, with the input path
-rewritten to `input.glue` so files are not machine-specific. The harness shells
-out to the `glue` binary, which is what makes the cases survive `elab` being
-split. `UPDATE_EXPECT=1` regenerates.
-
-**Two things to decide before writing it:**
-
-- **This makes `ir::dump` load-bearing.** `core-ir.md` says core IR has no
-  syntax and any textual rendering is "a debugging aid with no normative
-  status". A corpus asserting on the dump changes that unless it is explicitly
-  framed as a *change detector* rather than a specification — recording what the
-  implementation does so that changing it is a decision rather than an
-  accident. The rules stay in the unit tests, where the section each comes from
-  is named.
-- **`ir.expected` is brittle**, because slot numbering and temporary names move
-  when lowering changes. That is partly the point, but it argues for small
-  cases about one construct each, and against dumping whole example files.

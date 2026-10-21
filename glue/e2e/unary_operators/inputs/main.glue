@@ -1,0 +1,3 @@
+let n = 5s64;
+let flag = false;
+-n == -5s64 && !flag

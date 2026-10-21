@@ -1,0 +1,8 @@
+(global @a ?)
+
+(func <file> () -> ?
+  (slot 0 t0 ? temp)
+  (block 0
+    (store @a (const ()))
+    (assign t0 (globalget @a))
+    (return t0)))   ; the file's top level (§statements)

@@ -1,0 +1,1 @@
+main.glue:1:29: recursion went too deep — there are no tail calls, so an unbounded recursion needs a loop or a worklist

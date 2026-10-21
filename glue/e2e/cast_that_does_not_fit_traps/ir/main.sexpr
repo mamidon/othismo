@@ -1,0 +1,12 @@
+(func <file> () -> u8
+  (slot 0 t0 u8 temp)
+  (block 0
+    (assign t0 (call narrow (const 256u64)))
+    (return t0)))   ; the file's top level (§statements)
+
+(func narrow (u64) -> u8
+  (slot 0 n  u64 param)
+  (slot 1 t1 u8 temp)
+  (block 0
+    (assign t1 (cast n))
+    (return t1)))

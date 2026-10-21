@@ -1,0 +1,2 @@
+main.glue:1:9: unterminated string literal — expected a closing `"`
+main.glue:2:1: expected a `;`

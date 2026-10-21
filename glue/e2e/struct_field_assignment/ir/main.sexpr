@@ -1,0 +1,24 @@
+(struct Counter
+  (field hits u64))
+
+(global @c Counter mut)
+
+(func <file> () -> u64
+  (slot 0 t0 Counter temp)
+  (slot 1 t1 Counter temp)
+  (slot 2 t2 Counter temp)
+  (slot 3 t3 u64 temp)
+  (slot 4 t4 u64 temp)
+  (slot 5 t5 Counter temp)
+  (slot 6 t6 u64 temp)
+  (block 0
+    (assign t0 (struct (const 0u64)))
+    (store @c t0)
+    (assign t1 (globalget @c))
+    (assign t2 (globalget @c))
+    (assign t3 (field t2 hits))
+    (assign t4 (add t3 (const 7u64)))
+    (store (field t1 hits) t4)
+    (assign t5 (globalget @c))
+    (assign t6 (field t5 hits))
+    (return t6)))   ; the file's top level (§statements)

@@ -1,0 +1,3 @@
+struct Point { x: s64, y: s64 }
+let p = Point { x: 3, y: 4 };
+p.x + p.y

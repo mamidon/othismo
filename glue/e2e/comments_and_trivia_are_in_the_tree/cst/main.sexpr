@@ -1,0 +1,20 @@
+(SourceFile
+  (LetStmt
+    (LineComment "// A line comment above.")
+    (Whitespace "\n")
+    (Let "let")
+    (NamePat
+      (Whitespace " ")
+      (Ident "x"))
+    (Whitespace " ")
+    (Equals "=")
+    (LiteralExpr
+      (Whitespace " ")
+      (Int "1"))
+    (Semicolon ";"))
+  (NameExpr
+    (Whitespace " ")
+    (LineComment "// and one beside")
+    (Whitespace "\n")
+    (Ident "x"))
+  (Whitespace "\n"))

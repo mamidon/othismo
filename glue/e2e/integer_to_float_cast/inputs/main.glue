@@ -1,0 +1,2 @@
+fn widen(n: u64) -> f64 { n as f64 }
+widen(3)

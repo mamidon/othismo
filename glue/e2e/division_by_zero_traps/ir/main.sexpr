@@ -1,0 +1,13 @@
+(func <file> () -> u64
+  (slot 0 t0 u64 temp)
+  (block 0
+    (assign t0 (call divide (const 1u64) (const 0u64)))
+    (return t0)))   ; the file's top level (§statements)
+
+(func divide (u64 u64) -> u64
+  (slot 0 a  u64 param)
+  (slot 1 b  u64 param)
+  (slot 2 t2 u64 temp)
+  (block 0
+    (assign t2 (div a b))
+    (return t2)))

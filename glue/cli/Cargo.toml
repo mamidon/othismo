@@ -14,3 +14,12 @@ tokenizer = { path = "../tokenizer" }
 [[bin]]
 name = "glue"
 path = "src/main.rs"
+
+[dev-dependencies]
+libtest-mimic = "0.8.2"
+
+# `harness = false` hands `main` to libtest-mimic, which is what lets one
+# scenario on disk be one test case in cargo's output.
+[[test]]
+name = "e2e"
+harness = false

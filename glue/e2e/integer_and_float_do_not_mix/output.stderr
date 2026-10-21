@@ -1,0 +1,1 @@
+main.glue:1:9: integer and float constants do not mix — write a suffix or a cast

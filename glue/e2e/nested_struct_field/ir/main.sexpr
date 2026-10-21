@@ -1,0 +1,24 @@
+(struct Inner
+  (field value u64))
+
+(struct Outer
+  (field inner Inner))
+
+(global @o Outer)
+
+(func <file> () -> u64
+  (slot 0 t0 Inner temp)
+  (slot 1 t1 Outer temp)
+  (slot 2 t2 Outer temp)
+  (slot 3 t3 Inner temp)
+  (slot 4 t4 u64 temp)
+  (slot 5 t5 u64 temp)
+  (block 0
+    (assign t0 (struct (const 41u64)))
+    (assign t1 (struct t0))
+    (store @o t1)
+    (assign t2 (globalget @o))
+    (assign t3 (field t2 inner))
+    (assign t4 (field t3 value))
+    (assign t5 (add t4 (const 1u64)))
+    (return t5)))   ; the file's top level (§statements)

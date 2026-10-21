@@ -1,0 +1,17 @@
+(global @answer u64)
+
+(func <file> () -> u64
+  (slot 0 t0 u64 temp)
+  (slot 1 t1 u64 temp)
+  (block 0
+    (assign t0 (call below (const 20u64)))
+    (store @answer t0)
+    (assign t1 (globalget @answer))
+    (return t1)))   ; the file's top level (§statements)
+
+(func below (u64) -> u64
+  (slot 0 n  u64 param)
+  (slot 1 t1 u64 temp)
+  (block 0
+    (assign t1 (add n (const 22u64)))
+    (return t1)))

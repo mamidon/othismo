@@ -1,0 +1,2 @@
+let x = comptime 1;
+x

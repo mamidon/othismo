@@ -1,0 +1,44 @@
+(global @i u64 mut)
+(global @seen u64 mut)
+
+(func <file> () -> u64
+  (slot 0 t0  u64 temp)
+  (slot 1 t1  u64 temp)
+  (slot 2 t2  u64 temp)
+  (slot 3 t3  bool temp)
+  (slot 4 t4  u64 temp)
+  (slot 5 t5  u64 temp)
+  (slot 6 t6  bool temp)
+  (slot 7 t7  u64 temp)
+  (slot 8 t8  u64 temp)
+  (slot 9 t9  u64 temp)
+  (slot 10 t10 u64 temp)
+  (block 0
+    (store @i (const 0u64))
+    (store @seen (const 0u64))
+    (while
+      (header 1)
+      (cond (const true))
+      (body 2
+        (assign t0 (globalget @i))
+        (assign t1 (add t0 (const 1u64)))
+        (store @i t1)
+        (assign t2 (globalget @i))
+        (assign t3 (gt t2 (const 10u64)))
+        (if t3
+          (then 3
+            (break))
+          (else 4))
+        (assign t4 (globalget @i))
+        (assign t5 (rem t4 (const 2u64)))
+        (assign t6 (eq t5 (const 0u64)))
+        (if t6
+          (then 5
+            (continue))
+          (else 6))
+        (assign t7 (globalget @seen))
+        (assign t8 (globalget @i))
+        (assign t9 (add t7 t8))
+        (store @seen t9)))
+    (assign t10 (globalget @seen))
+    (return t10)))   ; the file's top level (§statements)
