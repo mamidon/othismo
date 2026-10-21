@@ -1,3 +1,0 @@
-let mut n = 0u64;
-if true { n = 1u64; }
-n

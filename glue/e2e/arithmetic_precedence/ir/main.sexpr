@@ -1,3 +1,0 @@
-(func <file> () -> u64
-  (block 0
-    (return (const 5u64))))   ; the file's top level (§statements)

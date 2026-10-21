@@ -1,3 +1,0 @@
-fn Pair(a: u64, b: u64) -> u64 { a + b }
-fn first_of(p: Pair(1, 2)) -> u64 { 0 }
-first_of(1u64)

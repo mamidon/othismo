@@ -1,3 +1,0 @@
-let x = 1u64;
-let y = { let x = 10u64; x + 1u64 };
-x + y

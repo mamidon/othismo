@@ -1,0 +1,326 @@
+<!doctype html>
+<!-- Generated from docs/objects.md by examples/static/site.mjs (make site). Edit the source, not this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Objects — Objects — real_talk</title>
+  <meta name="description" content="Objects: the sandboxed modules you don't read, and the interfaces you do.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/objects/" aria-current="page">Objects</a>
+          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Objects</div>
+        <h1>Objects</h1>
+        <p class="lede">An object is the part of an Othismo program you don&#39;t read. It is a
+WebAssembly module, running in a sandbox whose only way out is its namespace,
+and it comes with a header that says exactly what it serves and what it needs.
+The header is what you review; the runtime holds the code to it.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#what-an-object-is">What an object is</a></li>
+          <li><a href="#the-interface">The interface</a></li>
+          <li><a href="#the-sandbox">The sandbox</a></li>
+          <li><a href="#the-contract-with-the-runtime">The contract with the runtime</a></li>
+          <li><a href="#building-a-module">Building a module</a></li>
+          <li><a href="#assemblyscript">AssemblyScript</a></li>
+          <li><a href="#failure">Failure</a></li>
+          <li><a href="#open-questions">Open questions</a></li>
+          <li><a href="#where-it-stands">Where it stands</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<h2 id="what-an-object-is">What an object is</h2>
+<p>A <strong>module</strong> is a compiled <code>.wasm</code> file, named for the type it implements:
+<code>StaticSite</code> is <code>scripts/StaticSite.wasm</code>. An <strong>object</strong> is one running
+instance of a module, declared in an image:</p>
+<pre><code class="language-text">instance site : StaticSite {
+  mount files /files readonly
+}
+</code></pre>
+<p>Two instances of the same type share code and nothing else. Each has its own
+memory, its own view and its own served tree.</p>
+<p>Every object is two things at once. It is a <strong>server</strong>, answering requests made
+of its served tree, and a <strong>client</strong>, making requests of the paths in its view.
+Nothing else about it is visible from outside: not its memory, not its
+functions, not the language it was written in.</p>
+<h2 id="the-interface">The interface</h2>
+<p>Each module has a header, an <code>.iface</code> file written in the same language as
+images. It is the module&#39;s interface: the message types it uses, what it
+serves, what it needs, and its documentation.</p>
+<pre><code class="language-text">import { Data, Info, Entry, Text } from env
+
+## Serves a static site from a files tree it is given read-only.
+##
+## Requests for paths ending in `/` get `index.html` added. It forwards each
+## safe request to `/files` and never sees the bytes it serves.
+object StaticSite {
+  ## The site&#39;s files. Nothing is ever written here.
+  needs /files {
+    /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
+  }
+
+  serves {
+    ## How many requests it has forwarded, as decimal text.
+    /hits   read -&gt; Text
+    ## The site, from `/files`.
+    /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
+  }
+}
+</code></pre>
+<p>The header is the contract the overview talks about. A reviewer reads it, and
+the image that wires it up, and needs nothing else to know what the object can
+be asked and what it can ask of others.</p>
+<h3 id="message-types">Message types</h3>
+<p>A message type is a name and a list of fields:</p>
+<pre><code class="language-text">## Configures a Greeter.
+message Greeting {
+  ## Put before each name.
+  prefix: string
+  ## End with `!` rather than `.`.
+  excited: bool
+}
+</code></pre>
+<p>Fields are flat: strings, booleans, sized integers and floats, and bytes.
+There are no nested messages, arrays or optional fields yet.</p>
+<p>On the wire a message is identified only by its name, so a type <em>is</em> its
+name together with its exact fields. Two headers may both declare <code>Greeting</code>
+if they agree on its fields; if they disagree, an image can&#39;t use both. This
+keeps names short until there is a real collision to solve.</p>
+<p>A header can import types from other headers, and from <code>env</code>, which holds the
+runtime&#39;s own types. A file can hold only messages, to share types between
+several objects, or an object as well.</p>
+<h3 id="serves-and-needs">Serves and needs</h3>
+<p><code>serves</code> lists the paths an object answers for. <code>needs</code> lists, for each mount
+point in its view, what it expects to find there. They use one grammar: a
+path pattern followed by the requests it takes.</p>
+<pre><code class="language-text">needs /net/tcp {
+  /address   read -&gt; Text
+  /accept    watch -&gt; Accepted*
+  /{conn}    watch -&gt; Data*, write Data, remove
+}
+</code></pre>
+<p>Each request is a verb, the body type if the verb takes one, and after <code>-&gt;</code>
+the type its answer carries. <code>Accepted*</code> is a stream. A request with no arrow,
+such as <code>remove</code>, is answered with a status alone.</p>
+<p>Paths are patterns:</p>
+<ul>
+<li>A literal, such as <code>/hits</code> or <code>/hosts/</code>, matches exactly that path. A
+trailing <code>/</code> counts, as it does everywhere else.</li>
+<li><code>{name}</code> matches exactly one segment. The name is for the documentation; it
+captures nothing, since the object gets the whole path anyway.</li>
+<li><code>**</code> matches the rest of the path, however many segments, and only comes
+last.</li>
+</ul>
+<p>Where several patterns match, the most specific wins, whatever their order: a
+literal over <code>{name}</code>, <code>{name}</code> over <code>**</code>, and longer over shorter. It is the
+same rule that picks a mount point.</p>
+<h3 id="shapes-not-behaviour">Shapes, not behaviour</h3>
+<p>A header describes shapes: which paths exist, which verbs they take, and which
+types go in and come out. It can&#39;t describe behaviour, such as whether a
+<code>read</code> really changes nothing, or when an object answers <code>not_found</code>. That is
+what tests are for.</p>
+<p>So headers don&#39;t list the failures a request can return. Any request may
+fail with any status. Declaring them would be checked exceptions by another
+name, and would promise something nothing can enforce.</p>
+<p>Headers are also explicit. StaticSite forwards every read to <code>/files</code> and
+passes on whatever comes back, but its header doesn&#39;t say &quot;whatever <code>/files</code>
+serves&quot;; it names the types. A header can be read on its own, without knowing
+what any particular image mounts. Objects whose interface really is &quot;the same
+as what you give me&quot;, such as a logging proxy, would need a way to say so, and
+that is left for when one is needed.</p>
+<h3 id="checking-the-wiring">Checking the wiring</h3>
+<p>The checker reads every object&#39;s header and checks the image against them:</p>
+<ul>
+<li>Each mount must provide what the object needs there. Whatever is mounted at
+<code>/files</code> must serve everything <code>needs /files</code> lists.</li>
+<li>Each startup request must match an entry in the object&#39;s <code>serves</code>.</li>
+</ul>
+<p>Matching is structural. A mount satisfies a need if the mounted object serves
+each listed request, with the same verb and body type and an answer of the
+same type, under a pattern at least as wide. What the object is called
+doesn&#39;t matter. Anything that serves the right paths can stand in, which is
+also how an object is tested: against a fake that serves what it needs.</p>
+<p>These are errors in the image, reported when it is checked or built.</p>
+<h3 id="enforcement">Enforcement</h3>
+<p>TypeScript&#39;s types are gone by the time its code runs. Othismo&#39;s don&#39;t have to
+be: every message crosses a boundary the runtime controls, so it can hold
+objects to their headers while they run, without trusting their code.</p>
+<ul>
+<li>A request that reaches an object must match its <code>serves</code>.</li>
+<li>A request an object sends must match one of its <code>needs</code>.</li>
+<li>An answer must carry the type its entry promised.</li>
+</ul>
+<p>A request that doesn&#39;t fit is refused before it arrives: <code>not_found</code> if no
+pattern matches, <code>not_supported</code> if the pattern doesn&#39;t take that verb, and
+<code>invalid</code> if the body is the wrong type. An answer of the wrong type is the
+answering object&#39;s fault.</p>
+<p>The <code>needs</code> side is the stronger promise. Mounts say what an object has been
+given; its <code>needs</code> say the most it can ask of each. An object given the
+console to write a log can&#39;t watch it for input unless its header says so.</p>
+<p>Enforcement is on by default and can be turned off.</p>
+<h3 id="documentation">Documentation</h3>
+<p>Headers carry their documentation, so it travels with the module and can be
+read or generated from it.</p>
+<ul>
+<li>A <code>##</code> comment documents the declaration after it: an object, a message, a
+field, a <code>needs</code> block or a <code>serves</code> entry. It is Markdown, and its first
+sentence is the summary. A plain <code>#</code> comment is just a comment.</li>
+<li>An object&#39;s <strong>guide</strong>, its man page, is the file named by
+<code>guide &quot;./StaticSite.md&quot;</code> in the object block. Without one, the object&#39;s
+own <code>##</code> comment is the guide. Small objects need only the comment; large
+ones keep a paragraph there and the rest in Markdown.</li>
+</ul>
+<p><code>real_talk doc</code> prints a module&#39;s guide followed by a reference generated from
+its declarations, and the project&#39;s reference pages are built the same way.</p>
+<h3 id="built-in-objects">Built-in objects</h3>
+<p>Console, Tcp, Files and <code>Packed.Files</code> have headers like any other object,
+shipped with the runtime and written in the same language. The checker treats
+them the same way, and their reference documentation comes from those
+headers.</p>
+<h2 id="the-sandbox">The sandbox</h2>
+<p>A module may import the runtime&#39;s own functions and nothing else, apart from
+<code>env.abort</code>, which AssemblyScript always emits. A module that imports
+anything more, such as WASI, a clock, or the source of randomness behind
+<code>Math.random</code>, is refused before it runs.</p>
+<p>So an object has no files, no sockets, no clock, no randomness and no
+threads. It can&#39;t find out anything except by asking through its view, and it
+can&#39;t affect anything except by answering or asking. What it does depends
+only on the messages it receives.</p>
+<p>Each object has its own Wasmtime store and its own linear memory. Objects
+share nothing; what passes between them is copied message bytes.</p>
+<p>CPU time and memory aren&#39;t limited yet. An object can loop forever or grow
+until the host runs out.</p>
+<h2 id="the-contract-with-the-runtime">The contract with the runtime</h2>
+<p>The interface between a module and the runtime is small, and the same for
+every language.</p>
+<p>A module can <strong>call out</strong> to make a request of a path in its view, to reply to
+a request it is serving, to forward a request elsewhere, to give up on one of
+its own, and to rearrange its view. The runtime <strong>calls in</strong> to deliver a
+request, to deliver an answer, to start the object, and to tell it a caller
+gave up.</p>
+<p>Only bodies are serialized. The verb, path, status and the numbers that tie
+answers to requests travel as plain arguments, so the runtime can route
+requests and enforce rules without ever decoding a body. Bodies are BSON
+documents carrying their type name. The runtime reads only the bytes a module
+points it at, and writes only into a buffer the module hands it.</p>
+<h3 id="one-thing-at-a-time">One thing at a time</h3>
+<p>Delivery is single-threaded. There is one queue for the whole image, each
+delivery runs to completion, and the next starts only when it returns. An
+object never has to think about concurrency, and nothing it does can be
+interrupted by another object.</p>
+<p>A call returns at once with a ticket. Its answer arrives later, as its own
+delivery, and the ticket says which call it answers. A request can be
+answered several times, as a <strong>stream</strong>; each answer says whether it is the
+last. A caller can cancel, and later answers are dropped.</p>
+<p>An object can also <strong>forward</strong> a request it is serving to a path in its own
+view. The answer then goes straight to the original caller, and the object
+never sees it. That is how StaticSite serves files without touching their
+bytes.</p>
+<h3 id="startup">Startup</h3>
+<ol>
+<li>Every object is created and its view built from the image&#39;s mounts. Each
+module&#39;s top-level code runs, and may already make requests, which wait in
+the queue.</li>
+<li>The image&#39;s startup requests are delivered: <code>control</code> requests and any
+others, in image order.</li>
+<li>Each object&#39;s <code>start</code> runs, in image order.</li>
+<li>The environment starts: stdin is read and sockets accept connections.</li>
+</ol>
+<p>The run ends when the queue is empty and nothing outside can add to it.</p>
+<h2 id="building-a-module">Building a module</h2>
+<p>A module is built from its header and its source:</p>
+<ol>
+<li>Bindings are generated from the <code>.iface</code> for the module&#39;s language:
+classes for its message types, with their encoders and decoders.</li>
+<li>The source is compiled to <code>.wasm</code>.</li>
+<li>The header is appended to the module as a custom section.</li>
+</ol>
+<p>The generated bindings are ordinary files, so editors and compilers see them
+like any other source. Generating them means a type is written once and its
+encoding can&#39;t drift from its declaration.</p>
+<p>Because the header is inside the module, a compiled object describes itself.
+It can be published as one file, and an image can import a type straight
+from it:</p>
+<pre><code class="language-text">import { Greeting } from Greeter
+</code></pre>
+<p>An image imports only the types it writes in its own messages, such as a
+startup request&#39;s body. It no longer has to import anything on its objects&#39;
+behalf.</p>
+<h2 id="assemblyscript">AssemblyScript</h2>
+<p>Modules are written in AssemblyScript today. It reads like TypeScript,
+compiles to small modules and needs no runtime of its own. Nothing in the
+contract above depends on it, so any language that compiles to WebAssembly
+and has a bindings generator can be used. A Rust module would generate its
+bindings from the same header.</p>
+<p>The library has three parts:</p>
+<ul>
+<li><code>real-talk</code>: messages and their encoding.</li>
+<li><code>real-talk/ns</code>: <code>Server</code>, with <code>serve</code> and <code>start</code> to override, <code>Request</code>
+and <code>Response</code>, and <code>ns</code>, which makes requests and rearranges the view.</li>
+<li><code>real-talk/env</code>: the runtime&#39;s message types, generated from <code>env</code>&#39;s
+header.</li>
+</ul>
+<p>Some of its shape comes from AssemblyScript&#39;s limits. There are no closures
+that capture variables, so an answer is delivered to a <code>Then</code> object that
+holds whatever state it needs in its fields. There are no union types, so a
+body is told apart with <code>instanceof</code>. A module that receives a type it has no
+binding for gets an <code>Opaque</code> message, which it can&#39;t read but can pass on
+unchanged.</p>
+<h2 id="failure">Failure</h2>
+<p>A trap or abort in any object stops the whole run, with an error naming the
+object. Whether a failing object should be contained, so that only its
+callers notice, is open.</p>
+<p>Calls never time out. A request whose server never answers waits for as long
+as the image runs.</p>
+<h2 id="open-questions">Open questions</h2>
+<ul>
+<li>Some objects accept any message: Console prints whatever it is sent. A header
+needs a way to say so.</li>
+<li>HttpServer sends requests to paths chosen at run time, by <code>control</code>. Its
+<code>needs</code> can&#39;t name those mount points in advance.</li>
+</ul>
+<h2 id="where-it-stands">Where it stands</h2>
+<p>The interface is a design; the runtime doesn&#39;t implement it yet. Today
+message types are AssemblyScript classes, written by hand with their encoders
+and decoders and read by the runtime from the <code>.ts</code> source. Images import them
+from there, nothing declares what an object serves or needs, and shapes are
+checked only with <code>--check-shapes</code>.</p>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>real_talk &middot; served by real_talk</small>
+    </div>
+  </footer>
+</body>
+</html>

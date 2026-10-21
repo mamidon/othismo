@@ -1,5 +1,0 @@
-fn clamp(n: u64, limit: u64) -> u64 {
-  if n > limit { return limit; }
-  n
-}
-clamp(99, 10) + clamp(3, 10)

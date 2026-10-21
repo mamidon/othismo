@@ -1,25 +1,5 @@
-# Rust Cargo files
-target/
-Cargo.lock
-
-# IntelliJ IDE files
-.idea/
-*.iml
-*.iws
-*.ipr
-*.iws
-/out/
-/.idea_modules/
-/.gradle/
-
-# mamidon files
-*.sqlite
-*.simg
-*.wasm
-
-.DS_Store
-playground/
-
-# VS Code extension build output
+/target
 node_modules/
-glue/vscode/out/
+*.wasm
+*.wat
+*.rti

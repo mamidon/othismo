@@ -1,8 +1,0 @@
-fn pair() -> fn() -> u64 {
-  let mut count = 0u64;
-  let bump: fn() -> u64 = () -> { count = count + 1u64; count };
-  bump();
-  bump
-}
-let next = pair();
-next()

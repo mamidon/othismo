@@ -1,3 +1,0 @@
-fn total_plus_one() -> u64 { total + 1u64 }
-let total = 41u64;
-total_plus_one()

@@ -1,4 +1,0 @@
-struct Inner { value: u64 }
-struct Outer { inner: Inner }
-let o = Outer { inner: Inner { value: 41u64 } };
-o.inner.value + 1u64

@@ -1,0 +1,209 @@
+<!doctype html>
+<!-- Generated from docs/images.md by examples/static/site.mjs (make site). Edit the source, not this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Building images — Building — real_talk</title>
+  <meta name="description" content="Building images: sealing an image into one file, packed files, and slots the host fills in.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/objects/">Objects</a>
+          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/" aria-current="page">Building</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Building</div>
+        <h1>Building images</h1>
+        <p class="lede">This document describes how an image is sealed into a single file for
+deployment, in the way a Docker image is built from a Dockerfile. It builds on
+<a href="/docs/">the namespace design</a>.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#what-a-built-image-holds">What a built image holds</a></li>
+          <li><a href="#packed-files">Packed files</a></li>
+          <li><a href="#slots-values-from-the-host">Slots: values from the host</a></li>
+          <li><a href="#the-file-format">The file format</a></li>
+          <li><a href="#not-yet">Not yet</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<p>A <code>.img</code> file is a source. Running it reads several other files: the compiled
+modules in <code>scripts/</code>, the TypeScript it imports for message types, and
+whatever an <code>Environment.Files</code> root points at. A <strong>built image</strong> (<code>.rti</code>)
+holds everything the image needs except what it explicitly takes from the
+host, so it can be copied to another machine and run there.</p>
+<h2 id="what-a-built-image-holds">What a built image holds</h2>
+<ul>
+<li><strong>The manifest</strong>: the checked image, with its instances, views, startup
+requests and slots (see below).</li>
+<li><strong>The modules</strong>: one compiled <code>.wasm</code> per Wasm instance type. Compiled Wasm
+is the only code a built image runs; <code>build</code> takes finished <code>.wasm</code> files
+and never runs the AssemblyScript compiler.</li>
+<li><strong>The message types</strong>, already parsed. The runtime never reads TypeScript.</li>
+<li><strong>Packed file trees</strong> for <code>Packed.Files</code> instances.</li>
+<li><strong>Sources</strong>, for reference only: the <code>.img</code> itself, the <code>.ts</code> files it
+imports and each module&#39;s <code>scripts/&lt;Type&gt;.ts</code> if present. Anyone who
+unpacks the file can read them; the runtime never does. <code>--no-sources</code>
+leaves them out.</li>
+</ul>
+<p>A built image&#39;s only contact with the host is through the environment objects
+it declares (Console, Tcp, Files). Running <code>--check</code> on it gives the complete
+list of what it can touch on the machine.</p>
+<pre><code class="language-text">real_talk build static.img -o static.rti     # seal
+real_talk run static.rti                     # run it, here or elsewhere
+real_talk static.img                         # build in memory, then run
+real_talk unpack static.rti out/             # modules, files and sources
+</code></pre>
+<p>Running a <code>.img</code> builds it in memory and runs the result, so there is one way
+to load an image. Packed trees are a snapshot taken when the image is built;
+for live edits during development, use <code>Environment.Files</code>.</p>
+<h2 id="packed-files">Packed files</h2>
+<p><code>Packed.Files</code> serves a tree that was copied into the image when it was built.
+It is the build-time counterpart of <code>Environment.Files</code>, which reads the host
+at run time:</p>
+<pre><code class="language-text"># The host&#39;s files, live:
+instance files : Environment.Files { control / FilesRoot { path: &quot;/var/www&quot; } }
+
+# A snapshot, taken when the image is built:
+instance files : Packed.Files {
+  include &quot;./public/&quot;
+  include &quot;./prod/robots.txt&quot; at /robots.txt
+}
+</code></pre>
+<p><code>Packed.Files</code> touches nothing on the host when the image runs, and <code>--check</code>
+reports it as built in.</p>
+<p>It answers <code>read</code>, <code>stat</code> and <code>list</code> exactly as <code>Environment.Files</code> does
+(<code>Data</code>, <code>Info</code>, a sorted stream of <code>Entry</code>, the same MIME types and statuses).
+Every unsafe verb gets <code>read_only</code>.</p>
+<h3 id="include"><code>include</code></h3>
+<p>Paths are relative to the image file.</p>
+<ul>
+<li>A path naming a file includes exactly that file, hidden or not.</li>
+<li>A path ending in <code>/</code> or <code>/*</code> includes everything under that directory,
+recursively, hidden files included. <code>*</code> means nothing anywhere else. A path
+naming a directory without the trailing <code>/</code> is an error, so a recursive
+include always says so.</li>
+<li>Symlinks are followed, wherever they point. A dangling link and a directory
+cycle are build errors.</li>
+<li>A path that doesn&#39;t exist is a build error. A directory that turns out
+empty is fine; directories are kept, empty ones included.</li>
+</ul>
+<p>A directory&#39;s contents land at the root of the served tree, and a single file
+lands at <code>/&lt;its name&gt;</code>. <code>at /path</code> puts either somewhere else.</p>
+<p><strong>Later includes win.</strong> Includes apply in order, and where two put something at
+the same path, the later one replaces it:</p>
+<ul>
+<li>Directories merge. Including <code>./theme/</code> after <code>./public/</code> replaces only the
+paths <code>theme</code> has.</li>
+<li>A later file where a directory was replaces the whole directory, and a later
+directory where a file was replaces the file.</li>
+</ul>
+<p><code>build -v</code> lists every path an include replaced.</p>
+<h2 id="slots-values-from-the-host">Slots: values from the host</h2>
+<p>An image can require a message from whoever runs it. The deployer supplies the
+values; the image supplies the types and, optionally, defaults:</p>
+<pre><code class="language-text">require listen : Listen {
+  address: &quot;127.0.0.1:8080&quot;     # a default
+}
+require admin : Text            # no defaults: the host must give it
+
+instance net  : Environment.Tcp { control / listen }
+instance http : HttpServer {
+  control /admin admin
+}
+</code></pre>
+<ul>
+<li><code>require &lt;name&gt; : &lt;Type&gt;</code> declares a slot. Fields written in the block are
+defaults, checked like any message literal. Fields left out must come from
+the host. No block, or an empty one, means every field must.</li>
+<li>A slot&#39;s name can stand wherever a message can: as a startup request&#39;s
+body, including an environment object&#39;s <code>control /</code>. It can&#39;t change mounts or instance types, so a built image&#39;s
+views are fixed when it is built and <code>--check</code> stays a true upper bound.</li>
+<li>A slot can&#39;t share its name with a message type or another slot.</li>
+</ul>
+<p>The host gives values in layers, and a later layer wins field by field:</p>
+<ol>
+<li>the image&#39;s defaults,</li>
+<li>value files, in the order given (<code>--with prod.vals</code>),</li>
+<li><code>--set slot.field=value</code>.</li>
+</ol>
+<p>A value file uses the image&#39;s own block syntax, without a type, since the
+image already knows it:</p>
+<pre><code class="language-text">listen {
+  address: &quot;0.0.0.0:80&quot;
+}
+</code></pre>
+<p>Value files are relative to the working directory. <code>--set</code> takes the raw
+text for a <code>string</code> or <code>ArrayBuffer</code> field and a literal for anything else
+(<code>--set listen.address=0.0.0.0:80</code>, <code>--set db.port=5432</code>).</p>
+<p>The image refuses to start unless every field of every slot has a value. It
+lists every missing field, e.g. <code>admin.text: required, not provided</code>. A slot
+or field that the image doesn&#39;t declare is an error, and so is a value of the
+wrong type. <code>--check</code> prints each slot&#39;s final value and where each field came
+from, then what each environment object touches on the host:</p>
+<pre><code class="language-text">$ real_talk --check static.rti --set listen.address=0.0.0.0:80
+slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
+
+net    listens on 0.0.0.0:80
+cons   reads stdin, writes stdout
+files  serves 10 built-in files, 95.0 KB
+...
+</code></pre>
+<p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
+<code>.img</code> or <code>.rti</code>.</p>
+<h2 id="the-file-format">The file format</h2>
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x02        magic and format version
+u64 (LE)              length of the manifest
+manifest              one BSON document
+blobs                 file and module contents, back to back
+</code></pre>
+<p>The version changes whenever the manifest&#39;s layout does. An image built in
+another format is refused with a request to rebuild it from its <code>.img</code>;
+built images are for deploying, not for keeping across versions.</p>
+<p>Every module, packed file and source is a blob named by the SHA-256 of its
+contents, and stored once however often it appears. The manifest refers to
+blobs by hash and records each one&#39;s offset and length. Building the same
+inputs twice produces the same bytes: the manifest is ordered, and nothing
+depends on timestamps or the order a directory is read in.</p>
+<h2 id="not-yet">Not yet</h2>
+<ul>
+<li>Writable layers over a packed tree (needs union mounts).</li>
+<li>Mapping the file into memory rather than reading it whole.</li>
+<li>ETags from the content hashes in the HTTP server.</li>
+</ul>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>real_talk &middot; served by real_talk</small>
+    </div>
+  </footer>
+</body>
+</html>

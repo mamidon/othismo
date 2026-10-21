@@ -1,2 +1,0 @@
-fn narrow(n: u64) -> u8 { n as u8 }
-narrow(256)

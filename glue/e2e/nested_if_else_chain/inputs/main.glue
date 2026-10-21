@@ -1,4 +1,0 @@
-fn describe(n: u64) -> Str {
-  if n == 0u64 { "zero" } else { if n < 10u64 { "small" } else { "large" } }
-}
-describe(42)

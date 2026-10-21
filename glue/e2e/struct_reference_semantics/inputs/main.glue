@@ -1,7 +1,0 @@
-struct Counter { hits: u64 }
-fn bump(c: mut Counter) { c.hits = c.hits + 1u64; }
-let mut c = Counter { hits: 0 };
-let mut alias = c;
-bump(c);
-bump(alias);
-c.hits

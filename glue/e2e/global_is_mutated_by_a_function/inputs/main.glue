@@ -1,5 +1,0 @@
-let mut counter = 0u64;
-fn bump() { counter = counter + 1u64; }
-bump();
-bump();
-counter

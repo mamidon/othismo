@@ -1,4 +1,0 @@
-(SourceFile
-  (LiteralExpr
-    (Int "42"))
-  (Whitespace "\n"))

@@ -1,5 +1,0 @@
-let answer = below(20u64);
-
-fn below(n: u64) -> u64 { n + 22u64 }
-
-answer

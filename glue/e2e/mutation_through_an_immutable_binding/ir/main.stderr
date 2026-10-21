@@ -1,1 +1,0 @@
-main.glue:4:6: the `c` parameter is `mut`, so `c` must be too — declare it `let mut c`

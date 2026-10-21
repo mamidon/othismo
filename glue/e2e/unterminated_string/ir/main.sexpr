@@ -1,8 +1,0 @@
-(global @s Str)
-
-(func <file> () -> Str
-  (slot 0 t0 Str temp)
-  (block 0
-    (store @s (const "unterminated"))
-    (assign t0 (globalget @s))
-    (return t0)))   ; the file's top level (§statements)

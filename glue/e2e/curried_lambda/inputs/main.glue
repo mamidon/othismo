@@ -1,2 +1,0 @@
-let adder: fn(u64) -> fn(u64) -> u64 = (a) -> (b) -> a + b;
-adder(20u64)(22u64)

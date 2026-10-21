@@ -1,5 +1,0 @@
-let byte = 1u8;
-let wide = 1_000u32;
-let signed = 7s16;
-let hex = 0xffu8;
-byte as u64 + wide as u64 + signed as u64 + hex as u64

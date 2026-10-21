@@ -1,3 +1,0 @@
-fn side_effect() -> u64 { 1u64 }
-side_effect();
-2u64

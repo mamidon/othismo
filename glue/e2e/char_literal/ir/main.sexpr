@@ -1,3 +1,0 @@
-(func <file> () -> char
-  (block 0
-    (return (const 'x'))))   ; the file's top level (§statements)

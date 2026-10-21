@@ -1,6 +1,0 @@
-fn make() -> fn() -> u64 {
-  let mut count = 0u64;
-  (() -> { count = count + 1u64; count })
-}
-let next = make();
-next() + next() + next()

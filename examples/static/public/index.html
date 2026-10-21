@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>real_talk — sandboxed objects in a namespace</title>
+  <meta name="description" content="real_talk runs images: sets of sandboxed AssemblyScript objects that reach each other only through the paths in their own namespaces.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/objects/">Objects</a>
+          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">real_talk &middot; an image runtime</div>
+        <h1>Objects that only see <em>what you mount.</em></h1>
+        <p class="lede">real_talk runs images: sets of sandboxed AssemblyScript objects that reach each other only through the paths in their own namespaces. If the image doesn't put something in an object's view, the object can't reach it.</p>
+        <div class="hero-actions">
+          <a class="btn" href="/overview/">Read the overview &rarr;</a>
+          <a class="btn ghost" href="/docs/">The namespace design</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="ideas">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="eyebrow">The model</div>
+          <h2>A Plan 9 namespace for every object.</h2>
+          <p>No routing tables and no special syntax for each new kind of connection. Objects send requests to paths, and the image decides what each object can see.</p>
+        </div>
+
+        <div class="pillars">
+          <article class="pillar">
+            <div class="num">01</div>
+            <h3>Private views</h3>
+            <p>Every instance has its own view: mount points that put another instance's served tree at a path. The image builds it; the instance can rearrange it, but only with names it can already see.</p>
+          </article>
+          <article class="pillar">
+            <div class="num">02</div>
+            <h3>Names are the capabilities</h3>
+            <p>A path is resolved in the sender's own view. A name that isn't there is simply not found. Read-only mounts let only safe verbs through, all the way down the chain.</p>
+          </article>
+          <article class="pillar">
+            <div class="num">03</div>
+            <h3>The world is a server</h3>
+            <p>The console, TCP and files are servers the runtime implements, configured by the image alone. They are the only way out, and <code>--check</code> prints the most each object can ever reach.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="white" id="request">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="eyebrow">How this page reached you</div>
+          <h2>One request, four hops.</h2>
+          <p>This site is served by the static example image. Here is what happened when you asked for the design page.</p>
+        </div>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="n">1</div>
+            <div>
+              <h3>Tcp accepts, http watches</h3>
+              <p><code>Environment.Tcp</code> streamed an <code>Accepted</code> to the HTTP server, which watched <code>/net/tcp/&lt;conn&gt;</code> until your whole request had arrived.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="n">2</div>
+            <div>
+              <h3>HTTP becomes a namespace request</h3>
+              <p><code>GET /docs/</code> became <code>read /www/docs/</code> in the server's view, where the image mounted the site. The server knows nothing about files.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="n">3</div>
+            <div>
+              <h3>The site forwards</h3>
+              <p>The site controller added <code>index.html</code> and forwarded the request to <code>/files/docs/index.html</code> in its own view, a read-only mount. It never sees the bytes.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="n">4</div>
+            <div>
+              <h3>The packed files answer the caller</h3>
+              <p><code>Packed.Files</code> replied with <code>Data</code> from the files built into the image, which went straight back to the HTTP server and out over your connection.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="image">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="eyebrow">The image</div>
+          <h2>Everything this server can touch.</h2>
+        </div>
+        <div class="showcase">
+          <div>
+            <p>It touches the host in two ways: one listener, whose address the deployer can change, and the console for the access log. The site itself is packed into the image, and the HTTP server reaches it only through the site controller.</p>
+            <p>The site also serves a file that exists only in its code. It counts the requests it has forwarded:</p>
+            <p><span class="counter" id="hits">&ndash;</span></p>
+            <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
+          </div>
+          <pre><code>require listen : Listen { address: "127.0.0.1:8080" }
+
+instance net   : Environment.Tcp     { control / listen }
+instance cons  : Environment.Console
+instance files : Packed.Files        { include "./public/" }
+
+instance site : StaticSite {
+  mount files /files readonly
+}
+
+instance http : HttpServer {
+  mount net  /net/tcp
+  mount site /www
+  mount cons /dev/cons
+  control /hosts/* Text { text: "/www" }
+  control /hosts/files.localhost Text { text: "/www/static" }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="wrap">
+        <div class="cta-card">
+          <div class="eyebrow">Try it</div>
+          <h2>Serve these docs yourself.</h2>
+          <p class="lede">Requires Rust and Node. The site is the docs, rendered.</p>
+          <pre><code>make static     # http://127.0.0.1:8080
+make site       # re-render the docs into examples/static/public
+cargo run -- build examples/static/static.img -o static.rti
+cargo run -- static.rti --set listen.address=0.0.0.0:8080</code></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>real_talk &middot; served by real_talk</small>
+    </div>
+  </footer>
+
+  <script>
+    fetch('/hits')
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .then(t => { document.getElementById('hits').textContent = t.trim(); })
+      .catch(() => {});
+  </script>
+</body>
+</html>

@@ -1,2 +1,0 @@
-fn takes(n: u32) -> u32 { n }
-takes(7)

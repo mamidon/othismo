@@ -1,7 +1,11 @@
-[workspace]
-members = ["glue/cli","glue/elab","glue/eval","glue/ir","glue/lsp","glue/parser","glue/tokenizer",
-    "othismo",
-    "prototype",
-    "sdk"
-]
-resolver = "2"
+[package]
+name = "real_talk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+bson = { version = "3.1.0", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.10.9"
+wasmtime = { version = "48.0.7", features = ["anyhow"] }

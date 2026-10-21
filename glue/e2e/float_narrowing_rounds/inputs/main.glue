@@ -1,2 +1,0 @@
-fn narrow(x: f64) -> f32 { x as f32 }
-narrow(0.1)

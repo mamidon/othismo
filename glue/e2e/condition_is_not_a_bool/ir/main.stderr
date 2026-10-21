@@ -1,1 +1,0 @@
-main.glue:1:4: a condition must be `bool`, and this is `a numeric constant` — there is no truthiness

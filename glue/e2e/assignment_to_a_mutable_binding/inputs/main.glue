@@ -1,4 +1,0 @@
-let mut total = 0u64;
-total = total + 5u64;
-total = total * 2u64;
-total

@@ -1,3 +1,0 @@
-let a = b;
-let b = 1u64;
-a
