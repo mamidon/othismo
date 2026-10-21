@@ -4,7 +4,7 @@
 //
 //   docs.img            this file
 //   scripts/*.wasm      HttpServer and StaticSite, compiled from examples/static/scripts
-//   public/             the site, with README.md and docs/*.md freshly rendered to HTML
+//   public/             the site, with docs/*.md freshly rendered to HTML
 //
 // and seals it into docs.rti. Fly's proxy terminates TLS and forwards plain
 // HTTP to port 8080 (internal_port in the root fly.toml), so that is where we listen.

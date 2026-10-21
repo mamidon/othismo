@@ -14,7 +14,6 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 COPY as/ as/
 RUN npm ci
-COPY README.md ./
 COPY docs/ docs/
 COPY examples/static/ examples/static/
 RUN npx asc examples/static/scripts/HttpServer.ts -o examples/static/scripts/HttpServer.wasm --optimize \

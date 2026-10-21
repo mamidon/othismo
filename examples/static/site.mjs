@@ -1,6 +1,6 @@
 // Renders the project's docs into the static example's site:
 //
-//   README.md          -> public/guide/index.html
+//   docs/overview.md   -> public/overview/index.html
 //   docs/namespace.md  -> public/docs/index.html
 //   docs/images.md     -> public/images/index.html
 //
@@ -18,11 +18,11 @@ const root = join(here, "..", "..")
 
 const PAGES = [
   {
-    source: "README.md",
-    out: "guide/index.html",
-    nav: "/guide/",
-    eyebrow: "Guide",
-    description: "Using real_talk: the image language, environment objects, the static server and writing an object.",
+    source: "docs/overview.md",
+    out: "overview/index.html",
+    nav: "/overview/",
+    eyebrow: "Overview",
+    description: "What Othismo is and why: sandboxed objects, namespaces and images you can review instead of the code.",
   },
   {
     source: "docs/namespace.md",
@@ -46,8 +46,8 @@ const LINKS = {
   "namespace.md": "/docs/",
   "docs/images.md": "/images/",
   "images.md": "/images/",
-  "README.md": "/guide/",
-  "../README.md": "/guide/",
+  "docs/overview.md": "/overview/",
+  "overview.md": "/overview/",
 }
 
 function slug(text) {
@@ -123,7 +123,7 @@ function page(p, doc) {
       <nav class="nav">
         <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
         <div class="nav-links">
-          ${navLink("/guide/", "Guide")}
+          ${navLink("/overview/", "Overview")}
           ${navLink("/docs/", "Design")}
           ${navLink("/images/", "Building")}
         </div>

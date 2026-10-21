@@ -18,7 +18,7 @@
       <nav class="nav">
         <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
         <div class="nav-links">
-          <a class="nav-link" href="/guide/">Guide</a>
+          <a class="nav-link" href="/overview/">Overview</a>
           <a class="nav-link" href="/docs/">Design</a>
           <a class="nav-link" href="/images/">Building</a>
         </div>
@@ -29,7 +29,7 @@
         <h1>Objects that only see <em>what you mount.</em></h1>
         <p class="lede">real_talk runs images: sets of sandboxed AssemblyScript objects that reach each other only through the paths in their own namespaces. If the image doesn't put something in an object's view, the object can't reach it.</p>
         <div class="hero-actions">
-          <a class="btn" href="/guide/">Read the guide &rarr;</a>
+          <a class="btn" href="/overview/">Read the overview &rarr;</a>
           <a class="btn ghost" href="/docs/">The namespace design</a>
         </div>
       </div>
@@ -145,7 +145,7 @@ instance http : HttpServer {
         <div class="cta-card">
           <div class="eyebrow">Try it</div>
           <h2>Serve these docs yourself.</h2>
-          <p class="lede">Requires Rust and Node. The site is the README and the design doc, rendered.</p>
+          <p class="lede">Requires Rust and Node. The site is the docs, rendered.</p>
           <pre><code>make static     # http://127.0.0.1:8080
 make site       # re-render the docs into examples/static/public
 cargo run -- build examples/static/static.img -o static.rti

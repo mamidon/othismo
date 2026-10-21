@@ -32,7 +32,7 @@ examples/static/static.rti: examples/static/static.img $(WASM) $(shell find exam
 static-built: examples/static/static.rti
 	cargo run -- $<
 
-# Re-renders README.md and docs/namespace.md into the static example's site.
+# Re-renders docs/*.md into the static example's site.
 site: node_modules/.installed
 	node examples/static/site.mjs
 
