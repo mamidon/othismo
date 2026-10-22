@@ -21,14 +21,15 @@ use std::sync::OnceLock;
 pub const OPAQUE: &str = "Opaque";
 
 /// The runtime's own header, one file at a time: the bodies its objects
-/// share, then each trait it implements with the types it adds, and
-/// Packed.Files. A file may import from the files before it.
+/// share, then each trait it implements with the types it adds,
+/// Packed.Files, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
     ("bodies.iface", include_str!("../as/env/bodies.iface")),
     ("Console.iface", include_str!("../as/env/Console.iface")),
     ("Listener.iface", include_str!("../as/env/Listener.iface")),
     ("Files.iface", include_str!("../as/env/Files.iface")),
     ("Packed.Files.iface", include_str!("../as/env/Packed.Files.iface")),
+    ("TestSuite.iface", include_str!("../as/env/TestSuite.iface")),
 ];
 
 /// The runtime's header, `env`: every file in `as/env/`, joined.

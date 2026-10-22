@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use othismo::{bindings, doc, iface, pack, runtime, slots};
+use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot.field=value>]... <image>
+       othismo test [--no-checks] <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
        othismo bindings [--library <path>] <header.iface | env> [-o <out.ts>]
@@ -21,6 +22,10 @@ An image is a .img source, which is built in memory, or a built .rti file.
                   a string, a literal otherwise
   --no-sources    leave the reference copies of the sources out of a build
   -v              list each packed path that a later include replaced
+
+`test` runs the image's tests: each instance whose type declares TestSuite
+lists its tests, and each test runs in a fresh run of the image, with nothing
+outside started. What the image prints is shown for the tests that fail.
 
 `bindings` writes AssemblyScript classes for a header's message types, to
 <header.iface>.ts unless -o says otherwise; a header that declares none
@@ -68,6 +73,7 @@ fn command(args: &[String]) -> Result<Result<()>, Usage> {
             _ => Err(Usage),
         },
         Some("run") => run(&args[1..]),
+        Some("test") => test(&args[1..]),
         Some("bindings") => bindings(&args[1..]),
         Some("doc") => match &args[1..] {
             [target] if !target.starts_with('-') => Ok(document(target).map(|md| print!("{md}"))),
@@ -162,6 +168,37 @@ fn document(target: &str) -> Result<String> {
     };
     let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &header, &header.declared)).collect();
     Ok(pages.join("\n"))
+}
+
+fn test(args: &[String]) -> Result<Result<()>, Usage> {
+    let mut options = runtime::Options::default();
+    let image = match args {
+        [flag, image] if flag == "--no-checks" && !image.starts_with('-') => {
+            options.no_checks = true;
+            image
+        }
+        [image] if !image.starts_with('-') => image,
+        _ => return Err(Usage),
+    };
+    Ok(pack::load(image.as_ref()).and_then(|mut pack| {
+        slots::bind(&mut pack.program, &[])?;
+        let reports = suite::run(&pack, options)?;
+        for r in &reports {
+            println!("{} {} ... {}", r.suite, r.test, if r.passed { "ok" } else { "FAILED" });
+            if !r.passed {
+                println!("    {}", r.detail);
+                for line in r.output.lines() {
+                    println!("    | {line}");
+                }
+            }
+        }
+        let failed = reports.iter().filter(|r| !r.passed).count();
+        println!("\n{} passed, {failed} failed", reports.len() - failed);
+        if failed > 0 {
+            anyhow::bail!("{failed} test{} failed", if failed == 1 { "" } else { "s" });
+        }
+        Ok(())
+    }))
 }
 
 fn run(args: &[String]) -> Result<Result<()>, Usage> {

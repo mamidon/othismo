@@ -205,6 +205,28 @@ another can drive it with: type lines into it, and watch what it prints.</p>
 <td>Everything written to the console, as it is written.</td>
 </tr>
 </tbody></table></div>
+<h3 id="testsuite"><code>TestSuite</code></h3>
+<p>Something with tests to run, which <code>othismo test</code> finds by this trait and
+runs, each in a fresh run of the image.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/tests</code></td>
+<td><code>list -&gt; Entry*</code></td>
+<td>The tests, by name.</td>
+</tr>
+<tr>
+<td><code>/tests/{name}</code></td>
+<td><code>invoke -&gt; Outcome</code></td>
+<td>Runs a test, and answers how it went.</td>
+</tr>
+</tbody></table></div>
 <h3 id="protocols">Protocols</h3>
 <div class="table"><table>
 <thead>
@@ -382,6 +404,27 @@ another can drive it with: type lines into it, and watch what it prints.</p>
 <td><code>path</code></td>
 <td>string</td>
 <td>The directory served, relative to the image.</td>
+</tr>
+</tbody></table></div>
+<h3 id="outcome"><code>Outcome</code></h3>
+<p>How a test went.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>passed</code></td>
+<td>bool</td>
+<td></td>
+</tr>
+<tr>
+<td><code>detail</code></td>
+<td>string</td>
+<td>Why it failed, or anything worth saying about it.</td>
 </tr>
 </tbody></table></div>
 

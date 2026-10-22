@@ -201,6 +201,48 @@ instance probe : Probe {
 imported image in memory, nothing outside can reach it, so a run ends as
 soon as everything sent has been answered.
 
+## Testing
+
+Tests are objects, not part of the image language. A test suite is any
+object whose header declares the runtime's `TestSuite` trait:
+
+```text
+trait TestSuite {
+  /tests          list -> Entry*           # its tests, by name
+  /tests/{name}   invoke -> Outcome        # runs one: Outcome { passed, detail }
+}
+```
+
+An image puts one beside the image it tests, by importing it:
+
+```text
+# examples/static/static.test.img
+import "./static.img"
+
+instance tests : SiteTests {
+  mount /net net              # the site's listener, in memory
+}
+```
+
+`SiteTests` (in `examples/static/scripts/`) dials the site with one HTTP
+request per test, and checks how the response begins.
+
+```text
+$ othismo test examples/static/static.test.img
+tests serves_the_index ... ok
+tests missing_pages_are_not_found ... ok
+...
+6 passed, 0 failed
+```
+
+`othismo test` lists every suite's tests in one run of the image, then runs
+each test in a fresh one: startup requests and every `start()`, then
+`invoke /tests/<name>`, then everything that follows from it until nothing
+is left to deliver. Nothing outside is started, neither stdin nor sockets,
+so a test can only reach what the image has in memory. A test that never
+answers fails. What the image prints on its own consoles is shown for each
+test that fails, and the command exits with a failure if any did.
+
 ## The file format
 
 ```text

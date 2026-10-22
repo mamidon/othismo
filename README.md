@@ -8,5 +8,6 @@ review the image and the interfaces instead of every line of the code. See
 ```sh
 task run:example:static   # serve the docs at http://127.0.0.1:8080 (needs Rust, Node and Task)
 task test
+cargo run -q -- test examples/static/static.test.img   # the static site's own tests
 task --list                # everything else
 ```

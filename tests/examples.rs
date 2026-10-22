@@ -96,3 +96,27 @@ fn a_built_image_runs_without_its_sources() {
     assert!(dir.join("out/sources/scripts/Echo.ts").exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Every example's test suites pass: each `<name>.test.img` beside an
+/// example's image, run as `othismo test` runs it.
+#[test]
+fn example_tests_pass() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut seen = 0;
+    for dir in std::fs::read_dir(&examples).unwrap().flatten() {
+        for img in std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.path()) {
+            if !img.to_string_lossy().ends_with(".test.img") {
+                continue;
+            }
+            let rel = img.strip_prefix(&examples).unwrap().to_string_lossy().into_owned();
+            let mut pack = othismo::pack::load(&example(&rel)).unwrap();
+            othismo::slots::bind(&mut pack.program, &[]).unwrap();
+            let reports = othismo::suite::run(&pack, Options::default()).unwrap();
+            assert!(!reports.is_empty(), "{rel} has no tests");
+            let failed: Vec<_> = reports.iter().filter(|r| !r.passed).collect();
+            assert!(failed.is_empty(), "{rel}: {failed:#?}");
+            seen += reports.len();
+        }
+    }
+    assert!(seen >= 6, "the static site's tests ran");
+}

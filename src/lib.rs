@@ -14,5 +14,6 @@ pub mod pattern;
 pub mod render;
 pub mod runtime;
 pub mod slots;
+pub mod suite;
 pub mod tree;
 pub mod wire;

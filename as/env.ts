@@ -145,3 +145,23 @@ export class FilesRoot extends Message {
   encode(w: Writer): void { w.string("path", this.path) }
 }
 registerMessage("FilesRoot", (r: Reader): Message => new FilesRoot(r.string("path")))
+
+/** How a test went. */
+export class Outcome extends Message {
+  passed: bool
+  /** Why it failed, or anything worth saying about it. */
+  detail: string
+
+  constructor(passed: bool, detail: string) {
+    super()
+    this.passed = passed
+    this.detail = detail
+  }
+
+  typeName(): string { return "Outcome" }
+  encode(w: Writer): void {
+    w.bool("passed", this.passed)
+    w.string("detail", this.detail)
+  }
+}
+registerMessage("Outcome", (r: Reader): Message => new Outcome(r.bool("passed"), r.string("detail")))

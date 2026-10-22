@@ -6,8 +6,9 @@ version: '3'
 # the bindings generated from a header are committed next to it, as
 # <Type>.iface.ts.
 vars:
+  # Each example is a directory holding an image named after it.
   EXAMPLES:
-    sh: for img in examples/*/*.img; do basename "$img" .img; done
+    sh: for dir in examples/*/; do name=$(basename "$dir"); [ -f "$dir$name.img" ] && echo "$name"; done; true
   BIN: target/debug/othismo
 
 tasks:

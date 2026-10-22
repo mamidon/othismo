@@ -1,0 +1,8 @@
+# The static site's tests. The site runs as static.img declares it, but in
+# memory: nothing listens on the host. SiteTests dials its listener with each
+# test's request. Run them with `othismo test static.test.img`.
+import "./static.img"
+
+instance tests : SiteTests {
+  mount /net net
+}
