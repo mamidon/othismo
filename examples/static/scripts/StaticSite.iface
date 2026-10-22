@@ -1,20 +1,16 @@
-import { Data, Info, Entry } from env
+import { Data, FileTree } from env
 
 ## Serves a static site from a files tree it is given read-only.
 ##
 ## Requests for paths ending in `/` get `index.html` added. It forwards each
 ## request to `/files` and never sees the bytes it serves. `/static` is
 ## `/files` exposed as is, so requests there don't reach it at all.
-object StaticSite {
+object StaticSite : FileTree {
   ## The site's files. Nothing is ever written here.
-  needs /files {
-    /**     read -> Data, stat -> Info, list -> Entry*
-  }
+  needs /files FileTree
 
   serves {
     ## How many requests it has forwarded, as decimal text.
     /hits   read -> Data
-    ## The site, from `/files`.
-    /**     read -> Data, stat -> Info, list -> Entry*
   }
 }

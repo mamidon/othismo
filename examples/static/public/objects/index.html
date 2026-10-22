@@ -74,26 +74,24 @@ functions, not the language it was written in.</p>
 images, next to its source: <code>scripts/StaticSite.iface</code>. It is the module&#39;s
 interface: the message types it uses, what it serves, what it needs, and its
 documentation.</p>
-<pre><code class="language-text">import { Data, Info, Entry } from env
+<pre><code class="language-text">import { Data, FileTree } from env
 
 ## Serves a static site from a files tree it is given read-only.
 ##
 ## Requests for paths ending in `/` get `index.html` added. It forwards each
 ## safe request to `/files` and never sees the bytes it serves.
-object StaticSite {
+object StaticSite : FileTree {
   ## The site&#39;s files. Nothing is ever written here.
-  needs /files {
-    /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
-  }
+  needs /files FileTree
 
   serves {
     ## How many requests it has forwarded, as decimal text.
     /hits   read -&gt; Data
-    ## The site, from `/files`.
-    /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
   }
 }
 </code></pre>
+<p><code>FileTree</code> is a trait, the shape of a tree of files, from the runtime&#39;s own
+header (see <a href="#protocols-and-traits">Protocols and traits</a>).</p>
 <h3 id="message-types">Message types</h3>
 <p>A message type is a name and a list of fields:</p>
 <pre><code class="language-text">## Configures a Greeter.
@@ -151,7 +149,7 @@ directly under <code>/sites/</code>, and <code>needs /sites/**</code> <code>/sit
 below it.
 HttpServer is configured with a mount point for each host, which can be
 anywhere, so it needs every mount it isn&#39;t given a more specific need for:</p>
-<pre><code class="language-text">needs /net/tcp { ... }
+<pre><code class="language-text">needs /net/tcp Listener
 needs /dev/cons { / write Opaque }
 
 ## The sites, at whichever mount points the hosts are configured with.
@@ -162,6 +160,51 @@ needs /** {
 <p>Every mount the pattern matches must provide what the block lists. Where
 several blocks match a mount point, the most specific applies, so <code>/net/tcp</code>
 is held to its own block and not to <code>/**</code>.</p>
+<h3 id="protocols-and-traits">Protocols and traits</h3>
+<p>The same requests and the same trees come up again and again: everything that
+serves files answers <code>read</code>, <code>stat</code> and <code>list</code> the same way. A header can name
+them once.</p>
+<p>A <strong>protocol</strong> names the requests one path takes:</p>
+<pre><code class="language-text">## Something read whole.
+protocol File { read -&gt; Data, stat -&gt; Info }
+
+## Something listed.
+protocol Dir { list -&gt; Entry*, stat -&gt; Info }
+</code></pre>
+<p>A <strong>trait</strong> names the shape of a whole tree, in the grammar of <code>serves</code>:</p>
+<pre><code class="language-text">## A tree of files, read-only.
+trait FileTree {
+  /**   File, Dir
+}
+
+## A listener, and the connections it accepts.
+trait Listener {
+  /           control Listen
+  /address    read -&gt; Text
+  /accept     watch -&gt; Accepted*
+  /{conn}     Connection
+}
+</code></pre>
+<p>They stand in for what they name:</p>
+<ul>
+<li>A protocol&#39;s name goes wherever requests do, alone or among them:
+<code>/{conn} Connection</code>, or <code>/x File, write Data</code>. Two protocols that list
+the same request must agree on its answer.</li>
+<li>A trait&#39;s name stands alone at a path, and puts its whole tree there:
+<code>/static FileTree</code> in a trait or a <code>serves</code> block covers <code>/static/**</code>.
+It can&#39;t go under <code>**</code>, which only comes last.</li>
+<li><code>needs /net/tcp Listener</code> needs the trait&#39;s whole tree at that mount point.</li>
+<li><code>object StaticSite : FileTree</code> declares that StaticSite serves FileTree:
+the trait&#39;s entries are among what it serves, alongside its own.</li>
+</ul>
+<p>Where two traits, or a trait and an object&#39;s own <code>serves</code>, give the same
+pattern, they must take exactly the same requests. Anything else is an
+error, rather than one silently winning.</p>
+<p>Protocols and traits are imported like message types, <code>import { FileTree } from env</code>, and can be declared in any order. One name means one thing in a
+header: a message type, a protocol or a trait.</p>
+<p>They change nothing about how mounts are checked. Matching stays structural:
+a mount meets <code>needs /files FileTree</code> if what is mounted serves the trait&#39;s
+entries, whether or not its header says <code>: FileTree</code>.</p>
 <h3 id="shapes-not-behaviour">Shapes, not behaviour</h3>
 <p>A header describes shapes: which paths exist, which verbs they take, and which
 types go in and come out. It can&#39;t describe behaviour, such as whether a

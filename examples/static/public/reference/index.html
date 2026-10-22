@@ -55,6 +55,7 @@
 <p>Whatever is written to it is printed on a line of its own. A message whose
 only field is a string <code>text</code>, such as a <code>Line</code>, prints as that text; any
 other as its type and fields.</p>
+<p>Implements <code>Console</code>.</p>
 <h3 id="serves">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -67,11 +68,12 @@ other as its type and fields.</p>
 <tbody><tr>
 <td><code>/</code></td>
 <td><code>watch -&gt; Line*</code>, <code>write Opaque</code></td>
-<td>Watch for every line of stdin, until it ends; write to print.</td>
+<td>Watch for every line of input, until it ends; write to print.</td>
 </tr>
 </tbody></table></div>
 <h2 id="environment-tcp">Environment.Tcp</h2>
 <p>A TCP listener, on the address the image configures it with.</p>
+<p>Implements <code>Listener</code>.</p>
 <h3 id="serves-2">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -84,7 +86,7 @@ other as its type and fields.</p>
 <tbody><tr>
 <td><code>/</code></td>
 <td><code>control Listen</code></td>
-<td>Configured by the image only.</td>
+<td>Configured by the image only, with where to listen.</td>
 </tr>
 <tr>
 <td><code>/address</code></td>
@@ -106,6 +108,7 @@ other as its type and fields.</p>
 <p>Read-only access to one directory on the host, and nothing above it.</p>
 <p>A file&#39;s MIME type comes from its extension. Reading a directory answers
 <code>is_directory</code>, and a listing is sorted by name.</p>
+<p>Implements <code>FileTree</code>.</p>
 <h3 id="serves-3">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -129,6 +132,7 @@ other as its type and fields.</p>
 <h2 id="packed-files">Packed.Files</h2>
 <p>Files packed into the image when it was built, by its <code>include</code>s. It
 answers as <code>Environment.Files</code> does.</p>
+<p>Implements <code>FileTree</code>.</p>
 <h3 id="serves-4">Serves</h3>
 <div class="table"><table>
 <thead>

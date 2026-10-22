@@ -35,7 +35,7 @@ const ENV_SOURCES: &[(&str, &str)] = &[
 pub fn env() -> &'static Header {
     static ENV: OnceLock<Header> = OnceLock::new();
     ENV.get_or_init(|| {
-        let mut env = Header { messages: BTreeMap::new(), declared: vec![], objects: vec![] };
+        let mut env = Header::default();
         let mut done: BTreeMap<&str, Header> = BTreeMap::new();
         for &(name, src) in ENV_SOURCES {
             let file = parse(src).unwrap_or_else(|e| panic!("env/{name} parses: {e:#}"));
@@ -50,6 +50,8 @@ pub fn env() -> &'static Header {
                 .unwrap_or_else(|e| panic!("env/{name} resolves: {e:#}"));
             env.messages.extend(header.messages.clone());
             env.declared.extend(header.declared.iter().cloned());
+            env.protocols.extend(header.protocols.clone());
+            env.traits.extend(header.traits.clone());
             env.objects.extend(header.objects.iter().cloned());
             done.insert(name, header);
         }
@@ -60,13 +62,37 @@ pub fn env() -> &'static Header {
 // ---------------------------------------------------------------------------
 // Resolved
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Header {
     /// Every message type the header can name: its own and its imports.
     pub messages: BTreeMap<String, MessageType>,
     /// The ones it declares itself, in order.
     pub declared: Vec<String>,
+    /// Every protocol the header can name, its own and its imports.
+    #[serde(default)]
+    pub protocols: BTreeMap<String, Protocol>,
+    /// Every trait the header can name, its own and its imports.
+    #[serde(default)]
+    pub traits: BTreeMap<String, Trait>,
     pub objects: Vec<Object>,
+}
+
+/// `protocol <Name> { ... }`: the requests one path takes, with any
+/// protocols it names written out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Protocol {
+    pub name: String,
+    pub doc: String,
+    pub requests: Vec<Request>,
+}
+
+/// `trait <Name> { ... }`: the shape of a tree, with any protocols and
+/// traits it names written out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Trait {
+    pub name: String,
+    pub doc: String,
+    pub entries: Vec<Entry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +100,9 @@ pub struct Object {
     pub name: String,
     /// The object's `##` comment, Markdown.
     pub doc: String,
+    /// The traits it declares, whose entries are among those it serves.
+    #[serde(default)]
+    pub traits: Vec<String>,
     /// The guide's Markdown, if the object names one.
     pub guide: Option<String>,
     pub needs: Vec<Need>,
@@ -313,7 +342,33 @@ fn read_leb128(bytes: &[u8], i: &mut usize) -> Result<usize> {
 pub struct File {
     pub imports: Vec<Import>,
     pub messages: Vec<MessageDecl>,
+    pub protocols: Vec<ProtocolDecl>,
+    pub traits: Vec<TraitDecl>,
     pub objects: Vec<ObjectDecl>,
+}
+
+/// `protocol <Name> { <item>, ... }`: the requests one path takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtocolDecl {
+    pub name: Ident,
+    pub doc: String,
+    pub items: Vec<Item>,
+}
+
+/// `trait <Name> { <path> <items> ... }`: the shape of a tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDecl {
+    pub name: Ident,
+    pub doc: String,
+    pub entries: Vec<EntryDecl>,
+}
+
+/// What a path takes: a request, or a protocol's or a trait's name. A
+/// trait stands alone, and puts its whole tree at the path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    Request(RequestDecl),
+    Named(Ident),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -334,6 +389,8 @@ pub struct FieldDecl {
 pub struct ObjectDecl {
     pub name: Ident,
     pub doc: String,
+    /// `object <Name> : <Trait>, ...`
+    pub traits: Vec<Ident>,
     /// `guide "<file>"`, relative to the header.
     pub guide: Option<(String, Pos)>,
     pub needs: Vec<NeedDecl>,
@@ -351,7 +408,7 @@ pub struct NeedDecl {
 pub struct EntryDecl {
     pub path: image::Path,
     pub doc: String,
-    pub requests: Vec<RequestDecl>,
+    pub items: Vec<Item>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -386,7 +443,7 @@ impl Parser {
     }
 
     fn header(&mut self) -> Result<File> {
-        let mut file = File { imports: vec![], messages: vec![], objects: vec![] };
+        let mut file = File { imports: vec![], messages: vec![], protocols: vec![], traits: vec![], objects: vec![] };
         loop {
             let doc = self.docs();
             let pos = self.pos();
@@ -400,8 +457,10 @@ impl Parser {
                     file.imports.push(self.import()?);
                 }
                 Tok::Ident(kw) if kw == "message" => file.messages.push(self.message(doc)?),
+                Tok::Ident(kw) if kw == "protocol" => file.protocols.push(self.protocol(doc)?),
+                Tok::Ident(kw) if kw == "trait" => file.traits.push(self.trait_decl(doc)?),
                 Tok::Ident(kw) if kw == "object" => file.objects.push(self.object(doc)?),
-                other => bail!("{pos}: expected `import`, `message` or `object`, found {other}"),
+                other => bail!("{pos}: expected `import`, `message`, `protocol`, `trait` or `object`, found {other}"),
             }
         }
     }
@@ -429,11 +488,40 @@ impl Parser {
         }
     }
 
+    fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {
+        self.expect_kw("protocol")?;
+        let name = self.ident("protocol name", false)?;
+        self.expect(Tok::LBrace)?;
+        let mut items = vec![];
+        while *self.peek() != Tok::RBrace {
+            items.push(self.item()?);
+            if *self.peek() == Tok::Comma {
+                self.next();
+            } else if *self.peek() != Tok::RBrace {
+                bail!("{}: expected `,` or `}}`, found {}", self.pos(), self.peek());
+            }
+        }
+        self.next();
+        Ok(ProtocolDecl { name, doc, items })
+    }
+
+    fn trait_decl(&mut self, doc: String) -> Result<TraitDecl> {
+        self.expect_kw("trait")?;
+        let name = self.ident("trait name", false)?;
+        let entries = self.entries()?;
+        Ok(TraitDecl { name, doc, entries })
+    }
+
     fn object(&mut self, doc: String) -> Result<ObjectDecl> {
         self.expect_kw("object")?;
         let name = self.ident("object name", true)?;
+        let mut traits = vec![];
+        if *self.peek() == Tok::Colon {
+            self.next();
+            traits = self.ident_list("trait name")?;
+        }
         self.expect(Tok::LBrace)?;
-        let mut obj = ObjectDecl { name, doc, guide: None, needs: vec![], serves: vec![] };
+        let mut obj = ObjectDecl { name, doc, traits, guide: None, needs: vec![], serves: vec![] };
         loop {
             let doc = self.docs();
             let (tok, pos) = self.next();
@@ -444,7 +532,15 @@ impl Parser {
                 }
                 Tok::Ident(kw) if kw == "needs" => {
                     let at = self.path()?;
-                    let entries = self.entries()?;
+                    // `needs /net/tcp Listener` is the trait's whole tree.
+                    let entries = match self.peek() {
+                        Tok::Ident(_) => {
+                            let name = self.ident("trait name", false)?;
+                            let path = image::Path { path: "/".into(), pos: name.pos };
+                            vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
+                        }
+                        _ => self.entries()?,
+                    };
                     obj.needs.push(NeedDecl { at, doc, entries });
                 }
                 Tok::Ident(kw) if kw == "serves" => {
@@ -479,12 +575,20 @@ impl Parser {
                 return Ok(entries);
             }
             let path = self.path()?;
-            let mut requests = vec![self.request()?];
+            let mut items = vec![self.item()?];
             while *self.peek() == Tok::Comma {
                 self.next();
-                requests.push(self.request()?);
+                items.push(self.item()?);
             }
-            entries.push(EntryDecl { path, doc, requests });
+            entries.push(EntryDecl { path, doc, items });
+        }
+    }
+
+    /// A request, which starts with a verb, or a protocol's or trait's name.
+    fn item(&mut self) -> Result<Item> {
+        match self.peek() {
+            Tok::Ident(w) if Verb::from_keyword(w).is_none() => Ok(Item::Named(self.ident("protocol or trait name", false)?)),
+            _ => Ok(Item::Request(self.request()?)),
         }
     }
 
@@ -532,28 +636,46 @@ pub fn resolve(
     guide: &dyn Fn(&str) -> Result<String>,
 ) -> Result<Header> {
     let mut messages: BTreeMap<String, MessageType> = BTreeMap::new();
+    let mut protocols: BTreeMap<String, Protocol> = BTreeMap::new();
+    let mut traits: BTreeMap<String, Trait> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
     for imp in &file.imports {
         let header = import(&imp.from).with_context(|| format!("{}: importing from {}", imp.pos, imp.from))?;
         for name in &imp.names {
-            let Some(ty) = header.messages.get(&name.name) else {
-                bail!(err_at(name, format!("{} has no message type `{}`", imp.from, name.name)));
-            };
             reserve(name)?;
             if let Some(prev) = from.insert(name.name.clone(), imp.from.to_string()) {
                 bail!(err_at(name, format!("`{}` is already imported from {prev}", name.name)));
             }
-            messages.insert(name.name.clone(), ty.clone());
+            if let Some(ty) = header.messages.get(&name.name) {
+                messages.insert(name.name.clone(), ty.clone());
+            } else if let Some(p) = header.protocols.get(&name.name) {
+                protocols.insert(name.name.clone(), p.clone());
+            } else if let Some(t) = header.traits.get(&name.name) {
+                traits.insert(name.name.clone(), t.clone());
+            } else {
+                bail!(err_at(name, format!("{} has no message type, protocol or trait `{}`", imp.from, name.name)));
+            }
         }
     }
+
+    // A name means one thing, whether a message type, a protocol or a trait.
+    let mut names: Vec<(&Ident, &str)> = file.messages.iter().map(|m| (&m.name, "message")).collect();
+    names.extend(file.protocols.iter().map(|p| (&p.name, "protocol")));
+    names.extend(file.traits.iter().map(|t| (&t.name, "trait")));
+    for (i, &(name, kind)) in names.iter().enumerate() {
+        reserve(name)?;
+        if let Some(prev) = from.get(&name.name) {
+            bail!(err_at(name, format!("`{}` is imported from {prev}, and declared here too", name.name)));
+        }
+        if let Some((_, prev)) = names[..i].iter().find(|(n, _)| n.name == name.name) {
+            let what = if *prev == kind { format!("{kind} `{}` is declared twice", name.name) } else {
+                format!("`{}` is declared as a {prev} and as a {kind}", name.name)
+            };
+            bail!(err_at(name, what));
+        }
+    }
+
     for m in &file.messages {
-        reserve(&m.name)?;
-        if let Some(prev) = from.get(&m.name.name) {
-            bail!(err_at(&m.name, format!("`{}` is imported from {prev}, and declared here too", m.name.name)));
-        }
-        if messages.contains_key(&m.name.name) {
-            bail!(err_at(&m.name, format!("message `{}` is declared twice", m.name.name)));
-        }
         let mut fields: Vec<(String, FieldType)> = vec![];
         for f in &m.fields {
             if fields.iter().any(|(n, _)| *n == f.name.name) {
@@ -574,6 +696,21 @@ pub fn resolve(
         messages.insert(m.name.name.clone(), MessageType { name: m.name.name.clone(), fields, doc: m.doc.clone(), field_docs });
     }
 
+    let mut shapes = Shapes {
+        messages: &messages,
+        protocol_decls: file.protocols.iter().map(|p| (p.name.name.as_str(), p)).collect(),
+        trait_decls: file.traits.iter().map(|t| (t.name.name.as_str(), t)).collect(),
+        protocols,
+        traits,
+        resolving: vec![],
+    };
+    for p in &file.protocols {
+        shapes.named(&p.name)?;
+    }
+    for t in &file.traits {
+        shapes.named(&t.name)?;
+    }
+
     let mut objects: Vec<Object> = vec![];
     for o in &file.objects {
         if objects.iter().any(|prev| prev.name == o.name.name) {
@@ -589,13 +726,173 @@ pub fn resolve(
             if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
                 bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
             }
-            needs.push(Need { at, doc: n.doc.clone(), entries: entries(&n.entries, &messages)? });
+            needs.push(Need { at, doc: n.doc.clone(), entries: shapes.entries(&n.entries)? });
         }
-        let serves = entries(&o.serves, &messages)?;
-        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), guide, needs, serves });
+        let mut serves = shapes.entries(&o.serves)?;
+        for t in &o.traits {
+            let Shape::Trait(entries) = shapes.named(t)? else {
+                bail!(err_at(t, format!("`{}` is a protocol; an object declares traits, the shapes of trees", t.name)));
+            };
+            for e in entries {
+                merge(&mut serves, e, t.pos)?;
+            }
+        }
+        let traits = o.traits.iter().map(|t| t.name.clone()).collect();
+        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves });
     }
     let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
-    Ok(Header { messages, declared, objects })
+    let Shapes { protocols, traits, .. } = shapes;
+    Ok(Header { messages, declared, protocols, traits, objects })
+}
+
+/// What a protocol's or a trait's name stands for, written out.
+enum Shape {
+    Protocol(Vec<Request>),
+    Trait(Vec<Entry>),
+}
+
+/// Resolves a header's protocols and traits, each the first time it is
+/// named, so they can be declared in any order.
+struct Shapes<'a> {
+    messages: &'a BTreeMap<String, MessageType>,
+    protocol_decls: BTreeMap<&'a str, &'a ProtocolDecl>,
+    trait_decls: BTreeMap<&'a str, &'a TraitDecl>,
+    protocols: BTreeMap<String, Protocol>,
+    traits: BTreeMap<String, Trait>,
+    /// The ones being resolved, to catch one that contains itself.
+    resolving: Vec<String>,
+}
+
+impl Shapes<'_> {
+    fn named(&mut self, id: &Ident) -> Result<Shape> {
+        let name = id.name.as_str();
+        if let Some(p) = self.protocols.get(name) {
+            return Ok(Shape::Protocol(p.requests.clone()));
+        }
+        if let Some(t) = self.traits.get(name) {
+            return Ok(Shape::Trait(t.entries.clone()));
+        }
+        if self.resolving.iter().any(|r| r == name) {
+            bail!(err_at(id, format!("`{name}` contains itself")));
+        }
+        self.resolving.push(name.to_string());
+        let shape = if let Some(&decl) = self.protocol_decls.get(name) {
+            let requests = self.requests(&decl.items, &format!("protocol `{name}`"))?;
+            self.protocols.insert(name.into(), Protocol { name: name.into(), doc: decl.doc.clone(), requests: requests.clone() });
+            Shape::Protocol(requests)
+        } else if let Some(&decl) = self.trait_decls.get(name) {
+            let entries = self.entries(&decl.entries)?;
+            self.traits.insert(name.into(), Trait { name: name.into(), doc: decl.doc.clone(), entries: entries.clone() });
+            Shape::Trait(entries)
+        } else {
+            bail!(err_at(id, format!("unknown protocol or trait `{name}`; is it imported?")));
+        };
+        self.resolving.pop();
+        Ok(shape)
+    }
+
+    /// The requests `items` stand for, where `at` names the place for errors.
+    /// A request written twice is a mistake; one that two protocols both
+    /// list is fine, so long as they agree on its answer.
+    fn requests(&mut self, items: &[Item], at: &str) -> Result<Vec<Request>> {
+        let mut out: Vec<(Request, bool)> = vec![];
+        for item in items {
+            let (reqs, written, pos) = match item {
+                Item::Request(r) => (vec![self.request(r)?], true, r.pos),
+                Item::Named(id) => match self.named(id)? {
+                    Shape::Protocol(reqs) => (reqs, false, id.pos),
+                    Shape::Trait(_) => bail!(err_at(
+                        id,
+                        format!("`{}` is a trait; it stands alone at a path, and puts its whole tree there", id.name)
+                    )),
+                },
+            };
+            for req in reqs {
+                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body) {
+                    Some((prev, prev_written)) if *prev_written && written => bail!("{pos}: {at} takes `{req}` twice"),
+                    Some((prev, _)) if *prev == req => {}
+                    Some((prev, _)) => bail!("{pos}: {at} takes `{prev}` and `{req}`, which disagree"),
+                    None => out.push((req, written)),
+                }
+            }
+        }
+        Ok(out.into_iter().map(|(r, _)| r).collect())
+    }
+
+    fn request(&self, r: &RequestDecl) -> Result<Request> {
+        let ty = |id: &Ident| -> Result<String> {
+            if id.name != OPAQUE && !self.messages.contains_key(&id.name) {
+                bail!(err_at(id, format!("unknown message type `{}`; is it imported?", id.name)));
+            }
+            Ok(id.name.clone())
+        };
+        let body = r.body.as_ref().map(ty).transpose()?;
+        let answer = match &r.answer {
+            Some((id, stream)) => Some(Answer { ty: ty(id)?, stream: *stream }),
+            None => None,
+        };
+        Ok(Request { verb: r.verb, body, answer })
+    }
+
+    /// The entries `decls` stand for, with each trait's tree put at its path.
+    fn entries(&mut self, decls: &[EntryDecl]) -> Result<Vec<Entry>> {
+        let mut written: Vec<Pattern> = vec![];
+        let mut out: Vec<Entry> = vec![];
+        for e in decls {
+            let path = pattern(&e.path)?;
+            if let Some(prev) = written.iter().find(|p| same(p, &path)) {
+                bail!("{}: `{path}` is already listed, as `{prev}`", e.path.pos);
+            }
+            written.push(path.clone());
+            if let [Item::Named(id)] = e.items.as_slice()
+                && let Shape::Trait(entries) = self.named(id)?
+            {
+                for t in entries {
+                    let doc = if t.path.as_str() == "/" && t.doc.is_empty() { e.doc.clone() } else { t.doc };
+                    merge(&mut out, Entry { path: rebase(&path, &t.path, id.pos)?, doc, requests: t.requests }, id.pos)?;
+                }
+                continue;
+            }
+            let requests = self.requests(&e.items, &format!("`{path}`"))?;
+            merge(&mut out, Entry { path, doc: e.doc.clone(), requests }, e.path.pos)?;
+        }
+        Ok(out)
+    }
+}
+
+/// Adds `entry` to `entries`. Where they already have its pattern, the two
+/// must take exactly the same requests.
+fn merge(entries: &mut Vec<Entry>, entry: Entry, pos: Pos) -> Result<()> {
+    let Some(prev) = entries.iter_mut().find(|p| same(&p.path, &entry.path)) else {
+        entries.push(entry);
+        return Ok(());
+    };
+    let set = |e: &Entry| {
+        let mut reqs: Vec<String> = e.requests.iter().map(|r| r.to_string()).collect();
+        reqs.sort();
+        reqs
+    };
+    if set(prev) != set(&entry) {
+        bail!("{pos}: `{}` is given twice, as `{prev}` and as `{entry}`; where traits meet they must agree exactly", entry.path);
+    }
+    if prev.doc.is_empty() {
+        prev.doc = entry.doc;
+    }
+    Ok(())
+}
+
+/// `inner`, a pattern in a trait's tree, as a pattern under `at`, where the
+/// trait is put.
+fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
+    if at.as_str().ends_with("**") {
+        bail!("{pos}: a trait can't be put under `{at}`; `**` only comes last");
+    }
+    let text = match (at.as_str(), inner.as_str()) {
+        (_, "/") => at.as_str().to_string(),
+        ("/", inner) => inner.to_string(),
+        (at, inner) => format!("{}{inner}", at.trim_end_matches('/')),
+    };
+    Pattern::parse(&text).map_err(|e| anyhow::anyhow!("{pos}: {e}"))
 }
 
 fn reserve(name: &Ident) -> Result<()> {
@@ -612,37 +909,6 @@ fn pattern(p: &image::Path) -> Result<Pattern> {
 /// Two patterns that match exactly the same paths.
 fn same(a: &Pattern, b: &Pattern) -> bool {
     a.specificity(b) == Ordering::Equal && a.covers(b) && b.covers(a)
-}
-
-fn entries(decls: &[EntryDecl], messages: &BTreeMap<String, MessageType>) -> Result<Vec<Entry>> {
-    let ty = |id: &Ident| -> Result<String> {
-        if id.name != OPAQUE && !messages.contains_key(&id.name) {
-            bail!(err_at(id, format!("unknown message type `{}`; is it imported?", id.name)));
-        }
-        Ok(id.name.clone())
-    };
-    let mut out: Vec<Entry> = vec![];
-    for e in decls {
-        let path = pattern(&e.path)?;
-        if let Some(prev) = out.iter().find(|p| same(&p.path, &path)) {
-            bail!("{}: `{path}` is already listed, as `{}`", e.path.pos, prev.path);
-        }
-        let mut requests: Vec<Request> = vec![];
-        for r in &e.requests {
-            let body = r.body.as_ref().map(ty).transpose()?;
-            let answer = match &r.answer {
-                Some((id, stream)) => Some(Answer { ty: ty(id)?, stream: *stream }),
-                None => None,
-            };
-            let req = Request { verb: r.verb, body, answer };
-            if requests.iter().any(|prev| prev.verb == req.verb && prev.body == req.body) {
-                bail!("{}: `{path}` takes `{req}` twice", r.pos);
-            }
-            requests.push(req);
-        }
-        out.push(Entry { path, doc: e.doc.clone(), requests });
-    }
-    Ok(out)
 }
 
 /// Reads and resolves the header at `path`. `from env` is the runtime's
@@ -720,6 +986,91 @@ mod tests {
         format!("{:#}", resolve_str(src).unwrap_err())
     }
 
+    const SHAPES: &str = r#"
+        import { Data, Entry, Info, Text } from env
+
+        ## A site, declared before the trees it is made of.
+        trait Site {
+          /hits     read -> Text
+          ## The static files.
+          /static   Tree
+          /**       File
+        }
+
+        trait Tree {
+          /     Dir
+          /**   File, Dir
+        }
+
+        protocol File { read -> Data, stat -> Info }
+        protocol Dir {
+          list -> Entry*,
+          stat -> Info,
+        }
+
+        object S : Site {
+          needs /files Tree
+          serves { /hits read -> Text }
+        }
+    "#;
+
+    #[test]
+    fn protocols_and_traits_are_written_out() {
+        let h = resolve_str(SHAPES).unwrap();
+        let show = |entries: &[Entry]| -> Vec<String> { entries.iter().map(|e| e.to_string()).collect() };
+        assert_eq!(h.protocols["Dir"].requests.iter().map(|r| r.to_string()).collect::<Vec<_>>(), ["list -> Entry*", "stat -> Info"]);
+        assert_eq!(show(&h.traits["Tree"].entries), ["/ list -> Entry*, stat -> Info", "/** read -> Data, stat -> Info, list -> Entry*"]);
+        let s = h.object("S").unwrap();
+        assert_eq!(s.traits, ["Site"]);
+        assert_eq!(
+            show(&s.serves),
+            [
+                "/hits read -> Text",
+                "/static list -> Entry*, stat -> Info",
+                "/static/** read -> Data, stat -> Info, list -> Entry*",
+                "/** read -> Data, stat -> Info",
+            ],
+            "its own `/hits` agrees with Site's, so it is listed once"
+        );
+        assert_eq!(s.serves[1].doc, "The static files.", "the trait's root takes the doc of where it is put");
+        assert_eq!(show(&s.needs[0].entries), show(&h.traits["Tree"].entries));
+    }
+
+    #[test]
+    fn protocols_and_traits_can_be_imported() {
+        let file = parse("import { Tree, File } from Shapes object T { needs /f Tree serves { /x File } }").unwrap();
+        let mut import = |_: &Source| resolve_str(SHAPES);
+        let h = resolve(&file, &mut import, &|_| unreachable!()).unwrap();
+        assert_eq!(h.object("T").unwrap().needs[0].entries.len(), 2);
+        assert_eq!(h.object("T").unwrap().serves[0].to_string(), "/x read -> Data, stat -> Info");
+    }
+
+    #[test]
+    fn shapes_must_agree_where_they_meet() {
+        let env = "import { Data, Text } from env ";
+        let e = err(&format!("{env} protocol A {{ read -> Data }} protocol B {{ read -> Text }} object O {{ serves {{ /x A, B }} }}"));
+        assert!(e.contains("`/x` takes `read -> Data` and `read -> Text`, which disagree"), "{e}");
+        let e = err(&format!("{env} trait T {{ /x read -> Data }} trait U {{ /x read -> Text }} object O : T, U {{}}"));
+        assert!(e.contains("`/x` is given twice, as `/x read -> Data` and as `/x read -> Text`; where traits meet they must agree exactly"), "{e}");
+        let e = err(&format!("{env} trait T {{ /x read -> Data }} object O : T {{ serves {{ /x read -> Data, stat }} }}"));
+        assert!(e.contains("where traits meet they must agree exactly"), "{e}");
+        assert!(resolve_str(&format!("{env} protocol A {{ read -> Data }} protocol B {{ read -> Data }} object O {{ serves {{ /x A, B }} }}")).is_ok());
+    }
+
+    #[test]
+    fn rejects_misused_shapes() {
+        let env = "import { Data } from env ";
+        assert!(err("protocol A { B } protocol B { A }").contains("`A` contains itself"));
+        assert!(err(&format!("{env} trait T {{ /x read -> Data }} object O {{ serves {{ /x T, read }} }}")).contains("`T` is a trait; it stands alone"));
+        assert!(err(&format!("{env} trait T {{ /x read -> Data }} object O {{ serves {{ /a/** T }} }}")).contains("a trait can't be put under `/a/**`"));
+        assert!(err("protocol P { read } object O : P {}").contains("`P` is a protocol; an object declares traits"));
+        assert!(err("object O : Nope {}").contains("unknown protocol or trait `Nope`"));
+        assert!(err("message X {} protocol X { read }").contains("`X` is declared as a message and as a protocol"));
+        assert!(err("trait X { / read } trait X { / stat }").contains("trait `X` is declared twice"));
+        assert!(err(&format!("{env} protocol Data {{ read }}")).contains("`Data` is imported from env, and declared here too"));
+        assert!(err("protocol P { read, read }").contains("protocol `P` takes `read` twice"));
+    }
+
     #[test]
     fn parses_and_resolves_a_header() {
         let h = resolve_str(GREETER).unwrap();
@@ -764,14 +1115,14 @@ mod tests {
         assert!(err("message A {} message A {}").contains("declared twice"));
         assert!(err("message Opaque {}").contains("reserved"));
         assert!(err("import { Line } from env message Line { text: string }").contains("imported from env, and declared here too"));
-        assert!(err("import { Nope } from env").contains("env has no message type `Nope`"));
+        assert!(err("import { Nope } from env").contains("env has no message type, protocol or trait `Nope`"));
         assert!(err("import { X } from Other").contains("no Other here"));
         assert!(err("object A { serves { /x read -> Nope } }").contains("unknown message type `Nope`"));
         assert!(err("object A { serves { /x read, read } }").contains("takes `read` twice"));
         assert!(err("object A { serves { /{a} read /{b} stat } }").contains("already listed"));
         assert!(err("object A { needs /** { / read } needs /** { / stat } }").contains("one block per mount point"));
         assert!(err("object A { serves { /a/**/b read } }").contains("`**` can only come last"));
-        assert!(err("object A { serves { /x frob } }").contains("expected a verb"));
+        assert!(err("object A { serves { /x frob } }").contains("unknown protocol or trait `frob`"));
         assert!(err("object A { serves { /x } }").contains("expected a verb"));
         assert!(err("## nothing\n").contains("documents what follows"));
         assert!(err("## an import\nimport { Line } from env").contains("documents what follows"));

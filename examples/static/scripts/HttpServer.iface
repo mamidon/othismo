@@ -1,4 +1,4 @@
-import { Accepted, Data, Entry, Info, Line, Text } from env
+import { Entry, Info, Line, Listener, Text } from env
 
 ## Serves HTTP/1.1 on `/net/tcp`, turning each request into a request of its
 ## view.
@@ -11,11 +11,7 @@ object HttpServer {
   guide "./HttpServer.md"
 
   ## The listener it serves HTTP on.
-  needs /net/tcp {
-    /address  read -> Text
-    /accept   watch -> Accepted*
-    /{conn}   watch -> Data*, write Data, remove
-  }
+  needs /net/tcp Listener
   ## The access log.
   needs /dev/cons {
     /  write Line

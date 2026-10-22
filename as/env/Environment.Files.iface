@@ -1,4 +1,4 @@
-import { Data, Entry, Info } from "./bodies.iface"
+import { File, Dir, FileTree } from "./bodies.iface"
 
 ## Configures Files.
 message FilesRoot {
@@ -10,10 +10,9 @@ message FilesRoot {
 ##
 ## A file's MIME type comes from its extension. Reading a directory answers
 ## `is_directory`, and a listing is sorted by name.
-object Environment.Files {
+object Environment.Files : FileTree {
   serves {
     ## Configured by the image only.
-    /     control FilesRoot, read -> Data, stat -> Info, list -> Entry*
-    /**   read -> Data, stat -> Info, list -> Entry*
+    /   control FilesRoot, File, Dir
   }
 }

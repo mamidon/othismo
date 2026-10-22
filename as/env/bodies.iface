@@ -35,3 +35,14 @@ message Entry {
   ## "file" or "dir".
   kind: string
 }
+
+## Something read whole.
+protocol File { read -> Data, stat -> Info }
+
+## Something listed.
+protocol Dir { list -> Entry*, stat -> Info }
+
+## A tree of files, read-only.
+trait FileTree {
+  /**   File, Dir
+}

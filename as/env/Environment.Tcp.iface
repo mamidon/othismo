@@ -14,17 +14,21 @@ message Accepted {
   peer: string
 }
 
-## A TCP listener, on the address the image configures it with.
-object Environment.Tcp {
-  serves {
-    ## Configured by the image only.
-    /           control Listen
-    ## The bound address, e.g. "127.0.0.1:8080".
-    /address    read -> Text
-    ## Every connection accepted, as it is.
-    /accept     watch -> Accepted*
-    ## A connection: watch for the bytes received, until the peer closes;
-    ## write to send; remove to close our side once everything is sent.
-    /{conn}     watch -> Data*, write Data, remove
-  }
+## A stream of bytes each way.
+protocol Connection { watch -> Data*, write Data, remove }
+
+## A listener, and the connections it accepts.
+trait Listener {
+  ## Configured by the image only, with where to listen.
+  /           control Listen
+  ## The bound address, e.g. "127.0.0.1:8080".
+  /address    read -> Text
+  ## Every connection accepted, as it is.
+  /accept     watch -> Accepted*
+  ## A connection: watch for the bytes received, until the peer closes;
+  ## write to send; remove to close our side once everything is sent.
+  /{conn}     Connection
 }
+
+## A TCP listener, on the address the image configures it with.
+object Environment.Tcp : Listener {}

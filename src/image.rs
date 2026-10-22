@@ -367,7 +367,7 @@ impl Parser {
     }
 
     /// `a, b, c` — one or more identifiers separated by commas.
-    fn ident_list(&mut self, what: &str) -> Result<Vec<Ident>> {
+    pub(crate) fn ident_list(&mut self, what: &str) -> Result<Vec<Ident>> {
         let mut out = vec![self.ident(what, false)?];
         while *self.peek() == Tok::Comma {
             self.next();
@@ -396,10 +396,6 @@ impl Parser {
                     image.mounts.push(self.mount()?);
                 }
                 Tok::Ident(kw) if Verb::from_keyword(&kw).is_some() => image.requests.push(self.startup_request()?),
-                Tok::Ident(kw) if kw == "protocol" => bail!(
-                    "{}: protocols are gone; an instance's type names its module, and requests are addressed by path",
-                    self.pos()
-                ),
                 other => {
                     bail!("{}: expected `import`, `require`, `instance`, `mount` or a verb, found {other}", self.pos())
                 }
@@ -743,8 +739,6 @@ mod tests {
         assert!(e.contains("`control /net ...`"), "{e}");
         let e = parse("frobnicate /x").unwrap_err().to_string();
         assert!(e.contains("or a verb"), "{e}");
-        let e = parse("protocol P { in A }").unwrap_err().to_string();
-        assert!(e.contains("protocols are gone"), "{e}");
     }
 
     #[test]

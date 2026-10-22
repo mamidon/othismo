@@ -57,6 +57,10 @@ pub fn types_used(o: &Object) -> Vec<String> {
 }
 
 fn reference(out: &mut String, o: &Object, h: &str) {
+    if !o.traits.is_empty() {
+        let traits: Vec<String> = o.traits.iter().map(|t| format!("`{t}`")).collect();
+        writeln!(out, "Implements {}.\n", traits.join(", ")).unwrap();
+    }
     if !o.serves.is_empty() {
         writeln!(out, "{h} Serves\n").unwrap();
         entries(out, &o.serves);
