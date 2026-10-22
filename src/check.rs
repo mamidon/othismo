@@ -1,12 +1,15 @@
 //! Resolves and validates a parsed image into a [`Program`] the runtime can run.
 
-use crate::image::{self, Ident, Image, Value};
-use crate::messages::{self, FieldType, MessageType};
-use crate::ns::{self, Verb};
+use crate::iface::{self, Header, Object};
+use crate::image::{self, Ident, Image, Source, Value};
+use crate::messages::{FieldType, MessageType};
+use crate::ns::{self, Status, Verb};
+use crate::pattern::Pattern;
 use crate::wire::{self, Message};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -16,19 +19,20 @@ pub const TCP: &str = "Environment.Tcp";
 pub const FILES: &str = "Environment.Files";
 pub const PACKED: &str = "Packed.Files";
 
-/// The import path for the runtime's message types. These types are always
-/// in scope in an image; importing them is optional.
-pub const ENV_MODULE: &str = "othismo/env";
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
-    /// Every message type the image knows: the runtime's plus its imports.
+    /// Every message type the image knows: the runtime's, every module's
+    /// and its imports'.
     pub messages: BTreeMap<String, MessageType>,
+    /// Each instance type's interface, from its module's header or, for a
+    /// built-in type, from the runtime's.
+    pub interfaces: BTreeMap<String, Object>,
     /// Values the host provides, in image order; [`Arg::Slot`] refers to them by index.
     pub slots: Vec<Slot>,
     /// Instances in image order; everything else refers to them by index.
     pub instances: Vec<Instance>,
-    /// The files the image was checked from: the `.img` and its imports.
+    /// The files the image was checked from: the `.img` and the headers it
+    /// imports from files.
     /// Not kept in a built image, which has copies under its sources.
     #[serde(skip)]
     pub sources: Vec<PathBuf>,
@@ -37,6 +41,8 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub name: String,
+    /// As written: a module name, or a built-in type such as `Environment.Tcp`.
+    pub type_name: String,
     pub kind: Kind,
     /// An environment object's config.
     pub config: Option<Arg>,
@@ -122,35 +128,68 @@ fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{}: {msg}", id.pos)
 }
 
-/// Reads, parses and checks the image at `path`.
+/// Reads, parses and checks the image at `path`, reading each module's
+/// header from the module.
 pub fn load(path: &Path) -> Result<Program> {
     let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let img = image::parse(&src).with_context(|| format!("parsing {}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut program = check(&img, dir).with_context(|| format!("checking {}", path.display()))?;
+    let mut modules = |name: &str| module_header(dir, name);
+    let mut program = check(&img, dir, &mut modules).with_context(|| format!("checking {}", path.display()))?;
     program.sources.insert(0, path.to_path_buf());
     Ok(program)
 }
 
-/// The runtime's own message types, from its header (`as/env.iface`).
-pub fn env_messages() -> BTreeMap<String, MessageType> {
-    crate::iface::env().messages.clone()
+/// Module `name`'s header, from the module itself: `scripts/<name>.wasm`
+/// next to the image in `dir`.
+pub fn module_header(dir: &Path, name: &str) -> Result<Header> {
+    let path = crate::pack::module_path(dir, name);
+    let wasm = std::fs::read(&path).with_context(|| format!("cannot read {} (did you compile {name}.ts?)", path.display()))?;
+    let header = iface::embedded(&wasm).with_context(|| path.display().to_string())?.ok_or_else(|| {
+        anyhow!("{} has no header; embed scripts/{name}.iface into it with `othismo embed`", path.display())
+    })?;
+    iface::for_module(&header, name).with_context(|| format!("{} has the wrong header", path.display()))?;
+    Ok(header)
 }
 
-/// Validates `img`; relative import paths resolve against `dir`.
-pub fn check(img: &Image, dir: &Path) -> Result<Program> {
-    let (messages, sources) = resolve_imports(img, dir)?;
+/// The runtime's own message types, from its header (`as/env.iface`).
+pub fn env_messages() -> BTreeMap<String, MessageType> {
+    iface::env().messages.clone()
+}
+
+/// Validates `img`: its messages against their types, and its wiring
+/// against its objects' interfaces. `modules` gives each module's header,
+/// and imports from files resolve against `dir`.
+pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<Header>) -> Result<Program> {
+    let mut headers: BTreeMap<String, Header> = BTreeMap::new();
+    for inst in &img.instances {
+        let ty = &inst.type_name;
+        if !ty.name.contains('.') && !headers.contains_key(&ty.name) {
+            let header = modules(&ty.name).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
+            headers.insert(ty.name.clone(), header);
+        }
+    }
+    // Only the runtime's types and the image's imports can be written in it.
+    let (messages_in_scope, sources) = resolve_imports(img, dir, &mut headers, modules)?;
+    let messages = all_messages(&headers, &messages_in_scope)?;
+    let mut interfaces: BTreeMap<String, Object> =
+        headers.iter().filter_map(|(name, h)| Some((name.clone(), h.object(name)?.clone()))).collect();
+    for inst in &img.instances {
+        if let Some(o) = iface::env().object(&inst.type_name.name) {
+            interfaces.insert(o.name.clone(), o.clone());
+        }
+    }
 
     let mut slots: Vec<Slot> = vec![];
     for req in &img.requires {
         let name = &req.name.name;
-        if messages.contains_key(name) {
+        if messages_in_scope.contains_key(name) {
             bail!(err_at(&req.name, format!("`{name}` is a message type; a slot needs a name of its own")));
         }
         if slots.iter().any(|s| s.name == *name) {
             bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
         }
-        let (type_name, defaults) = body_fields(&messages, &req.body, false)?;
+        let (type_name, defaults) = body_fields(&messages_in_scope, &req.body, false)?;
         slots.push(Slot { name: name.clone(), type_name, defaults, value: None, origins: vec![] });
     }
 
@@ -165,6 +204,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
     for inst in &img.instances {
         let ty = &inst.type_name;
         let mut config = None;
+        let obj = interfaces.get(&ty.name);
         if ty.name != PACKED
             && let Some(inc) = inst.includes.first()
         {
@@ -194,7 +234,7 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
                     (None, []) => None,
                     (None, [c, ..]) => bail!("{}: {name} takes no config", c.verb_pos),
                     (Some(t), [c]) => {
-                        let arg = body_arg(&messages, &slots, c.body.as_ref().ok_or_else(needs)?)?;
+                        let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
                         if arg_type(&slots, &arg) != t {
                             bail!(needs());
                         }
@@ -249,14 +289,104 @@ pub fn check(img: &Image, dir: &Path) -> Result<Program> {
         for r in requests {
             let path = ns::clean(&r.path.path)
                 .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
-            let body = r.body.as_ref().map(|b| body_arg(&messages, &slots, b)).transpose()?;
+            let body = r.body.as_ref().map(|b| body_arg(&messages_in_scope, &slots, b)).transpose()?;
             startup.push(Startup { verb: r.verb, path, body });
         }
 
-        instances.push(Instance { name: inst.name.name.clone(), kind, config, mounts, startup });
+        if let Some(obj) = obj {
+            check_requests(inst, obj, &messages_in_scope, &slots)?;
+            check_mounts(img, inst, obj, &index, &interfaces)?;
+        }
+        instances.push(Instance { name: inst.name.name.clone(), type_name: ty.name.clone(), kind, config, mounts, startup });
     }
 
-    Ok(Program { messages, slots, instances, sources })
+    Ok(Program { messages, interfaces, slots, instances, sources })
+}
+
+/// Each of the image's requests of `inst` against what `obj` serves.
+fn check_requests(inst: &image::Instance, obj: &Object, scope: &BTreeMap<String, MessageType>, slots: &[Slot]) -> Result<()> {
+    let name = &inst.name.name;
+    for r in &inst.requests {
+        let path = ns::clean(&r.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
+        let body = r.body.as_ref().map(|b| body_arg(scope, slots, b)).transpose()?;
+        let body_type = body.as_ref().map(|b| arg_type(slots, b));
+        let Some(entry) = obj.serving(&path) else {
+            bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
+        };
+        let given = match body_type {
+            Some(t) => format!("{} {t}", r.verb),
+            None => r.verb.to_string(),
+        };
+        match entry.takes(r.verb, body_type) {
+            Ok(_) => {}
+            Err(Status::NotSupported) => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
+            Err(_) => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
+        }
+    }
+    Ok(())
+}
+
+/// Each of `inst`'s mounts against what `obj` needs there, and each need
+/// for one mount point in particular against the mounts.
+fn check_mounts(
+    img: &Image,
+    inst: &image::Instance,
+    obj: &Object,
+    index: &HashMap<&str, usize>,
+    interfaces: &BTreeMap<String, Object>,
+) -> Result<()> {
+    let name = &inst.name.name;
+    let mut ats = vec![];
+    for m in &inst.mounts {
+        let at = ns::mount_point(&m.at.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
+        ats.push(at.clone());
+        let Some(need) = obj.need(&at) else { continue };
+        let target = &img.instances[index[m.target.name.as_str()]];
+        let Some(served) = interfaces.get(&target.type_name.name) else { continue };
+        for e in &need.entries {
+            for r in &e.requests {
+                if m.read_only && !r.verb.is_safe() {
+                    bail!("{}: `{name}` needs `{} {r}` at `{at}`, but `{}` is mounted there read-only", m.at.pos, e.path, m.target.name);
+                }
+                if !serves_need(served, need, e, r) {
+                    let shown: Vec<String> =
+                        served.serves.iter().filter(|s| s.path.overlaps(&e.path)).map(|s| format!("`{s}`")).collect();
+                    let has = if shown.is_empty() { "nothing there".to_string() } else { shown.join(", ") };
+                    bail!(
+                        "{}: `{name}` needs `{} {r}` at `{at}`, and `{}` serves {has}",
+                        m.at.pos,
+                        e.path,
+                        m.target.name
+                    );
+                }
+            }
+        }
+    }
+    for need in obj.needs.iter().filter(|n| n.at.is_literal()) {
+        if !ats.iter().any(|at| need.at.matches(at)) {
+            bail!("{}: `{name}` needs something mounted at `{}`", inst.name.pos, need.at);
+        }
+    }
+    Ok(())
+}
+
+/// Whether `served` meets request `r` of entry `want` in block `need`: an
+/// entry covering every path `want` names takes it, and no more specific
+/// entry in between takes its verb in a way that doesn't.
+fn serves_need(served: &Object, need: &iface::Need, want: &iface::Entry, r: &iface::Request) -> bool {
+    let takes = |e: &iface::Entry| e.requests.iter().any(|s| s.meets(r));
+    let covering = served.serves.iter().filter(|e| e.path.covers(&want.path) && takes(e));
+    let Some(cover) = covering.max_by(|a, b| a.path.specificity(&b.path)) else { return false };
+    // Paths a more specific entry of the need's own block covers are that entry's concern.
+    let narrower = |p: &Pattern| {
+        need.entries.iter().any(|n| n.path.specificity(&want.path) == Ordering::Greater && n.path.covers(p))
+    };
+    served
+        .serves
+        .iter()
+        .filter(|e| e.path.overlaps(&want.path) && e.path.specificity(&cover.path) == Ordering::Greater)
+        .filter(|e| !narrower(&e.path))
+        .all(|e| takes(e) || !e.requests.iter().any(|s| s.verb == r.verb))
 }
 
 /// A summary of each instance's view and the most it can ever reach, for
@@ -309,47 +439,54 @@ fn builtin_kind(name: &str) -> Kind {
     }
 }
 
-/// Every message type in scope, and the files they were read from.
-fn resolve_imports(img: &Image, dir: &Path) -> Result<(BTreeMap<String, MessageType>, Vec<PathBuf>)> {
-    let mut parsed: HashMap<PathBuf, BTreeMap<String, MessageType>> = HashMap::new();
+/// The message types an image can write: the runtime's and its imports,
+/// and the header files it imported them from.
+fn resolve_imports(
+    img: &Image,
+    dir: &Path,
+    headers: &mut BTreeMap<String, Header>,
+    modules: &mut dyn FnMut(&str) -> Result<Header>,
+) -> Result<(BTreeMap<String, MessageType>, Vec<PathBuf>)> {
     let env = env_messages();
     let mut out = env.clone();
-    let mut imported: HashMap<String, PathBuf> = HashMap::new();
+    let mut imported: HashMap<String, String> = HashMap::new();
+    let mut files: HashMap<PathBuf, Header> = HashMap::new();
     let mut sources = vec![];
     for imp in &img.imports {
-        let is_env = match &imp.from {
-            image::Source::Module(m) if m.name == "env" => true,
-            image::Source::Path(p) if p == ENV_MODULE => true,
-            _ => false,
-        };
-        let path = match &imp.from {
-            _ if is_env => PathBuf::from(ENV_MODULE),
-            image::Source::Path(p) if p.starts_with('.') || p.starts_with('/') => {
+        let header = match &imp.from {
+            Source::Module(m) if m.name == "env" => iface::env(),
+            Source::Module(m) => {
+                if !headers.contains_key(&m.name) {
+                    let h = modules(&m.name).with_context(|| format!("{}: importing from {}", imp.pos, m.name))?;
+                    headers.insert(m.name.clone(), h);
+                }
+                &headers[&m.name]
+            }
+            Source::Path(p) if p == "othismo/env" => {
+                bail!("{}: the runtime's types are imported `from env`", imp.pos)
+            }
+            Source::Path(p) if p.ends_with(".ts") || !(p.starts_with('.') || p.starts_with('/')) => bail!(
+                "{}: types are imported from headers: `from env`, `from <Module>` or `from \"./<file>.iface\"`",
+                imp.pos
+            ),
+            Source::Path(p) => {
                 let mut path = dir.join(p);
                 if path.extension().is_none() {
-                    path.set_extension("ts");
+                    path.set_extension("iface");
                 }
-                path
+                if !files.contains_key(&path) {
+                    let h = iface::load(&path).with_context(|| format!("{}: importing from {p:?}", imp.pos))?;
+                    sources.push(path.clone());
+                    files.insert(path.clone(), h);
+                }
+                &files[&path]
             }
-            other => bail!("{}: unknown module {other}; use a relative path or `env`", imp.pos),
         };
-        if !parsed.contains_key(&path) {
-            let decls = if is_env {
-                env.clone()
-            } else {
-                let src = std::fs::read_to_string(&path)
-                    .with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?;
-                sources.push(path.clone());
-                messages::parse(&src).with_context(|| format!("in {}", path.display()))?
-            };
-            parsed.insert(path.clone(), decls);
-        }
-        let decls = &parsed[&path];
         for name in &imp.names {
-            let Some(ty) = decls.get(&name.name) else {
-                bail!(err_at(name, format!("`{}` is not an exported class in {}", name.name, path.display())));
+            let Some(ty) = header.messages.get(&name.name) else {
+                bail!(err_at(name, format!("{} has no message type `{}`", imp.from, name.name)));
             };
-            if imported.insert(name.name.clone(), path.clone()).is_some() {
+            if imported.insert(name.name.clone(), imp.from.to_string()).is_some() {
                 bail!(err_at(name, format!("`{}` is imported twice", name.name)));
             }
             // The runtime's own types may be redeclared, but only exactly.
@@ -366,6 +503,33 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<(BTreeMap<String, MessageT
         }
     }
     Ok((out, sources))
+}
+
+/// Every message type in the image: the runtime's, every module's and the
+/// imported ones. A type is its name and fields, so two declarations of
+/// one name must agree.
+fn all_messages(headers: &BTreeMap<String, Header>, scope: &BTreeMap<String, MessageType>) -> Result<BTreeMap<String, MessageType>> {
+    let mut out: BTreeMap<String, MessageType> = BTreeMap::new();
+    let mut from: BTreeMap<String, String> = BTreeMap::new();
+    let sets = std::iter::once(("the runtime", &iface::env().messages))
+        .chain(headers.iter().map(|(name, h)| (name.as_str(), &h.messages)))
+        .chain(std::iter::once(("the image's imports", scope)));
+    for (origin, types) in sets {
+        for (name, ty) in types {
+            match out.get(name) {
+                Some(prev) if prev.fields != ty.fields => bail!(
+                    "`{name}` is declared one way by {} and another by {origin}; an image can't use both",
+                    from[name]
+                ),
+                Some(_) => {}
+                None => {
+                    out.insert(name.clone(), ty.clone());
+                    from.insert(name.clone(), origin.to_string());
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// A message literal, or a slot's name standing alone.
@@ -435,30 +599,56 @@ mod tests {
     use super::*;
 
     const MESSAGES: &str = r#"
-        export class Greeting { text: string }
-        export class Config { name: string; count: u8; ratio: f64; on: bool }
-        export class Ping {}
-        export class Blob { data: ArrayBuffer }
+        message Greeting { text: string }
+        message Config { name: string, count: u8, ratio: f64, on: bool }
+        message Ping {}
+        message Blob { data: bytes }
     "#;
 
-    /// Writes MESSAGES and `img` to a temp dir and checks the image.
-    fn check_src(img: &str) -> Result<Program> {
+    /// A resolved header, whose imports can only be from env.
+    fn header(src: &str) -> Header {
+        let file = iface::parse(src).unwrap();
+        iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap()
+    }
+
+    /// A module that needs nothing and serves anything, anywhere.
+    fn permissive(name: &str) -> Header {
+        let reqs: Vec<String> = ns::VERBS.iter().flat_map(|v| [format!("{v} -> Opaque*"), format!("{v} Opaque -> Opaque*")]).collect();
+        header(&format!("object {name} {{ serves {{ /** {} }} }}", reqs.join(", ")))
+    }
+
+    /// Checks `img` next to MESSAGES, in messages.iface. Modules have the
+    /// headers in `modules`, or else a permissive one.
+    fn check_with(img: &str, modules: &[(&str, &str)]) -> Result<Program> {
         let dir = std::env::temp_dir().join(format!("othismo_check_{}_{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("messages.ts"), MESSAGES).unwrap();
-        let path = dir.join("test.img");
-        std::fs::write(&path, img).unwrap();
-        let res = load(&path);
+        std::fs::write(dir.join("messages.iface"), MESSAGES).unwrap();
+        let mut headers = |name: &str| -> Result<Header> {
+            match modules.iter().find(|(n, _)| *n == name) {
+                Some((_, src)) => Ok(header(src)),
+                None if name == "Ghost" => bail!("no module Ghost"),
+                None => Ok(permissive(name)),
+            }
+        };
+        let res = image::parse(img).and_then(|img| check(&img, &dir, &mut headers));
         std::fs::remove_dir_all(&dir).ok();
         res
+    }
+
+    fn check_src(img: &str) -> Result<Program> {
+        check_with(img, &[])
     }
 
     fn err(img: &str) -> String {
         format!("{:#}", check_src(img).unwrap_err())
     }
 
+    fn err_with(img: &str, modules: &[(&str, &str)]) -> String {
+        format!("{:#}", check_with(img, modules).unwrap_err())
+    }
+
     const HEADER: &str = r#"
-        import { Greeting, Config, Ping, Blob } from "./messages"
+        import { Greeting, Config, Ping, Blob } from "./messages.iface"
         instance cons : Environment.Console
     "#;
 
@@ -508,7 +698,7 @@ mod tests {
         assert!(err(&inst("write /c Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
         assert!(err(&inst("invoke / Ping { x: 1 }")).contains("no field `x`"));
         assert!(err(&inst("invoke / Missing")).contains("unknown message type"));
-        assert!(err(&inst("write / Blob { data: 1 }")).contains("is ArrayBuffer"));
+        assert!(err(&inst("write / Blob { data: 1 }")).contains("is bytes"));
         assert!(err(&inst("read /../x")).contains("not a clean absolute path"));
     }
 
@@ -606,16 +796,109 @@ mod tests {
     fn runtime_types_can_only_be_redeclared_exactly() {
         let dir = std::env::temp_dir().join(format!("othismo_envshape_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("m.ts"), "export class Listen { port: i32 }\nexport class Line { text: string }").unwrap();
-        let ok = image::parse(r#"import { Line } from "./m" import { Text } from "othismo/env""#).unwrap();
-        assert!(check(&ok, &dir).is_ok());
-        let bad = image::parse(r#"import { Listen } from "./m""#).unwrap();
-        let e = format!("{:#}", check(&bad, &dir).unwrap_err());
-        let missing = image::parse(r#"import { Nope } from "othismo/env""#).unwrap();
-        let e2 = format!("{:#}", check(&missing, &dir).unwrap_err());
+        std::fs::write(dir.join("m.iface"), "message Listen { port: i32 }\nmessage Line { text: string }").unwrap();
+        let mut none = |_: &str| -> Result<Header> { bail!("no modules") };
+        let ok = image::parse(r#"import { Line } from "./m" import { Text } from env"#).unwrap();
+        assert!(check(&ok, &dir, &mut none).is_ok());
+        let bad = image::parse(r#"import { Listen } from "./m.iface""#).unwrap();
+        let e = format!("{:#}", check(&bad, &dir, &mut none).unwrap_err());
+        let missing = image::parse(r#"import { Nope } from env"#).unwrap();
+        let e2 = format!("{:#}", check(&missing, &dir, &mut none).unwrap_err());
         std::fs::remove_dir_all(&dir).ok();
         assert!(e.contains("`Listen` is a runtime type and must be declared as { address: string }"), "{e}");
-        assert!(e2.contains("not an exported class"), "{e2}");
+        assert!(e2.contains("env has no message type `Nope`"), "{e2}");
+    }
+
+    #[test]
+    fn types_are_imported_from_headers() {
+        let greeter = "message Greeting { prefix: string } object Greeter { serves { /greeting write Greeting } }";
+        let p = check_with(
+            r#"import { Greeting } from Greeter
+            instance g : Greeter { write /greeting Greeting { prefix: "hi" } }"#,
+            &[("Greeter", greeter)],
+        )
+        .unwrap();
+        assert!(p.messages.contains_key("Greeting"));
+        assert_eq!(p.interfaces["Greeter"].serves[0].path.as_str(), "/greeting");
+        assert!(p.interfaces.contains_key("Greeter"));
+
+        // A module's types are in the program without being imported, but the image can't write them.
+        let p = check_with("instance g : Greeter", &[("Greeter", greeter)]).unwrap();
+        assert!(p.messages.contains_key("Greeting"));
+        let e = err_with(r#"instance g : Greeter { write /greeting Greeting { prefix: "hi" } }"#, &[("Greeter", greeter)]);
+        assert!(e.contains("unknown message type `Greeting`; is it imported?"), "{e}");
+
+        let e = err(r#"import { Line } from "othismo/env""#);
+        assert!(e.contains("imported `from env`"), "{e}");
+        let e = err(r#"import { Ping } from "./messages.ts""#);
+        assert!(e.contains("types are imported from headers"), "{e}");
+        let e = err("instance g : Ghost");
+        assert!(e.contains("instance `g`") && e.contains("no module Ghost"), "{e}");
+    }
+
+    #[test]
+    fn a_type_is_its_name_and_fields() {
+        let a = "message Point { x: i32 } object A {}";
+        let b = "message Point { x: f64 } object B {}";
+        let e = err_with("instance a : A instance b : B", &[("A", a), ("B", b)]);
+        assert!(e.contains("`Point` is declared one way by A and another by B; an image can't use both"), "{e}");
+        let same = "message Point { x: i32 } object B {}";
+        assert!(check_with("instance a : A instance b : B", &[("A", a), ("B", same)]).is_ok());
+    }
+
+    #[test]
+    fn startup_requests_must_be_served() {
+        let greeter = "import { Text } from env object G { serves { /greeting write Text  /hosts/{name} control Text, control } }";
+        let ok = r#"instance g : G { write /greeting Text { text: "hi" }  control /hosts/* Text { text: "/www" }  control /hosts/a }"#;
+        assert!(check_with(ok, &[("G", greeter)]).is_ok());
+        let e = err_with("instance g : G { write /nothing }", &[("G", greeter)]);
+        assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
+        let e = err_with("instance g : G { read /greeting }", &[("G", greeter)]);
+        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Text`"), "{e}");
+        let e = err_with("instance g : G { write /greeting }", &[("G", greeter)]);
+        assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
+        let e = err_with(r#"instance g : G { write /greeting Line { text: "x" } }"#, &[("G", greeter)]);
+        assert!(e.contains("doesn't take `write Line` at `/greeting`"), "{e}");
+        let e = err(r#"instance net : Environment.Tcp { control / Listen { address: "a" } read /a/b }"#);
+        assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
+    }
+
+    #[test]
+    fn mounts_must_provide_what_is_needed_there() {
+        let echo = "import { Line } from env object Echo { needs /dev/cons { / watch -> Line*, write Line } }";
+        let modules = [("Echo", echo)];
+        assert!(check_with(&format!("{HEADER} instance e : Echo {{ mount cons /dev/cons }}"), &modules).is_ok());
+
+        let e = err_with(&format!("{HEADER} instance e : Echo"), &modules);
+        assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
+        let e = err_with(&format!("{HEADER} instance e : Echo {{ mount cons /dev/cons readonly }}"), &modules);
+        assert!(e.contains("`e` needs `/ write Line` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
+        let files = r#"instance f : Environment.Files { control / FilesRoot { path: "." } }"#;
+        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount f /dev/cons }}"), &modules);
+        assert!(e.contains("`e` needs `/ watch -> Line*` at `/dev/cons`, and `f` serves `/ control FilesRoot, read -> Data, stat -> Info, list -> Entry*`, `/** read -> Data, stat -> Info, list -> Entry*`"), "{e}");
+    }
+
+    #[test]
+    fn needs_under_a_pattern_cover_every_mount_there() {
+        let http = "import { Accepted, Data, Info, Text } from env
+            object Http {
+              needs /net/tcp {
+                /address  read -> Text
+                /accept   watch -> Accepted*
+                /{conn}   watch -> Data*, write Data, remove
+              }
+              needs /** { /** read -> Opaque, stat -> Info }
+            }";
+        let site = "import { Data, Info, Text } from env object Site { serves { /hits read -> Text  /** read -> Data, stat -> Info } }";
+        let strict = "import { Data } from env object Strict { needs /** { /** read -> Data } }";
+        let modules = [("Http", http), ("Site", site), ("Strict", strict)];
+        let net = r#"instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }"#;
+        let img = format!("{net} instance site : Site instance http : Http {{ mount net /net/tcp  mount site /www  mount site /other }}");
+        assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
+
+        // /hits answers a read with Text, where Strict needs Data everywhere.
+        let e = err_with("instance site : Site instance s : Strict { mount site /www }", &modules);
+        assert!(e.contains("`s` needs `/** read -> Data` at `/www`, and `site` serves `/hits read -> Text`"), "{e}");
     }
 
     #[test]

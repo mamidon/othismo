@@ -1,7 +1,7 @@
 # Greets each name typed on stdin, shouts the greeting back, and reports
 # running statistics. Exercises a startup request, a request between two
 # objects, and a view with more than one mount.
-import { Greeting, Stats } from "./scripts/Greeter.iface.ts"
+import { Greeting } from Greeter
 
 instance cons : Environment.Console
 

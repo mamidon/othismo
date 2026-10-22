@@ -36,6 +36,16 @@ pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<
     Ok(out.text())
 }
 
+/// A module: `wat` compiled, with the header in `iface` embedded. The
+/// header may import from env only.
+pub fn module(wat: &str, iface: &str) -> Vec<u8> {
+    let file = othismo::iface::parse(iface).unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
+    let mut env = |_: &othismo::image::Source| Ok(othismo::iface::env().clone());
+    let header = othismo::iface::resolve(&file, &mut env, &|_| anyhow::bail!("no guides here"))
+        .unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
+    othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap()
+}
+
 /// A scratch directory holding an image, its messages and its scripts.
 pub struct Fixture {
     pub dir: PathBuf,

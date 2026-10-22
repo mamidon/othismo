@@ -2,25 +2,32 @@
 
 mod common;
 
-use common::Fixture;
+use common::{Fixture, module};
 use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-/// Modules aren't run here, so any bytes do.
+const A: &str = "object A { needs /dev/cons { / write Opaque }  serves { / invoke Opaque } }";
+
+/// Modules aren't run here, so they needn't do anything; they only need headers.
+fn a() -> Vec<u8> {
+    module("(module)", A)
+}
+
 fn fixture(name: &str) -> Fixture {
     let f = Fixture::new(name);
-    f.file("messages.ts", "export class Ping {}\n")
-        .file("scripts/A.wasm", "(module)")
+    f.file("messages.iface", "message Ping {}\n")
+        .file("scripts/A.wasm", a())
+        .file("scripts/A.iface", A)
         .file("scripts/A.ts", "// A's source\n")
-        .file("scripts/B.wasm", "(module)")
+        .file("scripts/B.wasm", module("(module)", "object B {}"))
         .file(
             "test.img",
-            r#"import { Ping } from "./messages"
+            r#"import { Ping } from "./messages.iface"
             instance cons : Environment.Console
             instance a : A { mount cons /dev/cons  invoke / Ping }
             instance b : B { mount a /a readonly }
-            instance a2 : A"#,
+            instance a2 : A { mount cons /dev/cons }"#,
         );
     f
 }
@@ -39,12 +46,15 @@ fn sealing_round_trips_and_is_reproducible() {
     assert_eq!(opened.modules, built.modules);
     assert_eq!(opened.blobs, built.blobs);
 
-    // A and B have identical modules, stored once.
+    // a and a2 share A's module.
     assert_eq!(built.modules.len(), 2);
-    assert_eq!(built.modules["A"], built.modules["B"]);
-    assert_eq!(built.blob(&built.modules["A"]), b"(module)");
+    assert_eq!(built.blob(&built.modules["A"]), a());
     let sources: Vec<&str> = built.sources.keys().map(String::as_str).collect();
-    assert_eq!(sources, ["messages.ts", "scripts/A.ts", "test.img"], "B has no TypeScript, which is fine");
+    assert_eq!(
+        sources,
+        ["messages.iface", "scripts/A.iface", "scripts/A.ts", "test.img"],
+        "B has no header file or TypeScript, which is fine: its module carries its header"
+    );
 }
 
 #[test]
@@ -52,7 +62,7 @@ fn sources_are_optional() {
     let f = fixture("pack_no_sources");
     let built = pack::build(&f.image(), BuildOptions { no_sources: true }).unwrap();
     assert!(built.sources.is_empty());
-    assert_eq!(built.blobs.len(), 1, "just the module");
+    assert_eq!(built.blobs.len(), 2, "just the modules");
 }
 
 #[test]
@@ -71,7 +81,7 @@ fn corrupt_and_truncated_files_are_refused() {
     let mut old = sealed.clone();
     old[7] = 1;
     let e = err(&old);
-    assert!(e.contains("built by another version of othismo (format 1, and this one reads 2); rebuild it"), "{e}");
+    assert!(e.contains("built by another version of othismo (format 1, and this one reads 3); rebuild it"), "{e}");
     assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
 }
 
@@ -95,8 +105,8 @@ fn unpacking_writes_modules_and_sources() {
     let out = f.dir.join("out");
     pack::build(&f.image(), BuildOptions::default()).unwrap().unpack(&out).unwrap();
     let read = |rel: &str| std::fs::read_to_string(out.join(rel)).unwrap();
-    assert_eq!(read("modules/A.wasm"), "(module)");
-    assert_eq!(read("modules/B.wasm"), "(module)");
+    assert_eq!(std::fs::read(out.join("modules/A.wasm")).unwrap(), a());
+    assert!(out.join("modules/B.wasm").exists());
     assert_eq!(read("sources/scripts/A.ts"), "// A's source\n");
     assert!(read("sources/test.img").contains("instance a2 : A"));
 }

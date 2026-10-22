@@ -153,6 +153,13 @@ impl Request {
     }
 }
 
+impl fmt::Display for Entry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let reqs: Vec<String> = self.requests.iter().map(|r| r.to_string()).collect();
+        write!(f, "{} {}", self.path, reqs.join(", "))
+    }
+}
+
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.verb)?;
@@ -526,7 +533,7 @@ pub fn resolve(
             if fields.iter().any(|(n, _)| *n == f.name.name) {
                 bail!(err_at(&f.name, format!("`{}` has two fields called `{}`", m.name.name, f.name.name)));
             }
-            let Some(ty) = FieldType::from_name(&f.ty.name).filter(|_| !["ArrayBuffer", "boolean"].contains(&f.ty.name.as_str())) else {
+            let Some(ty) = FieldType::from_name(&f.ty.name) else {
                 bail!(err_at(
                     &f.ty,
                     format!(

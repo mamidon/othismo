@@ -60,6 +60,11 @@ impl Pattern {
         &self.text
     }
 
+    /// Whether the pattern names one path only: no `{name}` and no `**`.
+    pub fn is_literal(&self) -> bool {
+        self.segs.iter().all(|s| matches!(s, Seg::Lit(_)))
+    }
+
     /// Whether the clean path `path` matches.
     pub fn matches(&self, path: &str) -> bool {
         let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
@@ -178,6 +183,14 @@ mod tests {
         assert!(!p("/www/**").matches("/wwwx"));
         assert!(p("/**").matches("/"));
         assert!(p("/{a}/x/**").matches("/q/x"));
+    }
+
+    #[test]
+    fn literals_name_one_path() {
+        assert!(p("/net/tcp").is_literal());
+        assert!(p("/").is_literal());
+        assert!(!p("/{x}").is_literal());
+        assert!(!p("/a/**").is_literal());
     }
 
     #[test]

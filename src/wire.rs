@@ -1,17 +1,17 @@
 //! The message wire format shared with the AssemblyScript library.
 //!
 //! A message is one BSON document. Its first key is `$type`, holding the
-//! message class name; the remaining keys are the class's fields. Field
-//! types map to BSON as follows (mirrored in `as/index.ts`):
+//! message type's name; the remaining keys are its fields. Field types map
+//! to BSON as follows (mirrored in `as/index.ts`):
 //!
-//! | AssemblyScript              | BSON    |
+//! | Header                      | BSON    |
 //! |-----------------------------|---------|
 //! | string                      | string  |
 //! | bool                        | boolean |
 //! | i8, i16, i32, u8, u16       | int32   |
 //! | i64, u32, u64               | int64   |
 //! | f32, f64                    | double  |
-//! | ArrayBuffer                 | binary (generic subtype) |
+//! | bytes                       | binary (generic subtype) |
 
 use crate::messages::{FieldType, MessageType};
 use anyhow::{Context, Result, bail};
@@ -76,7 +76,7 @@ impl Message {
     }
 }
 
-/// The BSON value an `ArrayBuffer` field is carried as.
+/// The BSON value a `bytes` field is carried as.
 pub fn bytes(data: Vec<u8>) -> Bson {
     Bson::Binary(bson::Binary { subtype: bson::spec::BinarySubtype::Generic, bytes: data })
 }

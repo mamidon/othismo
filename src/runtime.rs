@@ -184,7 +184,7 @@ impl Shared {
         }
         let name = &self.names[from];
         let ty = self.messages.get(&msg.type_name).ok_or_else(|| {
-            anyhow!("instance `{name}` sent `{}`, which isn't declared in the image's imports", msg.type_name)
+            anyhow!("instance `{name}` sent `{}`, which no header in the image declares", msg.type_name)
         })?;
         msg.check_shape(ty).with_context(|| format!("instance `{name}` sent a malformed `{}`", msg.type_name))
     }

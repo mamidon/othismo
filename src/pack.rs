@@ -22,7 +22,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x02";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x03";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.
@@ -319,12 +319,13 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         })?;
         let hash = pack.add(bytes);
         pack.modules.insert(type_name.clone(), hash);
+        sources.push(module.with_extension("iface"));
         sources.push(module.with_extension("ts"));
     }
 
     if !options.no_sources {
         for path in sources {
-            // A module's TypeScript is optional; the image and its imports were just read.
+            // A module's header and TypeScript are optional; the image and its imports were just read.
             let Ok(bytes) = std::fs::read(&path) else { continue };
             let hash = pack.add(bytes);
             pack.sources.insert(source_name(&dir, &path), hash);

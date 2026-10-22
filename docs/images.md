@@ -156,7 +156,7 @@ A relative `FilesRoot` path resolves against the directory holding the image,
 ## The file format
 
 ```text
-"RTIMAGE" 0x02        magic and format version
+"RTIMAGE" 0x03        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

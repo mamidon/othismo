@@ -4,12 +4,12 @@
 mod common;
 
 use bson::doc;
-use common::{Fixture, run_image};
+use common::{Fixture, module, run_image};
 use othismo::ns::{Status, Verb};
 use othismo::runtime::Options;
 use othismo::wire::Message;
 
-const MESSAGES: &str = "export class Ping {}\n";
+const MESSAGES: &str = "message Ping {}\n";
 
 /// One thing a scripted module does.
 enum Act {
@@ -228,17 +228,66 @@ fn script_wat(s: &Script) -> String {
     )
 }
 
+/// Requests of every verb, with a body of any type or none, answered with
+/// anything: what a scripted module serves, and what it needs of another.
+fn anything(safe_only: bool) -> String {
+    let verbs = othismo::ns::VERBS.iter().filter(|v| !safe_only || v.is_safe());
+    let reqs: Vec<String> = verbs.flat_map(|v| [format!("{v} -> Opaque*"), format!("{v} Opaque -> Opaque*")]).collect();
+    format!("/** {}", reqs.join(", "))
+}
+
+/// A scripted module's header: it serves anything, and needs at each of
+/// its mounts whatever is mounted there serves, as far as the mount allows.
+fn header(ty: &str, members: &str, types: &std::collections::HashMap<String, String>) -> String {
+    let env = othismo::iface::env();
+    let all: Vec<&str> = env.messages.keys().map(String::as_str).collect();
+    let mut out = format!("import {{ {} }} from env\nobject {ty} {{\n", all.join(", "));
+    let words: Vec<&str> = members.split_whitespace().collect();
+    for (i, w) in words.iter().enumerate() {
+        if *w != "mount" {
+            continue;
+        }
+        let (target, at) = (words[i + 1], words[i + 2]);
+        let ro = words.get(i + 3) == Some(&"readonly");
+        let entries: Vec<String> = match env.object(&types[target]) {
+            None => vec![anything(ro)],
+            Some(built_in) => built_in
+                .serves
+                .iter()
+                .filter_map(|e| {
+                    let reqs: Vec<String> = e
+                        .requests
+                        .iter()
+                        .filter(|r| r.verb != Verb::Control && (!ro || r.verb.is_safe()))
+                        .map(|r| r.to_string())
+                        .collect();
+                    (!reqs.is_empty()).then(|| format!("{} {}", e.path, reqs.join(", ")))
+                })
+                .collect(),
+        };
+        out.push_str(&format!("  needs {at} {{ {} }}\n", entries.join("\n")));
+    }
+    out.push_str(&format!("  serves {{ {} }}\n}}\n", anything(false)));
+    out
+}
+
 /// An image with a Console called `cons`, the given Wasm instances
-/// (`name`, script, members) and any extra declarations.
+/// (`name`, script, members) and any extra declarations. Each scripted
+/// module gets a header from [`header`].
 fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages\"\ninstance cons : Environment.Console\n{extra}\n");
-    for (obj, script, members) in objects {
+    let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Environment.Console\n{extra}\n");
+    for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        f.file(&format!("scripts/{ty}.wasm"), script_wat(script));
         img.push_str(&format!("instance {obj} : {ty} {{ {members} }}\n"));
     }
-    f.file("messages.ts", MESSAGES).file("test.img", img);
+    let parsed = othismo::image::parse(&img).unwrap();
+    let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
+    for (obj, script, members) in objects {
+        let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
+        f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &header(&ty, members, &types)));
+    }
+    f.file("messages.iface", MESSAGES).file("test.img", img);
     f
 }
 
@@ -475,7 +524,7 @@ fn shape_checking_is_opt_in() {
     let a = Script { start: vec![write("/out", odd)], ..Default::default() };
     let f = fixture("undeclared", &[("a", &a, "mount cons /out")], "");
     let err = format!("{:#}", run_image(&f.image(), "", Options { check_shapes: true }).unwrap_err());
-    assert!(err.contains("sent `Mystery`, which isn't declared"), "{err}");
+    assert!(err.contains("sent `Mystery`, which no header in the image declares"), "{err}");
 }
 
 #[test]
@@ -484,7 +533,7 @@ fn modules_cannot_import_anything_else() {
       (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
       (memory (export "memory") 1))"#;
     let f = fixture("wasi", &[], "instance s : S");
-    f.file("scripts/S.wasm", wat);
+    f.file("scripts/S.wasm", module(wat, "object S {}"));
     assert!(run_err(&f).contains("module S imports `wasi_snapshot_preview1.fd_write`, which the runtime does not provide"));
 }
 
@@ -493,7 +542,7 @@ fn modules_must_export_the_entry_points() {
     let f = fixture("exports", &[], "instance s : S");
     f.file(
         "scripts/S.wasm",
-        r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#,
+        module(r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#, "object S {}"),
     );
     assert!(run_err(&f).contains("module must export rt_serve(i32, i32, i32, i32)"));
 }
@@ -510,7 +559,7 @@ fn abort_fails_the_run_naming_the_instance() {
       (func (export "rt_answer") (param i32 i32 i32 i32))
       (func (export "rt_start") (call $abort (i32.const 16) (i32.const 0) (i32.const 7) (i32.const 9))))"#;
     let f = fixture("abort", &[], "instance s : S");
-    f.file("scripts/S.wasm", wat);
+    f.file("scripts/S.wasm", module(wat, "object S {}"));
     let err = run_err(&f);
     assert!(err.contains("instance `s` failed starting"), "{err}");
     assert!(err.contains("abort: boom"), "{err}");

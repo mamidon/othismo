@@ -24,7 +24,7 @@ pub struct Given {
 pub enum GivenValue {
     /// A literal, from a value file.
     Literal(Value),
-    /// Raw text, from `--set`: kept as is for a `string` or `ArrayBuffer`
+    /// Raw text, from `--set`: kept as is for a `string` or `bytes`
     /// field, and read as a literal for any other.
     Text(String),
 }
@@ -149,8 +149,15 @@ mod tests {
     use crate::image;
     use std::path::Path;
 
+    /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it.
     fn program(src: &str) -> Program {
-        check::check(&image::parse(src).unwrap(), Path::new(".")).unwrap()
+        let a = "import { Info, Text } from env object A { serves { /info write Info  /x write Text } }";
+        let header = crate::iface::resolve(&crate::iface::parse(a).unwrap(), &mut |_| Ok(crate::iface::env().clone()), &|_| {
+            unreachable!()
+        })
+        .unwrap();
+        let mut modules = |_: &str| Ok(header.clone());
+        check::check(&image::parse(src).unwrap(), Path::new("."), &mut modules).unwrap()
     }
 
     const IMAGE: &str = r#"
