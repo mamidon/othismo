@@ -2,8 +2,9 @@ version: '3'
 
 # Every examples/<name>/<name>.img is an example; its objects are the
 # scripts/*.ts next to it, compiled to scripts/*.wasm. Each object's header
-# is its scripts/<Type>.iface, and the bindings generated from a header are
-# committed next to it, as <Type>.iface.ts.
+# is its scripts/<Type>.iface, embedded in the .wasm once it is compiled, and
+# the bindings generated from a header are committed next to it, as
+# <Type>.iface.ts.
 vars:
   EXAMPLES:
     sh: for img in examples/*/*.img; do basename "$img" .img; done
@@ -139,7 +140,7 @@ tasks:
       - task: bindings:one
         vars: { NAME: '{{.NAME}}' }
       - for: { var: SCRIPTS }
-        cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize
+        cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.iface {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
         sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.iface\.ts$'

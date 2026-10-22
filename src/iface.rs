@@ -167,6 +167,112 @@ impl fmt::Display for Request {
 }
 
 // ---------------------------------------------------------------------------
+// In modules
+
+/// The custom section a module's header travels in, as BSON.
+pub const SECTION: &str = "othismo.iface";
+
+/// `wasm` with `header` in its [`SECTION`], replacing any already there.
+pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
+    let mut out = wasm[..8].to_vec();
+    for section in sections(wasm)? {
+        if section.custom != Some(SECTION) {
+            out.extend_from_slice(section.bytes);
+        }
+    }
+    let mut payload = Vec::new();
+    leb128(&mut payload, SECTION.len() as u64);
+    payload.extend_from_slice(SECTION.as_bytes());
+    let doc = bson::serialize_to_document(header).context("encoding the header")?;
+    doc.to_writer(&mut payload).context("encoding the header")?;
+    out.push(0);
+    leb128(&mut out, payload.len() as u64);
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+/// Checks that `header` is fit for module `name`: it declares exactly one
+/// object, named for the module.
+pub fn for_module(header: &Header, name: &str) -> Result<()> {
+    match header.objects.as_slice() {
+        [o] if o.name == name => Ok(()),
+        [o] => bail!("it declares object `{}`, but the module is `{name}`", o.name),
+        [] => bail!("it declares no object; a module's header declares `object {name}`"),
+        _ => bail!("it declares {} objects; a module's header declares just `object {name}`", header.objects.len()),
+    }
+}
+
+/// The header in `wasm`'s [`SECTION`], if it has one.
+pub fn embedded(wasm: &[u8]) -> Result<Option<Header>> {
+    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(SECTION)) else { return Ok(None) };
+    let malformed = || format!("its `{SECTION}` section is malformed; rebuild it with this othismo's `embed`");
+    let doc = bson::Document::from_reader(section.payload).with_context(malformed)?;
+    Ok(Some(bson::deserialize_from_document(doc).with_context(malformed)?))
+}
+
+struct Section<'a> {
+    /// The whole section, id and size included.
+    bytes: &'a [u8],
+    /// A custom section's name.
+    custom: Option<&'a str>,
+    /// A custom section's contents after its name.
+    payload: &'a [u8],
+}
+
+/// Splits a module into its sections, without looking inside any but
+/// custom ones.
+fn sections(wasm: &[u8]) -> Result<Vec<Section<'_>>> {
+    if wasm.len() < 8 || &wasm[..4] != b"\0asm" {
+        bail!("not a WebAssembly module");
+    }
+    let mut out = vec![];
+    let mut i = 8;
+    while i < wasm.len() {
+        let start = i;
+        let id = wasm[i];
+        i += 1;
+        let size = read_leb128(wasm, &mut i)?;
+        let body = wasm.get(i..i + size).context("a section runs past the end of the module")?;
+        i += size;
+        let (mut custom, mut payload) = (None, &body[..0]);
+        if id == 0 {
+            let mut j = 0;
+            let len = read_leb128(body, &mut j)?;
+            let name = body.get(j..j + len).context("a custom section's name runs past its end")?;
+            custom = std::str::from_utf8(name).ok();
+            payload = &body[j + len..];
+        }
+        out.push(Section { bytes: &wasm[start..i], custom, payload });
+    }
+    Ok(out)
+}
+
+fn leb128(out: &mut Vec<u8>, mut v: u64) {
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+fn read_leb128(bytes: &[u8], i: &mut usize) -> Result<usize> {
+    let mut v: u64 = 0;
+    for shift in (0..35).step_by(7) {
+        let b = *bytes.get(*i).context("truncated module")?;
+        *i += 1;
+        v |= u64::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            return Ok(v as usize);
+        }
+    }
+    bail!("malformed module: a size is too long")
+}
+
+// ---------------------------------------------------------------------------
 // Parsed
 
 /// A parsed header file.
@@ -691,6 +797,23 @@ mod tests {
         assert_eq!(o.need("/net/tcp").unwrap().at.as_str(), "/net/tcp");
         assert_eq!(o.need("/www").unwrap().at.as_str(), "/**");
         assert!(o.need("/net/tcp").unwrap().entry("/").is_none(), "`{{conn}}` is never empty");
+    }
+
+    #[test]
+    fn headers_travel_in_modules() {
+        let h = resolve_str(GREETER).unwrap();
+        let wasm = wat::parse_str(r#"(module (@custom "other" "x") (func (export "f")))"#).unwrap();
+        assert_eq!(embedded(&wasm).unwrap(), None);
+        let with = embed(&wasm, &h).unwrap();
+        assert_eq!(embedded(&with).unwrap(), Some(h.clone()));
+        let mut other = h.clone();
+        other.objects.clear();
+        let again = embed(&with, &other).unwrap();
+        assert_eq!(embedded(&again).unwrap(), Some(other), "embedding again replaces the header");
+        assert_eq!(sections(&again).unwrap().len(), sections(&with).unwrap().len());
+        assert!(sections(&again).unwrap().iter().any(|s| s.custom == Some("other")), "other sections are kept");
+        wasmtime::Module::new(&wasmtime::Engine::default(), &again).unwrap();
+        assert!(embedded(b"(module)").is_err());
     }
 
     #[test]

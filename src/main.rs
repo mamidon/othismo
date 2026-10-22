@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
 use othismo::{bindings, iface, pack, runtime, slots};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: othismo [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
        othismo bindings [--library <path>] <header.iface> [-o <out.ts>]
+       othismo embed <header.iface> <module.wasm>
 
 An image is a .img source, which is built in memory, or a built .rti file.
 
@@ -21,7 +22,11 @@ An image is a .img source, which is built in memory, or a built .rti file.
 
 `bindings` writes AssemblyScript classes for a header's message types, to
 <header.iface>.ts unless -o says otherwise; a header that declares none
-gets no file. They import the library from \"othismo\", or from --library.";
+gets no file. They import the library from \"othismo\", or from --library.
+
+`embed` puts a module's header into the module, replacing any already there.
+The header declares one object, named for the module: `object Echo` for
+Echo.wasm.";
 
 /// A command-line mistake: print the usage and exit with status 2.
 struct Usage;
@@ -56,6 +61,12 @@ fn command(args: &[String]) -> Result<Result<()>, Usage> {
         },
         Some("run") => run(&args[1..]),
         Some("bindings") => bindings(&args[1..]),
+        Some("embed") => match &args[1..] {
+            [header, module] if !header.starts_with('-') && !module.starts_with('-') => {
+                Ok(embed(header.as_ref(), module.as_ref()))
+            }
+            _ => Err(Usage),
+        },
         _ => run(args),
     }
 }
@@ -110,6 +121,15 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
         let ts = bindings::assemblyscript(&file, &resolved, &name, &library);
         std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display()))
     })())
+}
+
+fn embed(header: &Path, module: &Path) -> Result<()> {
+    let name = module.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let resolved = iface::load(header)?;
+    iface::for_module(&resolved, &name).with_context(|| format!("{} can't be {name}'s header", header.display()))?;
+    let wasm = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
+    let wasm = iface::embed(&wasm, &resolved).with_context(|| module.display().to_string())?;
+    std::fs::write(module, wasm).with_context(|| format!("writing {}", module.display()))
 }
 
 fn run(args: &[String]) -> Result<Result<()>, Usage> {
