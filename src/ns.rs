@@ -335,6 +335,27 @@ pub fn reach(mounts: &[Vec<(usize, bool)>]) -> Vec<BTreeMap<usize, Reach>> {
         .collect()
 }
 
+/// The order instances start in: each after everything it mounts, and
+/// otherwise in image order. Where instances mount each other, the cycle is
+/// broken at the one that comes first in the image, which starts last.
+pub fn start_order(mounts: &[Vec<usize>]) -> Vec<usize> {
+    fn visit(at: usize, mounts: &[Vec<usize>], seen: &mut [bool], out: &mut Vec<usize>) {
+        if std::mem::replace(&mut seen[at], true) {
+            return;
+        }
+        for &t in &mounts[at] {
+            visit(t, mounts, seen, out);
+        }
+        out.push(at);
+    }
+    let mut seen = vec![false; mounts.len()];
+    let mut out = Vec::with_capacity(mounts.len());
+    for i in 0..mounts.len() {
+        visit(i, mounts, &mut seen, &mut out);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +483,16 @@ mod tests {
         let mounts = vec![vec![(1, true), (2, false)], vec![], vec![(1, false)]];
         let reach = reach(&mounts);
         assert_eq!(reach[0][&1], Reach { read_only: false, via: Some(2) });
+    }
+
+    #[test]
+    fn instances_start_after_what_they_mount() {
+        // http(0) mounts site(1) and cons(3); site mounts files(2).
+        assert_eq!(start_order(&[vec![1, 3], vec![2], vec![], vec![]]), vec![2, 1, 3, 0]);
+        // Unrelated instances keep image order.
+        assert_eq!(start_order(&[vec![], vec![], vec![]]), vec![0, 1, 2]);
+        // 0 and 1 mount each other; 0 comes first in the image, so starts last.
+        assert_eq!(start_order(&[vec![1], vec![0]]), vec![1, 0]);
     }
 
     #[test]

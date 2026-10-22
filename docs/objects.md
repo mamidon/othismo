@@ -276,8 +276,9 @@ bytes.
    module's top-level code runs, and may already make requests, which wait in
    the queue.
 2. The image's startup requests are delivered: `control` requests and any
-   others, in image order.
-3. Each object's `start` runs, in image order.
+   others. Each object gets its requests after everything it mounts has had
+   its own.
+3. Each object's `start` runs, again after everything it mounts.
 4. The environment starts: stdin is read and sockets accept connections.
 
 The run ends when the queue is empty and nothing outside can add to it.

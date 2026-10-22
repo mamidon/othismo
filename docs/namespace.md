@@ -314,9 +314,15 @@ type; `--no-checks` turns that off.
 
 1. Every instance is created and every view is built from the image's mounts.
    Module top-level code runs. It may already make requests, which are queued.
-2. The image's startup requests are delivered in image order.
-3. `start()` runs on every Wasm instance in image order.
+2. The image's startup requests are delivered, in start order.
+3. `start()` runs on every Wasm instance, in start order.
 4. Environment objects start listening (stdin, sockets).
+
+**Start order** follows the mounts: an instance starts after everything it
+mounts, so whatever it finds in its view has been configured and started
+first. Instances that don't depend on each other keep image order. Where
+instances mount each other, the one that comes first in the image starts
+last.
 
 The run ends when the queue is empty and no outside event can arrive any more.
 

@@ -348,8 +348,13 @@ impl<'p> Runtime<'p> {
     }
 
     pub fn run(mut self) -> Result<()> {
-        // The image's startup requests, then every module's start().
-        for (i, inst) in self.program.instances.iter().enumerate() {
+        // The image's startup requests, then every module's start(), each
+        // instance after everything it mounts.
+        let mounts: Vec<Vec<usize>> =
+            self.program.instances.iter().map(|i| i.mounts.iter().map(|m| m.target).collect()).collect();
+        let order = ns::start_order(&mounts);
+        for &i in &order {
+            let inst = &self.program.instances[i];
             for s in &inst.startup {
                 let what = format!("{} {} {}", s.verb.keyword(), inst.name, s.path);
                 let to = Ok(Resolved { inst: i, path: s.path.clone(), read_only: false });
@@ -358,7 +363,7 @@ impl<'p> Runtime<'p> {
             }
         }
         self.drain()?;
-        for i in 0..self.objects.len() {
+        for &i in &order {
             if let Object::Wasm(obj) = &mut self.objects[i] {
                 obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;
             }
