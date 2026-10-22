@@ -47,7 +47,7 @@ impl Io {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Options {
     /// Don't hold objects to their interfaces, or bodies to their types.
     pub no_checks: bool,
@@ -65,11 +65,22 @@ pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
     ("othismo", "expose"),
 ];
 
+/// A reply to a request made with [`Runtime::ask`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answered {
+    pub status: Status,
+    pub body: Option<Message>,
+    /// The last reply.
+    pub done: bool,
+}
+
 /// Who made a request, and so where its replies go.
 #[derive(Debug, Clone)]
 enum Requester {
     /// A startup request, described for warnings. Replies are dropped.
     Image(String),
+    /// A request made with [`Runtime::ask`]. Replies are kept for it.
+    Asked,
     /// Ticket 0 means no answer is wanted.
     Wasm { inst: usize, ticket: u32 },
 }
@@ -108,6 +119,8 @@ struct Shared {
     interfaces: Vec<iface::Object>,
     checks: bool,
     queue: VecDeque<Delivery>,
+    /// Replies to [`Requester::Asked`], until [`Runtime::ask`] takes them.
+    asked: Vec<Answered>,
     /// `(server, req)`.
     requests: HashMap<(usize, u32), Pending>,
     next_req: Vec<u32>,
@@ -168,6 +181,7 @@ impl Shared {
                     eprintln!("warning: startup request `{what}` failed: {status}");
                 }
             }
+            Requester::Asked => self.asked.push(Answered { status, body, done }),
             Requester::Wasm { ticket: 0, .. } => {}
             Requester::Wasm { inst, ticket } => {
                 if done {
@@ -324,6 +338,7 @@ impl<'p> Runtime<'p> {
             interfaces,
             checks: !options.no_checks,
             queue: VecDeque::new(),
+            asked: vec![],
             requests: HashMap::new(),
             next_req: vec![0; n],
             calls: HashMap::new(),
@@ -351,7 +366,16 @@ impl<'p> Runtime<'p> {
         Ok(Runtime { program, objects, shared, input: Some(io.input), output: io.output })
     }
 
+    /// Runs the image: starts it, then the outside world, until nothing
+    /// more can arrive.
     pub fn run(mut self) -> Result<()> {
+        self.start()?;
+        self.outside()
+    }
+
+    /// Delivers the image's startup requests and runs every module's
+    /// `start`, but starts nothing outside: no stdin, no sockets.
+    pub fn start(&mut self) -> Result<()> {
         // The image's startup requests, in the order it makes them, each
         // resolved in the image's view.
         let image_view = self.program.instances.len();
@@ -374,7 +398,22 @@ impl<'p> Runtime<'p> {
                 obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;
             }
         }
+        self.drain()
+    }
+
+    /// As the operator, makes `verb <path>` of instance `inst`'s served tree,
+    /// delivers everything that follows from it, and returns the replies it
+    /// has had: none at all if nothing answered.
+    pub fn ask(&mut self, inst: usize, verb: Verb, path: &str, body: Option<Message>) -> Result<Vec<Answered>> {
+        let to = Ok(Resolved { inst, path: path.to_string(), read_only: false });
+        self.shared.borrow_mut().request(Requester::Asked, to, verb, body);
         self.drain()?;
+        Ok(std::mem::take(&mut self.shared.borrow_mut().asked))
+    }
+
+    /// Starts the outside world, and delivers what it sends until nothing
+    /// more can arrive.
+    fn outside(mut self) -> Result<()> {
 
         // Then the outside world. Stdin is read only if something watches it.
         let (tx, rx) = mpsc::channel::<Event>();
