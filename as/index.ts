@@ -12,7 +12,7 @@ const TYPE_KEY = "$type";
 
 /** Base class for every message. Subclasses override both members. */
 export class Message {
-  /** The class name; must match the name in messages.ts. */
+  /** The class name; must match the name in its header. */
   typeName(): string {
     abort("Message subclass does not override typeName()");
     return "";

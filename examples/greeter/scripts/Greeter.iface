@@ -1,0 +1,34 @@
+import { Line } from env
+
+## Configures a Greeter; sent once at startup by the image.
+message Greeting {
+  ## Put before each name.
+  prefix: string
+  ## End with `!` rather than `.`.
+  excited: bool
+}
+
+## Running totals a Greeter reports after every line.
+message Stats {
+  lines: i32
+  chars: i64
+  average: f64
+}
+
+## Greets every name typed on the console, reports running statistics
+## there, and has `/shouter` shout each greeting.
+object Greeter {
+  ## The console: the names, and where greetings and statistics go.
+  needs /dev/cons {
+    /  watch -> Line*, write Line, write Stats
+  }
+  ## Something to shout each greeting.
+  needs /shouter {
+    /  write Line
+  }
+
+  serves {
+    ## How to greet: a prefix, and whether to be excited about it.
+    /greeting  write Greeting
+  }
+}

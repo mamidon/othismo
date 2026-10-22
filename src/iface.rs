@@ -613,10 +613,6 @@ mod tests {
             assert!(env.object(name).is_some(), "{name}");
         }
         assert!(env.messages.contains_key("Line"));
-        // Until as/env.ts is generated from env.iface, the two must agree.
-        let ts = crate::messages::parse(include_str!("../as/env.ts")).unwrap();
-        let shapes = |m: &BTreeMap<String, MessageType>| m.values().map(|t| (t.name.clone(), t.fields.clone())).collect::<Vec<_>>();
-        assert_eq!(shapes(&env.messages), shapes(&ts));
     }
 
     #[test]

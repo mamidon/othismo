@@ -1,6 +1,6 @@
 # Echoes every line typed on stdin. Echo can see exactly one thing: the
 # console, at /dev/cons.
-import { Echoed } from "./messages"   # what Echo writes, for --check-shapes
+import { Echoed } from "./scripts/Echo.iface.ts"   # what Echo writes, for --check-shapes
 
 instance cons : Environment.Console
 

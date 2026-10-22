@@ -1,6 +1,6 @@
 import { Line } from "othismo/env"
 import { Response, Server, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
-import { Echoed } from "../messages"
+import { Echoed } from "./Echo.iface"
 
 // The host's entry points into this module.
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }

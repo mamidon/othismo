@@ -10,9 +10,9 @@ const MAX_BODY: i32 = 1024 * 1024
 
 /**
  * Serves HTTP/1.1 on /net/tcp by turning each request into a request of the
- * namespace: GET is Read, HEAD is Stat, PUT is Write, DELETE is Remove and
- * POST is Invoke, at the host's root (a path in our view) plus the URL path.
- * The answer becomes the response. It knows nothing about files.
+ * namespace: GET is Read and HEAD is Stat, at the host's root (a path in our
+ * view) plus the URL path. The answer becomes the response. Other methods are
+ * refused, as its header only needs reads. It knows nothing about files.
  *
  * Its own tree is /hosts/<name>, which only the operator sets: control it
  * with a Text holding a path in our view to serve that host from there, or
@@ -125,7 +125,6 @@ class Connection extends Then {
     }
 
     let host = ""
-    let contentType = ""
     let length: i32 = 0
     for (let i = 1; i < lines.length; i++) {
       const colon = lines[i].indexOf(":")
@@ -144,8 +143,6 @@ class Connection extends Then {
       } else if (name == "host") {
         const port = value.lastIndexOf(":")
         host = (port > 0 && !value.endsWith("]") ? value.substring(0, port) : value).toLowerCase()
-      } else if (name == "content-type") {
-        contentType = value
       }
     }
     if (length > MAX_BODY) {
@@ -178,13 +175,12 @@ class Connection extends Then {
       respond.send(400, "Bad Request", "Content-Type: text/plain\r\n", text("400 Bad Request\n"))
       return
     }
-    const body = new Data(contentType, buf.slice(bodyStart, bodyStart + length))
+    const plain = "Content-Type: text/plain\r\n"
     if (method == "GET") ns.read(full, respond)
     else if (method == "HEAD") ns.stat(full, respond)
-    else if (method == "PUT") ns.write(full, body, respond)
-    else if (method == "DELETE") ns.remove(full, respond)
-    else if (method == "POST") ns.invoke(full, body, respond)
-    else respond.send(501, "Not Implemented", "Content-Type: text/plain\r\n", text("501 Not Implemented\n"))
+    else if (method == "PUT" || method == "DELETE" || method == "POST") {
+      respond.send(405, "Method Not Allowed", "Allow: GET, HEAD\r\n" + plain, text("405 Method Not Allowed\n"))
+    } else respond.send(501, "Not Implemented", plain, text("501 Not Implemented\n"))
   }
 
   /** Answers a malformed request directly. */

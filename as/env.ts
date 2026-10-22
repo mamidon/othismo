@@ -1,14 +1,6 @@
-// Message types the runtime and its environment objects understand, and the
-// conventional bodies for the namespace verbs.
-//
-// These are always in scope in an image. Object modules import them with
-// `import { ... } from "othismo/env"`. The runtime embeds this file, and an
-// image that redeclares one of these types must give it exactly these fields.
+// Generated from env.iface by `othismo bindings`. Edit the header, not this file.
 
 import { Message, Reader, Writer, registerMessage } from "./index"
-
-// ---------------------------------------------------------------------------
-// Conventional bodies
 
 /** A string value: a setting, an address, a name. */
 export class Text extends Message {
@@ -24,8 +16,9 @@ export class Text extends Message {
 }
 registerMessage("Text", (r: Reader): Message => new Text(r.string("text")))
 
-/** The contents of something, as `Read` answers. `mime` may be "". */
+/** The contents of something, as `read` answers. */
 export class Data extends Message {
+  /** Its MIME type, or "" if it isn't known. */
   mime: string
   data: ArrayBuffer
 
@@ -43,10 +36,13 @@ export class Data extends Message {
 }
 registerMessage("Data", (r: Reader): Message => new Data(r.string("mime"), r.bytes("data")))
 
-/** What `Stat` answers. `kind` is "file" or "dir". */
+/** What `stat` answers. */
 export class Info extends Message {
+  /** "file" or "dir". */
   kind: string
+  /** In bytes; 0 for a directory. */
   size: i64
+  /** Its MIME type, or "" if it isn't known. */
   mime: string
 
   constructor(kind: string, size: i64, mime: string) {
@@ -65,9 +61,10 @@ export class Info extends Message {
 }
 registerMessage("Info", (r: Reader): Message => new Info(r.string("kind"), r.i64("size"), r.string("mime")))
 
-/** One name in a `List` stream, or what `Create` made. `kind` is "file" or "dir". */
+/** One name in a `list` stream, or what `create` made. */
 export class Entry extends Message {
   name: string
+  /** "file" or "dir". */
   kind: string
 
   constructor(name: string, kind: string) {
@@ -84,12 +81,6 @@ export class Entry extends Message {
 }
 registerMessage("Entry", (r: Reader): Message => new Entry(r.string("name"), r.string("kind")))
 
-// ---------------------------------------------------------------------------
-// Environment.Console
-//
-//   Watch /   a stream of Line, one per line of stdin, ending at EOF
-//   Write /   prints the body
-
 /** One line of text, without its line ending. */
 export class Line extends Message {
   text: string
@@ -104,19 +95,9 @@ export class Line extends Message {
 }
 registerMessage("Line", (r: Reader): Message => new Line(r.string("text")))
 
-// ---------------------------------------------------------------------------
-// Environment.Tcp: a TCP listener.
-//
-//   Read   /address  Text: the bound address, e.g. "127.0.0.1:8080"
-//   Watch  /accept   a stream of Accepted
-//   Watch  /<conn>   a stream of Data received, ending when the peer closes
-//   Write  /<conn>   sends a Data's bytes
-//   Remove /<conn>   closes our side once everything written has been sent
-//
-//   config (image only): send Listen { address: "..." }
-
-/** Config: the address to listen on, e.g. "127.0.0.1:8080". */
+/** Configures a Tcp listener. */
 export class Listen extends Message {
+  /** The address to listen on, e.g. "127.0.0.1:8080". */
   address: string
 
   constructor(address: string) {
@@ -129,9 +110,11 @@ export class Listen extends Message {
 }
 registerMessage("Listen", (r: Reader): Message => new Listen(r.string("address")))
 
-/** A new connection: `conn` names it under the listener, `peer` is the remote address. */
+/** A new connection. */
 export class Accepted extends Message {
+  /** Its name under the listener: watch, write or remove `/<conn>`. */
   conn: string
+  /** The remote address. */
   peer: string
 
   constructor(conn: string, peer: string) {
@@ -148,17 +131,9 @@ export class Accepted extends Message {
 }
 registerMessage("Accepted", (r: Reader): Message => new Accepted(r.string("conn"), r.string("peer")))
 
-// ---------------------------------------------------------------------------
-// Environment.Files: read-only access to one directory tree.
-//
-//   Read   Data, with a MIME type from the extension; IsDirectory for a directory
-//   Stat   Info
-//   List   a stream of Entry, sorted by name
-//
-//   config (image only): send FilesRoot { path: "..." }
-
-/** Config: the directory served, relative to the image file. */
+/** Configures Files. */
 export class FilesRoot extends Message {
+  /** The directory served, relative to the image. */
   path: string
 
   constructor(path: string) {

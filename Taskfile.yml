@@ -1,7 +1,9 @@
 version: '3'
 
 # Every examples/<name>/<name>.img is an example; its objects are the
-# scripts/*.ts next to it, compiled to scripts/*.wasm.
+# scripts/*.ts next to it, compiled to scripts/*.wasm. Each object's header
+# is its scripts/<Type>.iface, and the bindings generated from a header are
+# committed next to it, as <Type>.iface.ts.
 vars:
   EXAMPLES:
     sh: for img in examples/*/*.img; do basename "$img" .img; done
@@ -10,6 +12,7 @@ vars:
 tasks:
   build:
     desc: cargo build
+    run: once
     cmds:
       - cargo build
 
@@ -65,6 +68,14 @@ tasks:
       - task: build:docs
       - fly deploy
 
+  bindings:
+    desc: Regenerate the AssemblyScript bindings from every header
+    cmds:
+      - task: bindings:env
+      - for: { var: EXAMPLES }
+        task: bindings:one
+        vars: { NAME: '{{.ITEM}}' }
+
   clean:
     desc: Remove compiled objects and sealed images
     cmds:
@@ -90,22 +101,48 @@ tasks:
         task: wasm:one
         vars: { NAME: '{{.ITEM}}' }
 
+  # The runtime's own bindings, which the library imports as "othismo/env".
+  bindings:env:
+    internal: true
+    deps: [build]
+    sources:
+      - as/env.iface
+      - src/**/*.rs
+    generates:
+      - as/env.ts
+    cmds:
+      - '{{.BIN}} bindings --library ./index as/env.iface -o as/env.ts'
+
+  bindings:one:
+    internal: true
+    label: bindings:{{.NAME}}
+    deps: [build]
+    cmds:
+      - for: { var: HEADERS }
+        cmd: '{{.BIN}} bindings {{.ITEM}}'
+    vars:
+      HEADERS:
+        sh: ls examples/{{.NAME}}/scripts/*.iface
+
   wasm:one:
     internal: true
     label: wasm:{{.NAME}}
-    deps: [npm]
+    deps: [npm, bindings:env]
     sources:
       - as/*.ts
-      - examples/{{.NAME}}/*.ts
+      - examples/{{.NAME}}/scripts/*.iface
       - examples/{{.NAME}}/scripts/*.ts
+      - exclude: examples/{{.NAME}}/scripts/*.iface.ts
     generates:
       - examples/{{.NAME}}/scripts/*.wasm
     cmds:
+      - task: bindings:one
+        vars: { NAME: '{{.NAME}}' }
       - for: { var: SCRIPTS }
         cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize
     vars:
       SCRIPTS:
-        sh: ls examples/{{.NAME}}/scripts/*.ts
+        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.iface\.ts$'
 
   # Seals examples/<NAME>/<NAME>.img into a .rti with the othismo that
   # `build` just made, so the two always match.

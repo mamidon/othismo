@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
-use othismo::{pack, runtime, slots};
+use othismo::{bindings, iface, pack, runtime, slots};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: othismo [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
+       othismo bindings [--library <path>] <header.iface> [-o <out.ts>]
 
 An image is a .img source, which is built in memory, or a built .rti file.
 
@@ -16,7 +17,11 @@ An image is a .img source, which is built in memory, or a built .rti file.
   --set           give one slot field a value, after any files; raw text for
                   a string, a literal otherwise
   --no-sources    leave the reference copies of the sources out of a build
-  -v              list each packed path that a later include replaced";
+  -v              list each packed path that a later include replaced
+
+`bindings` writes AssemblyScript classes for a header's message types, to
+<header.iface>.ts unless -o says otherwise; a header that declares none
+gets no file. They import the library from \"othismo\", or from --library.";
 
 /// A command-line mistake: print the usage and exit with status 2.
 struct Usage;
@@ -50,6 +55,7 @@ fn command(args: &[String]) -> Result<Result<()>, Usage> {
             _ => Err(Usage),
         },
         Some("run") => run(&args[1..]),
+        Some("bindings") => bindings(&args[1..]),
         _ => run(args),
     }
 }
@@ -74,6 +80,36 @@ fn build(args: &[String]) -> Result<Result<()>, Usage> {
         }
         std::fs::write(&out, p.seal()).with_context(|| format!("writing {}", out.display()))
     }))
+}
+
+fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
+    let (mut header, mut out, mut library) = (None, None, "othismo".to_string());
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-o" => out = Some(PathBuf::from(args.next().ok_or(Usage)?)),
+            "--library" => library = args.next().ok_or(Usage)?.clone(),
+            _ if arg.starts_with('-') || header.is_some() => return Err(Usage),
+            _ => header = Some(PathBuf::from(arg)),
+        }
+    }
+    let header = header.ok_or(Usage)?;
+    let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", header.display())));
+    Ok((|| {
+        let resolved = iface::load(&header)?;
+        let src = std::fs::read_to_string(&header)?;
+        let file = iface::parse(&src)?;
+        // Nothing to bind, and nothing left over from when there was.
+        if file.messages.is_empty() {
+            if out.exists() {
+                std::fs::remove_file(&out).with_context(|| format!("removing {}", out.display()))?;
+            }
+            return Ok(());
+        }
+        let name = header.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let ts = bindings::assemblyscript(&file, &resolved, &name, &library);
+        std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display()))
+    })())
 }
 
 fn run(args: &[String]) -> Result<Result<()>, Usage> {

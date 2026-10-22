@@ -13,11 +13,34 @@ fn example(rel: &str) -> PathBuf {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(rel);
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
-        if ts.extension().is_some_and(|e| e == "ts") {
+        // A module's own source, not its generated bindings.
+        if ts.extension().is_some_and(|e| e == "ts") && !ts.to_string_lossy().ends_with(".iface.ts") {
             assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `task test`", ts.display());
         }
     }
     path
+}
+
+/// Every example header's bindings are generated and committed; this fails
+/// if one is stale, or missing. `task bindings` regenerates them.
+#[test]
+fn bindings_are_up_to_date() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut seen = 0;
+    for dir in std::fs::read_dir(&examples).unwrap().flatten() {
+        let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
+        for header in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "iface")) {
+            seen += 1;
+            let file = othismo::iface::parse(&std::fs::read_to_string(&header).unwrap()).unwrap();
+            let resolved = othismo::iface::load(&header).unwrap();
+            let committed = std::fs::read_to_string(format!("{}.ts", header.display())).ok();
+            let name = header.file_name().unwrap().to_string_lossy().into_owned();
+            let want = (!file.messages.is_empty())
+                .then(|| othismo::bindings::assemblyscript(&file, &resolved, &name, "othismo"));
+            assert!(committed == want, "{}.ts is stale; run `task bindings`", header.display());
+        }
+    }
+    assert!(seen > 0);
 }
 
 #[test]

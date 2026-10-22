@@ -1,6 +1,7 @@
 //! A runtime for images: declarative graphs of sandboxed AssemblyScript
 //! objects that reach each other only through the paths in their namespaces.
 
+pub mod bindings;
 pub mod check;
 pub mod env;
 pub mod iface;

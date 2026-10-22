@@ -1,0 +1,12 @@
+import { Line } from env
+
+## Writes each line it is given to the console, in capitals.
+object Shouter {
+  needs /dev/cons {
+    /  write Line
+  }
+
+  serves {
+    /  write Line
+  }
+}

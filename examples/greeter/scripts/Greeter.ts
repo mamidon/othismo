@@ -1,6 +1,6 @@
 import { Line } from "othismo/env"
 import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
-import { Greeting, Stats } from "../messages"
+import { Greeting, Stats } from "./Greeter.iface"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 

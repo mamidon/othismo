@@ -1,8 +1,12 @@
+// Generated from Greeter.iface by `othismo bindings`. Edit the header, not this file.
+
 import { Message, Reader, Writer, registerMessage } from "othismo"
 
 /** Configures a Greeter; sent once at startup by the image. */
 export class Greeting extends Message {
+  /** Put before each name. */
   prefix: string
+  /** End with `!` rather than `.`. */
   excited: bool
 
   constructor(prefix: string, excited: bool) {

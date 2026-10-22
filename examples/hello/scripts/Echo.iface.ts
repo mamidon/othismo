@@ -1,5 +1,8 @@
+// Generated from Echo.iface by `othismo bindings`. Edit the header, not this file.
+
 import { Message, Reader, Writer, registerMessage } from "othismo"
 
+/** A line, as Echo writes it back. */
 export class Echoed extends Message {
   text: string
 

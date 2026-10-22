@@ -1,0 +1,35 @@
+import { Accepted, Data, Entry, Info, Line, Text } from env
+
+## Serves HTTP/1.1 on `/net/tcp`, turning each request into a request of its
+## view.
+##
+## GET is `read` and HEAD is `stat`, of the host's root plus the URL path,
+## and the answer becomes the response. Other methods are refused. It knows
+## nothing about files. Every response is logged to `/dev/cons`. One request
+## per connection; every response closes it.
+object HttpServer {
+  ## The listener it serves HTTP on.
+  needs /net/tcp {
+    /address  read -> Text
+    /accept   watch -> Accepted*
+    /{conn}   watch -> Data*, write Data, remove
+  }
+  ## The access log.
+  needs /dev/cons {
+    /  write Line
+  }
+  ## The sites, at whichever mount points the hosts are configured with.
+  needs /** {
+    /**  read -> Opaque, stat -> Info
+  }
+
+  serves {
+    ## The hosts it serves.
+    /hosts          list -> Entry*
+    /hosts/         list -> Entry*
+    ## Control with a `Text` holding a path in its view to serve the host
+    ## from there, or with no body to stop serving it. `*` stands for any
+    ## host not listed.
+    /hosts/{name}   control Text, control, read -> Text
+  }
+}
