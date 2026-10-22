@@ -1,0 +1,9 @@
+import { Data, Entry, Info } from "./bodies.iface"
+
+## Files packed into the image when it was built, by its `include`s. It
+## answers as `Environment.Files` does.
+object Packed.Files {
+  serves {
+    /**   read -> Data, stat -> Info, list -> Entry*
+  }
+}

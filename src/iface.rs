@@ -20,16 +20,40 @@ use std::sync::OnceLock;
 /// The reserved type that stands for any message.
 pub const OPAQUE: &str = "Opaque";
 
-/// The runtime's own header: its message types and the built-in objects.
-const ENV_SOURCE: &str = include_str!("../as/env.iface");
+/// The runtime's own header, one file at a time: the bodies its objects
+/// share, then each built-in object with the types it adds. A file may
+/// import from the files before it.
+const ENV_SOURCES: &[(&str, &str)] = &[
+    ("bodies.iface", include_str!("../as/env/bodies.iface")),
+    ("Environment.Console.iface", include_str!("../as/env/Environment.Console.iface")),
+    ("Environment.Tcp.iface", include_str!("../as/env/Environment.Tcp.iface")),
+    ("Environment.Files.iface", include_str!("../as/env/Environment.Files.iface")),
+    ("Packed.Files.iface", include_str!("../as/env/Packed.Files.iface")),
+];
 
-/// The runtime's header, `env`.
+/// The runtime's header, `env`: every file in `as/env/`, joined.
 pub fn env() -> &'static Header {
     static ENV: OnceLock<Header> = OnceLock::new();
     ENV.get_or_init(|| {
-        let file = parse(ENV_SOURCE).expect("env.iface parses");
-        let mut no_imports = |s: &Source| -> Result<Header> { bail!("env.iface can't import from {s}") };
-        resolve(&file, &mut no_imports, &|_| bail!("env.iface has no guides")).expect("env.iface resolves")
+        let mut env = Header { messages: BTreeMap::new(), declared: vec![], objects: vec![] };
+        let mut done: BTreeMap<&str, Header> = BTreeMap::new();
+        for &(name, src) in ENV_SOURCES {
+            let file = parse(src).unwrap_or_else(|e| panic!("env/{name} parses: {e:#}"));
+            let mut earlier = |s: &Source| -> Result<Header> {
+                let found = match s {
+                    Source::Path(p) => done.get(p.strip_prefix("./").unwrap_or(p)),
+                    Source::Module(_) => None,
+                };
+                found.cloned().ok_or_else(|| anyhow::anyhow!("env/{name} can only import from the env files before it"))
+            };
+            let header = resolve(&file, &mut earlier, &|_| bail!("env has no guides"))
+                .unwrap_or_else(|e| panic!("env/{name} resolves: {e:#}"));
+            env.messages.extend(header.messages.clone());
+            env.declared.extend(header.declared.iter().cloned());
+            env.objects.extend(header.objects.iter().cloned());
+            done.insert(name, header);
+        }
+        env
     })
 }
 

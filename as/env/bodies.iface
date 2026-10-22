@@ -1,0 +1,37 @@
+# The runtime's own header, `env`, is this directory: the conventional
+# bodies for the verbs, here, and one file for each built-in object with the
+# types it adds. The runtime embeds every file and joins them into `env`.
+#
+# Its types are always in scope in an image. A header imports them with
+# `import { ... } from env`, and AssemblyScript with
+# `import { ... } from "othismo/env"`, whose bindings are generated from
+# `env`.
+
+## A string value: a setting, an address, a name.
+message Text {
+  text: string
+}
+
+## The contents of something, as `read` answers.
+message Data {
+  ## Its MIME type, or "" if it isn't known.
+  mime: string
+  data: bytes
+}
+
+## What `stat` answers.
+message Info {
+  ## "file" or "dir".
+  kind: string
+  ## In bytes; 0 for a directory.
+  size: i64
+  ## Its MIME type, or "" if it isn't known.
+  mime: string
+}
+
+## One name in a `list` stream, or what `create` made.
+message Entry {
+  name: string
+  ## "file" or "dir".
+  kind: string
+}

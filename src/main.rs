@@ -6,7 +6,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot.field=value>]... <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
-       othismo bindings [--library <path>] <header.iface> [-o <out.ts>]
+       othismo bindings [--library <path>] <header.iface | env> [-o <out.ts>]
        othismo embed <header.iface> <module.wasm>
        othismo doc <module.wasm | header.iface | built-in type | env>
 
@@ -25,6 +25,7 @@ An image is a .img source, which is built in memory, or a built .rti file.
 `bindings` writes AssemblyScript classes for a header's message types, to
 <header.iface>.ts unless -o says otherwise; a header that declares none
 gets no file. They import the library from \"othismo\", or from --library.
+For `env`, the header is the runtime's own.
 
 `embed` puts a module's header into the module, replacing any already there.
 The header declares one object, named for the module: `object Echo` for
@@ -117,18 +118,16 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
     let header = header.ok_or(Usage)?;
     let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", header.display())));
     Ok((|| {
-        let resolved = iface::load(&header)?;
-        let src = std::fs::read_to_string(&header)?;
-        let file = iface::parse(&src)?;
+        let resolved = if header == Path::new("env") { iface::env().clone() } else { iface::load(&header)? };
         // Nothing to bind, and nothing left over from when there was.
-        if file.messages.is_empty() {
+        if resolved.declared.is_empty() {
             if out.exists() {
                 std::fs::remove_file(&out).with_context(|| format!("removing {}", out.display()))?;
             }
             return Ok(());
         }
         let name = header.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let ts = bindings::assemblyscript(&file, &resolved, &name, &library);
+        let ts = bindings::assemblyscript(&resolved, &name, &library);
         std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display()))
     })())
 }

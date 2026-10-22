@@ -1,0 +1,30 @@
+import { Data, Text } from "./bodies.iface"
+
+## Configures a Tcp listener.
+message Listen {
+  ## The address to listen on, e.g. "127.0.0.1:8080".
+  address: string
+}
+
+## A new connection.
+message Accepted {
+  ## Its name under the listener: watch, write or remove `/<conn>`.
+  conn: string
+  ## The remote address.
+  peer: string
+}
+
+## A TCP listener, on the address the image configures it with.
+object Environment.Tcp {
+  serves {
+    ## Configured by the image only.
+    /           control Listen
+    ## The bound address, e.g. "127.0.0.1:8080".
+    /address    read -> Text
+    ## Every connection accepted, as it is.
+    /accept     watch -> Accepted*
+    ## A connection: watch for the bytes received, until the peer closes;
+    ## write to send; remove to close our side once everything is sent.
+    /{conn}     watch -> Data*, write Data, remove
+  }
+}

@@ -1,0 +1,19 @@
+import { Data, Entry, Info } from "./bodies.iface"
+
+## Configures Files.
+message FilesRoot {
+  ## The directory served, relative to the image.
+  path: string
+}
+
+## Read-only access to one directory on the host, and nothing above it.
+##
+## A file's MIME type comes from its extension. Reading a directory answers
+## `is_directory`, and a listing is sorted by name.
+object Environment.Files {
+  serves {
+    ## Configured by the image only.
+    /     control FilesRoot, read -> Data, stat -> Info, list -> Entry*
+    /**   read -> Data, stat -> Info, list -> Entry*
+  }
+}

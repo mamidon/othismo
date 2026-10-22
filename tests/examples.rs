@@ -31,12 +31,10 @@ fn bindings_are_up_to_date() {
         let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
         for header in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "iface")) {
             seen += 1;
-            let file = othismo::iface::parse(&std::fs::read_to_string(&header).unwrap()).unwrap();
             let resolved = othismo::iface::load(&header).unwrap();
             let committed = std::fs::read_to_string(format!("{}.ts", header.display())).ok();
             let name = header.file_name().unwrap().to_string_lossy().into_owned();
-            let want = (!file.messages.is_empty())
-                .then(|| othismo::bindings::assemblyscript(&file, &resolved, &name, "othismo"));
+            let want = (!resolved.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&resolved, &name, "othismo"));
             assert!(committed == want, "{}.ts is stale; run `task bindings`", header.display());
         }
     }

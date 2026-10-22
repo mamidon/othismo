@@ -1,4 +1,4 @@
-// Generated from env.iface by `othismo bindings`. Edit the header, not this file.
+// Generated from env by `othismo bindings`. Edit the header, not this file.
 
 import { Message, Reader, Writer, registerMessage } from "./index"
 

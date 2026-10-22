@@ -29,11 +29,11 @@ tasks:
       - cargo test {{.CLI_ARGS}}
 
   build:docs:
-    desc: Re-render docs/*.md, and the reference from as/env.iface, into the static example's site
+    desc: Re-render docs/*.md, and the reference from as/env/, into the static example's site
     deps: [npm, build]
     sources:
       - docs/*.md
-      - as/env.iface
+      - as/env/*.iface
       - src/doc.rs
       - examples/static/site.mjs
     cmds:
@@ -109,12 +109,12 @@ tasks:
     internal: true
     deps: [build]
     sources:
-      - as/env.iface
+      - as/env/*.iface
       - src/**/*.rs
     generates:
       - as/env.ts
     cmds:
-      - '{{.BIN}} bindings --library ./index as/env.iface -o as/env.ts'
+      - '{{.BIN}} bindings --library ./index env -o as/env.ts'
 
   bindings:one:
     internal: true
@@ -134,7 +134,7 @@ tasks:
     sources:
       - as/*.ts
       # What embed writes into each module: the header format and env's types.
-      - as/env.iface
+      - as/env/*.iface
       - src/iface.rs
       - examples/{{.NAME}}/scripts/*.iface
       - examples/{{.NAME}}/scripts/*.md

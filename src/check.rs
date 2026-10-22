@@ -154,7 +154,7 @@ pub fn module_header(dir: &Path, name: &str) -> Result<Header> {
     Ok(header)
 }
 
-/// The runtime's own message types, from its header (`as/env.iface`).
+/// The runtime's own message types, from its header (`as/env/`).
 pub fn env_messages() -> BTreeMap<String, MessageType> {
     iface::env().messages.clone()
 }

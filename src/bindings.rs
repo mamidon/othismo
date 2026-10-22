@@ -2,20 +2,20 @@
 //! type it declares, with its encoder and decoder. Types it imports have
 //! bindings of their own, generated from their own headers.
 
-use crate::iface::{File, Header};
+use crate::iface::Header;
 use crate::messages::{FieldType, MessageType};
 use std::fmt::Write;
 
-/// The bindings for `file`'s message types, which `header` is the resolved
-/// form of. `source` names the header in the generated comment, and
-/// `library` is where `Message`, `Reader` and `Writer` are imported from.
-pub fn assemblyscript(file: &File, header: &Header, source: &str, library: &str) -> String {
+/// The bindings for the message types `header` declares. `source` names the
+/// header in the generated comment, and `library` is where `Message`,
+/// `Reader` and `Writer` are imported from.
+pub fn assemblyscript(header: &Header, source: &str, library: &str) -> String {
     let mut out = format!(
         "// Generated from {source} by `othismo bindings`. Edit the header, not this file.\n\n\
          import {{ Message, Reader, Writer, registerMessage }} from \"{library}\"\n"
     );
-    for decl in &file.messages {
-        let ty = &header.messages[&decl.name.name];
+    for name in &header.declared {
+        let ty = &header.messages[name];
         out.push('\n');
         class(&mut out, ty);
     }
@@ -125,8 +125,7 @@ mod tests {
 
     #[test]
     fn the_runtimes_bindings_are_up_to_date() {
-        let file = iface::parse(include_str!("../as/env.iface")).unwrap();
-        let out = assemblyscript(&file, iface::env(), "env.iface", "./index");
+        let out = assemblyscript(iface::env(), "env", "./index");
         assert!(out == include_str!("../as/env.ts"), "as/env.ts is stale; run `task bindings`");
     }
 
@@ -149,7 +148,7 @@ mod tests {
         let file = iface::parse(src).unwrap();
         let mut env = |_: &crate::image::Source| Ok(iface::env().clone());
         let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
-        let out = assemblyscript(&file, &header, "G.iface", "othismo");
+        let out = assemblyscript(&header, "G.iface", "othismo");
         assert!(out.starts_with("// Generated from G.iface by `othismo bindings`."), "{out}");
         assert!(!out.contains("class Line"), "imported types have their own bindings");
         let greeting = r#"/** Configures a Greeter. */

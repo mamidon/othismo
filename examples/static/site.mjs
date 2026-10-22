@@ -53,7 +53,7 @@ const PAGES = [
     description: "Building images: sealing an image into one file, packed files, and slots the host fills in.",
   },
   {
-    source: "as/env.iface",
+    source: "as/env/",
     doc: "env",
     out: "reference/index.html",
     nav: "/reference/",

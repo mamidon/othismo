@@ -15,7 +15,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 # The runtime embeds its own header from here (src/iface.rs).
-COPY as/env.iface as/env.iface
+COPY as/env/ as/env/
 RUN cargo build --release --locked
 
 # 2. Node: compile the site's objects to Wasm and embed their headers, render
