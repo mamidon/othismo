@@ -228,6 +228,14 @@ impl Namespace {
         self.follow(Resolved { path: join(&m.target.path, rest), ..m.target.clone() })
     }
 
+    /// The mount point in `inst`'s view that `path` goes through, and the
+    /// rest of the path below it: `/` for the mount point itself.
+    pub fn mount_of(&self, inst: usize, path: &str) -> Option<(String, String)> {
+        let path = clean(path).ok()?;
+        let (m, rest) = longest(&self.views[inst], &path)?;
+        Some((m.at.clone(), if rest.is_empty() { "/".to_string() } else { rest.to_string() }))
+    }
+
     /// Follows exposures from where a request has landed to who serves it.
     fn follow(&self, mut r: Resolved) -> Result<Resolved, Status> {
         for _ in 0..MAX_HOPS {
@@ -368,6 +376,20 @@ mod tests {
         assert_eq!(ns.resolve(0, "/wwwx"), Err(Status::NotFound));
         assert_eq!(ns.resolve(0, "/www/../files/a"), Err(Status::Invalid));
         assert_eq!(ns.resolve(1, "/www"), Err(Status::NotFound), "views are private");
+    }
+
+    #[test]
+    fn mount_of_names_the_mount_and_the_rest() {
+        let mut ns = Namespace::new(3);
+        ns.mount(0, "/dev/cons", 1, false);
+        ns.mount(0, "/", 2, false);
+        let m = |path| ns.mount_of(0, path).map(|(at, rest)| format!("{at} {rest}"));
+        assert_eq!(m("/dev/cons").as_deref(), Some("/dev/cons /"));
+        assert_eq!(m("/dev/cons/x/").as_deref(), Some("/dev/cons /x/"));
+        assert_eq!(m("/dev/consoles").as_deref(), Some("/ /dev/consoles"));
+        assert_eq!(m("/").as_deref(), Some("/ /"));
+        assert_eq!(ns.mount_of(1, "/x"), None);
+        assert_eq!(ns.mount_of(0, "/a/../b"), None);
     }
 
     #[test]

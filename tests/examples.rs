@@ -59,14 +59,14 @@ fn hello_world_echoes_lines_through_the_binary() {
 }
 
 #[test]
-fn hello_world_with_shape_checks() {
-    let out = run_image(&example("hello/hello.img"), "a\nb\n", Options { check_shapes: true }).unwrap();
+fn hello_world_with_checks_off() {
+    let out = run_image(&example("hello/hello.img"), "a\nb\n", Options { no_checks: true }).unwrap();
     assert_eq!(out, "a\nb\n");
 }
 
 #[test]
 fn greeter_uses_a_startup_request_and_a_second_object() {
-    let out = run_image(&example("greeter/greeter.img"), "world\nAda\n", Options { check_shapes: true }).unwrap();
+    let out = run_image(&example("greeter/greeter.img"), "world\nAda\n", Options::default()).unwrap();
     assert_eq!(
         out,
         "Hello, world!\n\
@@ -89,7 +89,7 @@ fn a_built_image_runs_without_its_sources() {
     assert!(built.status.success(), "stderr: {}", String::from_utf8_lossy(&built.stderr));
 
     // Nothing but the .rti is next to it, and it runs the same.
-    let out = run_image(&rti, "a\nb\n", Options { check_shapes: true }).unwrap();
+    let out = run_image(&rti, "a\nb\n", Options::default()).unwrap();
     assert_eq!(out, "a\nb\n");
 
     let unpacked = Command::new(bin).arg("unpack").arg(&rti).arg(dir.join("out")).output().unwrap();

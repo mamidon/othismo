@@ -237,8 +237,9 @@ fn anything(safe_only: bool) -> String {
 }
 
 /// A scripted module's header: it serves anything, and needs at each of
-/// its mounts whatever is mounted there serves, as far as the mount allows.
-fn header(ty: &str, members: &str, types: &std::collections::HashMap<String, String>) -> String {
+/// its mounts whatever is mounted there serves, as far as the mount allows,
+/// and anything at the mount points it binds.
+fn header(ty: &str, script: &Script, members: &str, types: &std::collections::HashMap<String, String>) -> String {
     let env = othismo::iface::env();
     let all: Vec<&str> = env.messages.keys().map(String::as_str).collect();
     let mut out = format!("import {{ {} }} from env\nobject {ty} {{\n", all.join(", "));
@@ -267,6 +268,12 @@ fn header(ty: &str, members: &str, types: &std::collections::HashMap<String, Str
         };
         out.push_str(&format!("  needs {at} {{ {} }}\n", entries.join("\n")));
     }
+    // Not `needs {at}`, which would need something mounted there by the image.
+    for act in &script.start {
+        if let Act::Bind { at, .. } = act {
+            out.push_str(&format!("  needs {at}/** {{ {} }}\n", anything(false)));
+        }
+    }
     out.push_str(&format!("  serves {{ {} }}\n}}\n", anything(false)));
     out
 }
@@ -275,6 +282,11 @@ fn header(ty: &str, members: &str, types: &std::collections::HashMap<String, Str
 /// (`name`, script, members) and any extra declarations. Each scripted
 /// module gets a header from [`header`].
 fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixture {
+    fixture_with(name, objects, extra, &[])
+}
+
+/// [`fixture`], with the headers in `headers` for the module types they name.
+fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
     let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Environment.Console\n{extra}\n");
     for (obj, _, members) in objects {
@@ -285,7 +297,11 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
     for (obj, script, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &header(&ty, members, &types)));
+        let iface = match headers.iter().find(|(t, _)| *t == ty) {
+            Some((_, src)) => src.to_string(),
+            None => header(&ty, script, members, &types),
+        };
+        f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &iface));
     }
     f.file("messages.iface", MESSAGES).file("test.img", img);
     f
@@ -454,7 +470,8 @@ fn cancel_stops_a_stream() {
     assert_eq!(run_image(&f.image(), "a\nb\nc\n", Options::default()).unwrap(), "a\n");
 }
 
-/// Reads, stats, lists and tries to remove through `/f`.
+/// Reads, stats, lists and tries to remove through `/f`, which isn't among
+/// the things Files serves.
 fn files_script() -> Script {
     Script {
         start: vec![
@@ -470,14 +487,15 @@ fn files_script() -> Script {
     }
 }
 
-const FILES_OUTPUT: &str = "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
+/// The refused remove is answered at once, the rest after a round trip.
+const FILES_OUTPUT: &str = "not_supported\n\
+    Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
     not_found\n\
     is_directory\n\
     Info {\"kind\": \"file\", \"size\": 2, \"mime\": \"text/plain; charset=utf-8\"}\n\
     Entry {\"name\": \"hello.txt\", \"kind\": \"file\"}\n\
     Entry {\"name\": \"sub\", \"kind\": \"dir\"}\n\
-    ok\n\
-    read_only\n";
+    ok\n";
 
 #[test]
 fn files_read_stat_and_list() {
@@ -512,19 +530,105 @@ fn unknown_request_ids_stop_the_run() {
 }
 
 #[test]
-fn shape_checking_is_opt_in() {
+fn bodies_must_be_declared_types_unless_checks_are_off() {
+    let off = Options { no_checks: true };
     let bad = Message { type_name: "Text".into(), fields: doc! { "text": 5 } };
     let a = Script { start: vec![write("/out", bad)], ..Default::default() };
     let f = fixture("shape", &[("a", &a, "mount cons /out")], "");
-    assert_eq!(run(&f).unwrap(), "Text {\"text\": 5}\n");
-    let err = format!("{:#}", run_image(&f.image(), "", Options { check_shapes: true }).unwrap_err());
-    assert!(err.contains("`Text.text` should be string"), "{err}");
+    assert!(run_err(&f).contains("`Text.text` should be string"), "{}", run_err(&f));
+    assert_eq!(run_image(&f.image(), "", off.clone()).unwrap(), "Text {\"text\": 5}\n");
 
     let odd = Message { type_name: "Mystery".into(), fields: doc! {} };
     let a = Script { start: vec![write("/out", odd)], ..Default::default() };
     let f = fixture("undeclared", &[("a", &a, "mount cons /out")], "");
-    let err = format!("{:#}", run_image(&f.image(), "", Options { check_shapes: true }).unwrap_err());
-    assert!(err.contains("sent `Mystery`, which no header in the image declares"), "{err}");
+    assert!(run_err(&f).contains("sent `Mystery`, which no header in the image declares"), "{}", run_err(&f));
+    assert_eq!(run_image(&f.image(), "", off).unwrap(), "Mystery {}\n");
+}
+
+/// `a` asks `b` for things, and reports each answer.
+const NARROW_A: &str = "import { Text } from env
+    object A {
+      needs /out { / write Opaque }
+      needs /b { /greeting write Text -> Opaque*  /x read -> Opaque* }
+    }";
+
+#[test]
+fn requests_must_be_among_the_senders_needs() {
+    let a = Script {
+        start: vec![
+            call(Verb::Read, "/b/x"),
+            call(Verb::Read, "/b/elsewhere"),
+            call(Verb::Stat, "/b/x"),
+            Act::Call { verb: Verb::Write, path: "/b/greeting", body: Some(Message { type_name: "Ping".into(), fields: doc! {} }), expect: true },
+            Act::Call { verb: Verb::Write, path: "/b/greeting", body: Some(text("hi")), expect: true },
+        ],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
+    let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")];
+    let f = fixture_with("needs", &objects, "", &[("A", NARROW_A)]);
+    // The refusals are answered at once; b's answers take a round trip.
+    assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\ninvalid\nb served\nb served\n");
+    let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
+    assert_eq!(off, "b served\nb served\nb served\nb served\nb served\n", "with checks off, everything reaches b");
+}
+
+#[test]
+fn requests_must_be_among_what_the_server_serves() {
+    // a can only ask b for more than b serves by binding b somewhere that isn't checked against it.
+    let a_header = "import { Text } from env
+        object A {
+          needs /out { / write Opaque }
+          needs /b { /x read -> Text }
+          needs /raw/** { /** read -> Opaque, stat -> Opaque }
+        }";
+    let b_header = "import { Text } from env object B { serves { /x read -> Text } }";
+    let a = Script {
+        start: vec![
+            Act::Bind { src: "/b", at: "/raw", read_only: false },
+            call(Verb::Read, "/raw/x"),
+            call(Verb::Read, "/raw/y"),
+            call(Verb::Stat, "/raw/x"),
+        ],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
+    let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")];
+    let f = fixture_with("serves", &objects, "", &[("A", a_header), ("B", b_header)]);
+    assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\nb served\n", "b only sees what it serves");
+}
+
+#[test]
+fn answers_must_be_what_the_server_promised() {
+    // b promises `read` at /x answered with `answer`, and a needs just that.
+    fn fix(name: &str, b: &Script, answer: &str) -> Fixture {
+        let a = Script { start: vec![call(Verb::Read, "/b/x")], ..Default::default() };
+        let star = if answer.ends_with('*') { "*" } else { "" };
+        let a_header = format!("object A {{ needs /out {{ / write Opaque }}  needs /b {{ /x read -> Opaque{star} }} }}");
+        let b_header = format!("import {{ Data, Text }} from env object B {{ serves {{ /x read{answer} }} }}");
+        let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", b, "")];
+        fixture_with(name, &objects, "", &[("A", &a_header), ("B", &b_header)])
+    }
+
+    let b = Script { serve: Some(Steps::Each(vec![reply(text("x"))])), ..Default::default() };
+    let e = run_err(&fix("answer_type", &b, " -> Data"));
+    assert!(e.contains("instance `b` answered `read /x` with a `Text`, but its interface promises `Data`"), "{e}");
+    let e = run_err(&fix("answer_none", &b, ""));
+    assert!(e.contains("but its interface promises a status alone"), "{e}");
+    assert!(run(&fix("answer_any", &b, " -> Opaque")).is_ok());
+
+    let more = Act::Reply { status: Status::Ok, body: Some(text("1")), done: false };
+    let b = Script { serve: Some(Steps::Each(vec![more, reply(text("2"))])), ..Default::default() };
+    let e = run_err(&fix("answer_twice", &b, " -> Text"));
+    assert!(e.contains("answered `read /x` more than once, but its interface promises one answer"), "{e}");
+    assert!(run(&fix("answer_stream", &b, " -> Text*")).is_ok());
+
+    // A failure needs no body, whatever was promised.
+    let fail = Act::Reply { status: Status::NotFound, body: None, done: true };
+    let b = Script { serve: Some(Steps::Each(vec![fail])), ..Default::default() };
+    assert!(run(&fix("answer_fail", &b, " -> Data")).is_ok());
 }
 
 #[test]

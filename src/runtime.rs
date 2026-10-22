@@ -8,6 +8,13 @@
 //! Delivery is synchronous and single-threaded: one FIFO queue, drained
 //! completely before the next outside [`Event`] is taken.
 //!
+//! Unless checks are off, every object is held to its interface on the way:
+//! what it asks must be in its `needs`, what reaches it must be in its
+//! `serves`, its answers must be of the type its entry promises, and every
+//! body must be a declared type with exactly its fields. A request that
+//! doesn't fit is answered with a status and never arrives; an answer that
+//! doesn't fit, or a malformed body, is its sender's fault and stops the run.
+//!
 //! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`
 //! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
 //! module asks for is refused before it is instantiated.
@@ -15,6 +22,7 @@
 use crate::check::{Kind, Program};
 use crate::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
+use crate::iface::{self, Answer};
 use crate::messages::MessageType;
 use crate::ns::{self, Namespace, Resolved, Status, Verb};
 use crate::wire::Message;
@@ -41,8 +49,8 @@ impl Io {
 
 #[derive(Debug, Default, Clone)]
 pub struct Options {
-    /// Check every body's fields against its declaration in transit.
-    pub check_shapes: bool,
+    /// Don't hold objects to their interfaces, or bodies to their types.
+    pub no_checks: bool,
 }
 
 /// Every host function a module may import.
@@ -74,6 +82,14 @@ struct Pending {
     body: Option<Message>,
     /// The caller gave up; replies are dropped.
     cancelled: bool,
+    /// What the server's interface promises to answer, unless checks are off.
+    promise: Option<Promise>,
+}
+
+struct Promise {
+    /// The request, for errors: `read /hits`.
+    what: String,
+    answer: Option<Answer>,
 }
 
 enum Delivery {
@@ -88,7 +104,9 @@ struct Shared {
     names: Vec<String>,
     ns: Namespace,
     messages: BTreeMap<String, MessageType>,
-    check_shapes: bool,
+    /// Each instance's interface.
+    interfaces: Vec<iface::Object>,
+    checks: bool,
     queue: VecDeque<Delivery>,
     /// `(server, req)`.
     requests: HashMap<(usize, u32), Pending>,
@@ -99,16 +117,38 @@ struct Shared {
 }
 
 impl Shared {
-    /// Makes a request of wherever `to` resolved; failures to resolve are
-    /// answered straight away.
+    /// Where `path` in `inst`'s view leads, for a request `inst` makes:
+    /// nowhere if a read-only mount is in the way of an unsafe verb, or if
+    /// the request isn't one of `inst`'s needs.
+    fn resolve(&self, inst: usize, path: &str, verb: Verb, body: Option<&Message>) -> Result<Resolved, Status> {
+        let r = self.ns.resolve(inst, path)?;
+        if r.read_only && !verb.is_safe() {
+            return Err(Status::ReadOnly);
+        }
+        if self.checks {
+            let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NotFound)?;
+            let need = self.interfaces[inst].need(&at).ok_or(Status::NotFound)?;
+            let entry = need.entry(&rest).ok_or(Status::NotFound)?;
+            entry.takes(verb, body.map(|b| b.type_name.as_str()))?;
+        }
+        Ok(r)
+    }
+
+    /// Makes a request of wherever `to` resolved; failures to resolve, and
+    /// requests the server's interface doesn't take, are answered straight away.
     fn request(&mut self, caller: Requester, to: Result<Resolved, Status>, verb: Verb, body: Option<Message>) {
-        let to = match to {
-            Ok(r) if r.read_only && !verb.is_safe() => Err(Status::ReadOnly),
-            other => other,
-        };
         let r = match to {
             Ok(r) => r,
             Err(status) => return self.answer(&caller, status, None, true),
+        };
+        let promise = if self.checks {
+            let entry = self.interfaces[r.inst].serving(&r.path).ok_or(Status::NotFound);
+            match entry.and_then(|e| e.takes(verb, body.as_ref().map(|b| b.type_name.as_str()))) {
+                Ok(served) => Some(Promise { what: format!("{verb} {}", r.path), answer: served.answer.clone() }),
+                Err(status) => return self.answer(&caller, status, None, true),
+            }
+        } else {
+            None
         };
         self.next_req[r.inst] += 1;
         let req = self.next_req[r.inst];
@@ -117,7 +157,7 @@ impl Shared {
         {
             self.calls.insert((inst, ticket), (r.inst, req));
         }
-        self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false });
+        self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false, promise });
         self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, path: r.path, body });
     }
 
@@ -146,6 +186,9 @@ impl Shared {
         let Some(p) = self.requests.get(&(server, req)) else {
             bail!("instance `{}` replied to unknown request {req}", self.names[server]);
         };
+        if let Some(promise) = &p.promise {
+            keeps(&self.names[server], promise, body.as_ref(), done)?;
+        }
         let (caller, cancelled) = (p.caller.clone(), p.cancelled);
         if done {
             self.requests.remove(&(server, req));
@@ -164,7 +207,7 @@ impl Shared {
         if p.cancelled {
             return Ok(());
         }
-        let to = self.ns.resolve(server, path);
+        let to = self.resolve(server, path, p.verb, p.body.as_ref());
         self.request(p.caller, to, p.verb, p.body);
         Ok(())
     }
@@ -179,7 +222,7 @@ impl Shared {
     }
 
     fn check_shape(&self, from: usize, msg: &Message) -> Result<()> {
-        if !self.check_shapes {
+        if !self.checks {
             return Ok(());
         }
         let name = &self.names[from];
@@ -188,6 +231,24 @@ impl Shared {
         })?;
         msg.check_shape(ty).with_context(|| format!("instance `{name}` sent a malformed `{}`", msg.type_name))
     }
+}
+
+/// Whether an answer from `server` keeps what its interface promised.
+fn keeps(server: &str, promise: &Promise, body: Option<&Message>, done: bool) -> Result<()> {
+    let what = &promise.what;
+    match (&promise.answer, body) {
+        (None, Some(b)) => {
+            bail!("instance `{server}` answered `{what}` with a `{}`, but its interface promises a status alone", b.type_name)
+        }
+        (Some(a), Some(b)) if a.ty != iface::OPAQUE && a.ty != b.type_name => {
+            bail!("instance `{server}` answered `{what}` with a `{}`, but its interface promises `{}`", b.type_name, a.ty)
+        }
+        _ => {}
+    }
+    if !done && !promise.answer.as_ref().is_some_and(|a| a.stream) {
+        bail!("instance `{server}` answered `{what}` more than once, but its interface promises one answer");
+    }
+    Ok(())
 }
 
 struct HostState {
@@ -247,11 +308,17 @@ impl<'p> Runtime<'p> {
                 ns.mount(i, &m.at, m.target, m.read_only);
             }
         }
+        let interfaces = program
+            .instances
+            .iter()
+            .map(|i| program.interfaces.get(&i.type_name).cloned().ok_or_else(|| anyhow!("instance `{}` has no interface", i.name)))
+            .collect::<Result<_>>()?;
         let shared = Rc::new(RefCell::new(Shared {
             names: program.instances.iter().map(|i| i.name.clone()).collect(),
             ns,
             messages: program.messages.clone(),
-            check_shapes: options.check_shapes,
+            interfaces,
+            checks: !options.no_checks,
             queue: VecDeque::new(),
             requests: HashMap::new(),
             next_req: vec![0; n],
@@ -495,7 +562,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let to = match path {
                 _ if verb == Verb::Control => Err(Status::Forbidden),
                 None => Err(Status::Invalid),
-                Some(p) => shared.ns.resolve(me, &p),
+                Some(p) => shared.resolve(me, &p, verb, body.as_ref()),
             };
             shared.request(Requester::Wasm { inst: me, ticket }, to, verb, body);
             HostResult::Ok(ticket as i32)

@@ -3,7 +3,7 @@ use othismo::{bindings, iface, pack, runtime, slots};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: othismo [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
+const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot.field=value>]... <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
        othismo bindings [--library <path>] <header.iface> [-o <out.ts>]
@@ -13,7 +13,8 @@ An image is a .img source, which is built in memory, or a built .rti file.
 
   --check         validate the image, print each instance's view and what
                   it can reach at most, and exit without running it
-  --check-shapes  verify every message's fields against its declaration
+  --no-checks     don't hold objects to their interfaces while they run, or
+                  messages to their types
   --with          give slots values from a file: `listen { address: \"0.0.0.0:80\" }`
   --set           give one slot field a value, after any files; raw text for
                   a string, a literal otherwise
@@ -141,7 +142,7 @@ fn run(args: &[String]) -> Result<Result<()>, Usage> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--check" => check_only = true,
-            "--check-shapes" => options.check_shapes = true,
+            "--no-checks" => options.no_checks = true,
             "--with" => files.push(PathBuf::from(args.next().ok_or(Usage)?)),
             "--set" => sets.push(args.next().ok_or(Usage)?),
             _ if arg.starts_with('-') || image.is_some() => return Err(Usage),
