@@ -12,7 +12,7 @@ instance of a module, declared in an image:
 
 ```text
 instance site : StaticSite {
-  mount files /files readonly
+  mount /files files readonly
 }
 ```
 

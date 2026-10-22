@@ -2,7 +2,7 @@
 # console, at /dev/cons.
 
 instance echo : Echo {
-  mount cons /dev/cons
+  mount /dev/cons cons
 }
 
 instance cons : Environment.Console

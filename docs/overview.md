@@ -115,14 +115,14 @@ This one, slightly trimmed, serves this site:
 require listen : Listen { address: "127.0.0.1:8080" }
 
 instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
+  mount /net/tcp net
+  mount /www site
+  mount /dev/cons cons
   control /hosts/* Text { text: "/www" }
 }
 
 instance site : StaticSite {
-  mount files /files readonly
+  mount /files files readonly
 }
 
 # creates a socket, configured to listen to localhost on port 8080 by default

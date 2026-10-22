@@ -248,7 +248,7 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
         if *w != "mount" {
             continue;
         }
-        let (target, at) = (words[i + 1], words[i + 2]);
+        let (at, target) = (words[i + 1], words[i + 2]);
         let ro = words.get(i + 3) == Some(&"readonly");
         let entries: Vec<String> = match env.object(&types[target]) {
             None => vec![anything(ro)],
@@ -318,7 +318,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount cons /out  invoke / Ping  invoke /again Ping")], "");
+    let f = fixture("startup", &[("a", &a, "mount /out cons  invoke / Ping  invoke /again Ping")], "");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -330,7 +330,7 @@ fn paths_outside_the_view_are_not_found() {
         ..Default::default()
     };
     let b = Script { start: vec![write("/out", text("b has no view"))], ..Default::default() };
-    let f = fixture("unseen", &[("a", &a, "mount cons /out"), ("b", &b, "")], "");
+    let f = fixture("unseen", &[("a", &a, "mount /out cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "not_found\ninvalid\nnot_supported\n");
 }
 
@@ -345,7 +345,7 @@ fn read_only_mounts_refuse_unsafe_verbs() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("readonly", &[("a", &a, "mount b /b readonly  mount cons /out"), ("b", &b, "mount cons /out")], "");
+    let f = fixture("readonly", &[("a", &a, "mount /b b readonly  mount /out cons"), ("b", &b, "mount /out cons")], "");
     assert_eq!(run(&f).unwrap(), "read_only\nb served\nok\n", "b never sees the write");
 }
 
@@ -360,7 +360,7 @@ fn only_the_image_controls() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("control", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "mount cons /out  control /y Ping")], "");
+    let f = fixture("control", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons  control /y Ping")], "");
     assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's control, never a's");
 }
 
@@ -376,7 +376,7 @@ fn replies_stream_until_done() {
         serve: Some(Steps::Each(vec![more("1"), more("2"), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("stream", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")], "");
+    let f = fixture("stream", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "ok (more)\nok (more)\nok\n");
 }
 
@@ -392,7 +392,7 @@ fn forward_hands_the_request_on_in_the_servers_view() {
         ..Default::default()
     };
     let c = Script { serve: Some(Steps::Each(vec![reply(text("from c"))])), ..Default::default() };
-    let f = fixture("forward", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "mount c /c"), ("c", &c, "")], "");
+    let f = fixture("forward", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /c c"), ("c", &c, "")], "");
     // The failed forward is answered at once; c's answer takes a round trip.
     assert_eq!(run(&f).unwrap(), "not_found\nfrom c\n");
 }
@@ -417,7 +417,7 @@ fn exposures_route_past_the_server() {
     };
     let f = fixture(
         "expose",
-        &[("b", &b, "mount c /c  mount cons /out"), ("c", &c, ""), ("a", &a, "mount b /b  mount cons /out")],
+        &[("b", &b, "mount /c c  mount /out cons"), ("c", &c, ""), ("a", &a, "mount /b b  mount /out cons")],
         "",
     );
     // b's expose reports Ok; the refused write is answered before the reads come back.
@@ -443,7 +443,7 @@ fn bind_and_unmount_rearrange_only_the_own_view() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("from b"))])), ..Default::default() };
-    let f = fixture("bind", &[("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")], "");
+    let f = fixture("bind", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "ok\nnot_found\nok\nnot_found\nnot_found\nfrom b\n");
 }
 
@@ -454,7 +454,7 @@ fn console_lines_stream_to_watchers() {
         answer: Some(Steps::Each(vec![Act::Echo("/cons")])),
         ..Default::default()
     };
-    let f = fixture("cat", &[("a", &a, "mount cons /cons")], "");
+    let f = fixture("cat", &[("a", &a, "mount /cons cons")], "");
     // The end of the stream has no body; echoing it is a Write without one, which Console refuses.
     assert_eq!(run_image(&f.image(), "a\r\nb\n\nc", Options::default()).unwrap(), "a\nb\n\nc\n");
 }
@@ -466,7 +466,7 @@ fn cancel_stops_a_stream() {
         answer: Some(Steps::Nth(vec![vec![Act::Echo("/cons"), Act::Cancel]])),
         ..Default::default()
     };
-    let f = fixture("cancel", &[("a", &a, "mount cons /cons")], "");
+    let f = fixture("cancel", &[("a", &a, "mount /cons cons")], "");
     assert_eq!(run_image(&f.image(), "a\nb\nc\n", Options::default()).unwrap(), "a\n");
 }
 
@@ -500,7 +500,7 @@ const FILES_OUTPUT: &str = "not_supported\n\
 #[test]
 fn files_read_stat_and_list() {
     let files = "instance files : Environment.Files { control / FilesRoot { path: \"public\" } }";
-    let f = fixture("files", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
+    let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
     assert_eq!(run(&f).unwrap(), FILES_OUTPUT);
@@ -509,7 +509,7 @@ fn files_read_stat_and_list() {
 #[test]
 fn packed_files_answer_like_files() {
     let files = "instance files : Packed.Files { include \"public/\" }";
-    let f = fixture("packed", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
+    let f = fixture("packed", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
     let pack = othismo::pack::load(&f.image()).unwrap();
@@ -534,13 +534,13 @@ fn bodies_must_be_declared_types_unless_checks_are_off() {
     let off = Options { no_checks: true };
     let bad = Message { type_name: "Text".into(), fields: doc! { "text": 5 } };
     let a = Script { start: vec![write("/out", bad)], ..Default::default() };
-    let f = fixture("shape", &[("a", &a, "mount cons /out")], "");
+    let f = fixture("shape", &[("a", &a, "mount /out cons")], "");
     assert!(run_err(&f).contains("`Text.text` should be string"), "{}", run_err(&f));
     assert_eq!(run_image(&f.image(), "", off.clone()).unwrap(), "Text {\"text\": 5}\n");
 
     let odd = Message { type_name: "Mystery".into(), fields: doc! {} };
     let a = Script { start: vec![write("/out", odd)], ..Default::default() };
-    let f = fixture("undeclared", &[("a", &a, "mount cons /out")], "");
+    let f = fixture("undeclared", &[("a", &a, "mount /out cons")], "");
     assert!(run_err(&f).contains("sent `Mystery`, which no header in the image declares"), "{}", run_err(&f));
     assert_eq!(run_image(&f.image(), "", off).unwrap(), "Mystery {}\n");
 }
@@ -566,7 +566,7 @@ fn requests_must_be_among_the_senders_needs() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
-    let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")];
+    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")];
     let f = fixture_with("needs", &objects, "", &[("A", NARROW_A)]);
     // The refusals are answered at once; b's answers take a round trip.
     assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\ninvalid\nb served\nb served\n");
@@ -595,7 +595,7 @@ fn requests_must_be_among_what_the_server_serves() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
-    let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", &b, "")];
+    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")];
     let f = fixture_with("serves", &objects, "", &[("A", a_header), ("B", b_header)]);
     assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\nb served\n", "b only sees what it serves");
 }
@@ -608,7 +608,7 @@ fn answers_must_be_what_the_server_promised() {
         let star = if answer.ends_with('*') { "*" } else { "" };
         let a_header = format!("object A {{ needs /out {{ / write Opaque }}  needs /b {{ /x read -> Opaque{star} }} }}");
         let b_header = format!("import {{ Data, Text }} from env object B {{ serves {{ /x read{answer} }} }}");
-        let objects = [("a", &a, "mount b /b  mount cons /out"), ("b", b, "")];
+        let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", b, "")];
         fixture_with(name, &objects, "", &[("A", &a_header), ("B", &b_header)])
     }
 

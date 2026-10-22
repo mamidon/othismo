@@ -4,13 +4,13 @@
 import { Greeting } from Greeter
 
 instance greeter : Greeter {
-  mount cons /dev/cons
-  mount shouter /shouter
+  mount /dev/cons cons
+  mount /shouter shouter
   write /greeting Greeting { prefix: "Hello, ", excited: true }
 }
 
 instance shouter : Shouter {
-  mount cons /dev/cons
+  mount /dev/cons cons
 }
 
 instance cons : Environment.Console

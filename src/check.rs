@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn accepts_hello_world() {
-        let p = check_src(&format!("{HEADER} instance echo : Echo {{ mount cons /dev/cons }}")).unwrap();
+        let p = check_src(&format!("{HEADER} instance echo : Echo {{ mount /dev/cons cons }}")).unwrap();
         assert_eq!(p.instances.len(), 2);
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
@@ -665,15 +665,15 @@ mod tests {
 
     #[test]
     fn mounts_are_checked() {
-        assert!(err(&format!("{HEADER} instance a : A {{ mount ghost /g }}")).contains("unknown instance `ghost`"));
-        let e = err(&format!("{HEADER} instance a : A {{ mount cons /x/../y }}"));
+        assert!(err(&format!("{HEADER} instance a : A {{ mount /g ghost }}")).contains("unknown instance `ghost`"));
+        let e = err(&format!("{HEADER} instance a : A {{ mount /x/../y cons }}"));
         assert!(e.contains("`/x/../y` is not a clean absolute path"), "{e}");
-        let e = err(&format!("{HEADER} instance a : A {{ mount cons /c mount cons /c/ }}"));
+        let e = err(&format!("{HEADER} instance a : A {{ mount /c cons mount /c/ cons }}"));
         assert!(e.contains("`/c` is already mounted"), "{e}");
-        let e = err(&format!("{HEADER} instance net : Environment.Console {{ mount cons /c }}"));
+        let e = err(&format!("{HEADER} instance net : Environment.Console {{ mount /c cons }}"));
         assert!(e.contains("only serves"), "{e}");
         // Forward references are fine: views are built once every instance exists.
-        let p = check_src(&format!("{HEADER} instance a : A {{ mount b /b readonly }} instance b : B")).unwrap();
+        let p = check_src(&format!("{HEADER} instance a : A {{ mount /b b readonly }} instance b : B")).unwrap();
         assert_eq!(p.instances[1].mounts[0], MountDecl { at: "/b".into(), target: 2, read_only: true });
     }
 
@@ -739,7 +739,7 @@ mod tests {
     fn packed_files_take_includes_and_nothing_else() {
         let p = check_src(
             r#"instance files : Packed.Files { include "public/" include "a.txt" at /b//c/ }
-            instance site : Site { mount files /files }"#,
+            instance site : Site { mount /files files }"#,
         )
         .unwrap();
         let want = [
@@ -754,7 +754,7 @@ mod tests {
         assert!(e.contains("not a clean absolute path"), "{e}");
         let e = err(r#"instance f : Packed.Files { control / FilesRoot { path: "." } }"#);
         assert!(e.contains("takes no config"), "{e}");
-        let e = err(r#"instance a : A instance f : Packed.Files { mount a /a }"#);
+        let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
         assert!(e.contains("only serves"), "{e}");
         let e = err(r#"instance f : Packed.Dirs"#);
         assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Environment.Console, Environment.Tcp, Environment.Files, Packed.Files)"), "{e}");
@@ -867,14 +867,14 @@ mod tests {
     fn mounts_must_provide_what_is_needed_there() {
         let echo = "import { Line } from env object Echo { needs /dev/cons { / watch -> Line*, write Line } }";
         let modules = [("Echo", echo)];
-        assert!(check_with(&format!("{HEADER} instance e : Echo {{ mount cons /dev/cons }}"), &modules).is_ok());
+        assert!(check_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons }}"), &modules).is_ok());
 
         let e = err_with(&format!("{HEADER} instance e : Echo"), &modules);
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
-        let e = err_with(&format!("{HEADER} instance e : Echo {{ mount cons /dev/cons readonly }}"), &modules);
+        let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write Line` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
         let files = r#"instance f : Environment.Files { control / FilesRoot { path: "." } }"#;
-        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount f /dev/cons }}"), &modules);
+        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
         assert!(e.contains("`e` needs `/ watch -> Line*` at `/dev/cons`, and `f` serves `/ control FilesRoot, read -> Data, stat -> Info, list -> Entry*`, `/** read -> Data, stat -> Info, list -> Entry*`"), "{e}");
     }
 
@@ -893,11 +893,11 @@ mod tests {
         let strict = "import { Data } from env object Strict { needs /** { /** read -> Data } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
         let net = r#"instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }"#;
-        let img = format!("{net} instance site : Site instance http : Http {{ mount net /net/tcp  mount site /www  mount site /other }}");
+        let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
         // /hits answers a read with Text, where Strict needs Data everywhere.
-        let e = err_with("instance site : Site instance s : Strict { mount site /www }", &modules);
+        let e = err_with("instance site : Site instance s : Strict { mount /www site }", &modules);
         assert!(e.contains("`s` needs `/** read -> Data` at `/www`, and `site` serves `/hits read -> Text`"), "{e}");
     }
 
@@ -906,8 +906,8 @@ mod tests {
         let p = check_src(
             r#"instance cons : Environment.Console
             instance files : Environment.Files { control / FilesRoot { path: "." } }
-            instance site : Site { mount files /files readonly }
-            instance http : Http { mount site /www  mount cons /dev/cons }"#,
+            instance site : Site { mount /files files readonly }
+            instance http : Http { mount /www site  mount /dev/cons cons }"#,
         )
         .unwrap();
         assert_eq!(

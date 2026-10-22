@@ -60,7 +60,7 @@ The header is what you review; the runtime holds the code to it.</p>
 <code>StaticSite</code> is <code>scripts/StaticSite.wasm</code>. An <strong>object</strong> is one running
 instance of a module, declared in an image:</p>
 <pre><code class="language-text">instance site : StaticSite {
-  mount files /files readonly
+  mount /files files readonly
 }
 </code></pre>
 <p>Two instances of the same type share code and nothing else. Each has its own

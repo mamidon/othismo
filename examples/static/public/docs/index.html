@@ -351,14 +351,14 @@ described in <a href="/images/">Building images</a>:</p>
 <pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
 
 instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
+  mount /net/tcp net
+  mount /www site
+  mount /dev/cons cons
   control /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
 }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
-  mount files /files readonly
+  mount /files files readonly
 }
 
 instance net   : Environment.Tcp { control / listen }
@@ -366,7 +366,7 @@ instance cons  : Environment.Console
 instance files : Packed.Files    { include &quot;./public/&quot; }
 </code></pre>
 <ul>
-<li><code>mount &lt;instance&gt; &lt;path&gt; [readonly]</code> puts that instance&#39;s whole served tree
+<li><code>mount &lt;path&gt; &lt;instance&gt; [readonly]</code> puts that instance&#39;s whole served tree
 at <code>&lt;path&gt;</code> in this instance&#39;s view. Instances can be declared in any
 order, so an image can start from the instance at the top of the
 namespace and work down.</li>

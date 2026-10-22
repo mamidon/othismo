@@ -252,14 +252,14 @@ described in [Building images](images.md):
 require listen : Listen { address: "127.0.0.1:8080" }   # the host may change it
 
 instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
+  mount /net/tcp net
+  mount /www site
+  mount /dev/cons cons
   control /hosts/localhost Text { text: "/www" }   # a startup request to http itself
 }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
-  mount files /files readonly
+  mount /files files readonly
 }
 
 instance net   : Environment.Tcp { control / listen }
@@ -267,7 +267,7 @@ instance cons  : Environment.Console
 instance files : Packed.Files    { include "./public/" }
 ```
 
-- `mount <instance> <path> [readonly]` puts that instance's whole served tree
+- `mount <path> <instance> [readonly]` puts that instance's whole served tree
   at `<path>` in this instance's view. Instances can be declared in any
   order, so an image can start from the instance at the top of the
   namespace and work down.

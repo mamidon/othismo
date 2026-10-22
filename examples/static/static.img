@@ -7,16 +7,16 @@ require listen : Listen { address: "127.0.0.1:8080" }
 
 # HTTP in, namespace requests out. It reaches the files only through the site.
 instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
+  mount /net/tcp net
+  mount /www site
+  mount /dev/cons cons
   control /hosts/* Text { text: "/www" }
   control /hosts/files.localhost Text { text: "/www/static" }
 }
 
 # The site can read the files and nothing else.
 instance site : StaticSite {
-  mount files /files readonly
+  mount /files files readonly
 }
 
 instance net   : Environment.Tcp     { control / listen }

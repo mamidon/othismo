@@ -25,9 +25,9 @@ fn fixture(name: &str) -> Fixture {
             "test.img",
             r#"import { Ping } from "./messages.iface"
             instance cons : Environment.Console
-            instance a : A { mount cons /dev/cons  invoke / Ping }
-            instance b : B { mount a /a readonly }
-            instance a2 : A { mount cons /dev/cons }"#,
+            instance a : A { mount /dev/cons cons  invoke / Ping }
+            instance b : B { mount /a a readonly }
+            instance a2 : A { mount /dev/cons cons }"#,
         );
     f
 }

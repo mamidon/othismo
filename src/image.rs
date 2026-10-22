@@ -77,11 +77,11 @@ pub struct Instance {
     pub includes: Vec<Include>,
 }
 
-/// `mount <instance> <path> [readonly]`
+/// `mount <path> <instance> [readonly]`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mount {
-    pub target: Ident,
     pub at: Path,
+    pub target: Ident,
     pub read_only: bool,
 }
 
@@ -438,13 +438,7 @@ impl Parser {
                 other => bail!("{pos}: expected `mount`, `include`, a verb or `}}`, found {other}"),
             };
             if word == "mount" {
-                let target = self.ident("instance name", false)?;
-                let at = self.path()?;
-                let read_only = self.is_kw("readonly");
-                if read_only {
-                    self.next();
-                }
-                inst.mounts.push(Mount { target, at, read_only });
+                inst.mounts.push(self.mount()?);
             } else if word == "include" {
                 let source = match self.next() {
                     (Tok::Str(s), _) => s,
@@ -470,6 +464,20 @@ impl Parser {
                 bail!("{pos}: expected `mount`, `include`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
             }
         }
+    }
+
+    /// What follows `mount`: `<path> <instance> [readonly]`.
+    fn mount(&mut self) -> Result<Mount> {
+        if let (Tok::Ident(target), Some((Tok::Path(at), _))) = (self.peek(), self.toks.get(self.i + 1)) {
+            bail!("{}: the mount point comes first: `mount {at} {target}`", self.pos());
+        }
+        let at = self.path()?;
+        let target = self.ident("instance name", false)?;
+        let read_only = self.is_kw("readonly");
+        if read_only {
+            self.next();
+        }
+        Ok(Mount { at, target, read_only })
     }
 
     fn body(&mut self) -> Result<Body> {
@@ -556,8 +564,8 @@ mod tests {
             instance cons : Environment.Console
             instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }
             instance echo : Echo {
-              mount cons /dev/cons
-              mount net /net/tcp readonly
+              mount /dev/cons cons
+              mount /net/tcp net readonly
               write /greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
               invoke / Ping
               remove /old
@@ -677,7 +685,7 @@ mod tests {
 
     #[test]
     fn comments_are_not_paths() {
-        let img = parse("instance a : A { mount b / # the root\n mount c /c#d }").unwrap();
+        let img = parse("instance a : A { mount / b # the root\n mount /c#d c }").unwrap();
         let ats: Vec<&str> = img.instances[0].mounts.iter().map(|m| m.at.path.as_str()).collect();
         assert_eq!(ats, ["/", "/c#d"], "`#` only starts a comment at the start of a token");
     }
@@ -686,6 +694,8 @@ mod tests {
     fn rejects_malformed_members() {
         let e = parse("instance a : A { mount b }").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
+        let e = parse("instance a : A { mount b /b }").unwrap_err().to_string();
+        assert!(e.contains("the mount point comes first: `mount /b b`"), "{e}");
         let e = parse("instance a : A { write hosts }").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
         let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
@@ -702,7 +712,7 @@ mod tests {
 
     #[test]
     fn reports_position() {
-        let err = parse("instance a : A {\n  mount b /b\n  bogus\n}").unwrap_err();
+        let err = parse("instance a : A {\n  mount /b b\n  bogus\n}").unwrap_err();
         assert!(err.to_string().starts_with("3:3:"), "{err}");
     }
 
