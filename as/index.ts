@@ -1,6 +1,6 @@
-// The AssemblyScript side of the real_talk runtime: message classes and
+// The AssemblyScript side of the othismo runtime: message classes and
 // their wire format. The namespace SDK (requests, replies, mounts) is in
-// "real-talk/ns", and the runtime's own message types are in "real-talk/env".
+// "othismo/ns", and the runtime's own message types are in "othismo/env".
 //
 // Wire format (see src/wire.rs): one BSON document per message whose first
 // key is `$type` (the class name), followed by the class's fields.

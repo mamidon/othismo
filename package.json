@@ -1,9 +1,9 @@
 {
-  "name": "real-talk-workspace",
+  "name": "othismo-workspace",
   "private": true,
   "devDependencies": {
     "assemblyscript": "0.28.20",
     "marked": "14.1.4",
-    "real-talk": "file:./as"
+    "othismo": "file:./as"
   }
 }

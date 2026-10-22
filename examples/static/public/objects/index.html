@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Objects — Objects — real_talk</title>
+  <title>Objects — Objects — othismo</title>
   <meta name="description" content="Objects: the sandboxed modules you don't read, and the interfaces you do.">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -197,7 +197,7 @@ sentence is the summary. A plain <code>#</code> comment is just a comment.</li>
 own <code>##</code> comment is the guide. Small objects need only the comment; large
 ones keep a paragraph there and the rest in Markdown.</li>
 </ul>
-<p><code>real_talk doc</code> prints a module&#39;s guide followed by a reference generated from
+<p><code>othismo doc</code> prints a module&#39;s guide followed by a reference generated from
 its declarations, and the project&#39;s reference pages are built the same way.</p>
 <h3 id="built-in-objects">Built-in objects</h3>
 <p>Console, Tcp, Files and <code>Packed.Files</code> have headers like any other object,
@@ -281,10 +281,10 @@ and has a bindings generator can be used. A Rust module would generate its
 bindings from the same header.</p>
 <p>The library has three parts:</p>
 <ul>
-<li><code>real-talk</code>: messages and their encoding.</li>
-<li><code>real-talk/ns</code>: <code>Server</code>, with <code>serve</code> and <code>start</code> to override, <code>Request</code>
+<li><code>othismo</code>: messages and their encoding.</li>
+<li><code>othismo/ns</code>: <code>Server</code>, with <code>serve</code> and <code>start</code> to override, <code>Request</code>
 and <code>Response</code>, and <code>ns</code>, which makes requests and rearranges the view.</li>
-<li><code>real-talk/env</code>: the runtime&#39;s message types, generated from <code>env</code>&#39;s
+<li><code>othismo/env</code>: the runtime&#39;s message types, generated from <code>env</code>&#39;s
 header.</li>
 </ul>
 <p>Some of its shape comes from AssemblyScript&#39;s limits. There are no closures
@@ -319,7 +319,7 @@ checked only with <code>--check-shapes</code>.</p>
   <footer>
     <div class="wrap">
       <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
-      <small>real_talk &middot; served by real_talk</small>
+      <small>othismo &middot; served by othismo</small>
     </div>
   </footer>
 </body>

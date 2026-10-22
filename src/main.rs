@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use real_talk::{pack, runtime, slots};
+use othismo::{pack, runtime, slots};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: real_talk [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
-       real_talk build [-v] [--no-sources] <image.img> -o <out.rti>
-       real_talk unpack <image> <dir>
+const USAGE: &str = "usage: othismo [run] [--check] [--check-shapes] [--with <file>]... [--set <slot.field=value>]... <image>
+       othismo build [-v] [--no-sources] <image.img> -o <out.rti>
+       othismo unpack <image> <dir>
 
 An image is a .img source, which is built in memory, or a built .rti file.
 

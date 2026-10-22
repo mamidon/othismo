@@ -1,7 +1,7 @@
 {
-  "name": "real-talk",
+  "name": "othismo",
   "version": "0.1.0",
-  "description": "AssemblyScript side of the real_talk image runtime: messages, BSON and the namespace SDK",
+  "description": "AssemblyScript side of the othismo image runtime: messages, BSON and the namespace SDK",
   "types": "index.ts",
   "ascMain": "index.ts"
 }

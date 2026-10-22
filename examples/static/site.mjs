@@ -118,7 +118,7 @@ function page(p, doc) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escape(plainTitle)} — ${p.eyebrow} — real_talk</title>
+  <title>${escape(plainTitle)} — ${p.eyebrow} — othismo</title>
   <meta name="description" content="${escape(p.description)}">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -166,7 +166,7 @@ ${doc.body}
   <footer>
     <div class="wrap">
       <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
-      <small>real_talk &middot; served by real_talk</small>
+      <small>othismo &middot; served by othismo</small>
     </div>
   </footer>
 </body>

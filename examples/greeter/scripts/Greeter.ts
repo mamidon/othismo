@@ -1,5 +1,5 @@
-import { Line } from "real-talk/env"
-import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "real-talk/ns"
+import { Line } from "othismo/env"
+import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
 import { Greeting, Stats } from "../messages"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }

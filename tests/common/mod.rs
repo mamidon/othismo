@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use real_talk::runtime::{self, Io, Options};
+use othismo::runtime::{self, Io, Options};
 use std::cell::RefCell;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -28,8 +28,8 @@ impl Write for Captured {
 
 /// Loads `image` and runs it with `input` as stdin; returns what it printed.
 pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<String> {
-    let mut pack = real_talk::pack::load(image)?;
-    real_talk::slots::bind(&mut pack.program, &[])?;
+    let mut pack = othismo::pack::load(image)?;
+    othismo::slots::bind(&mut pack.program, &[])?;
     let out = Captured::default();
     let io = Io { input: Box::new(Cursor::new(input.as_bytes().to_vec())), output: Box::new(out.clone()) };
     runtime::run(&pack, io, options)?;
@@ -43,7 +43,7 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn new(name: &str) -> Fixture {
-        let dir = std::env::temp_dir().join(format!("real_talk_{name}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("othismo_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("scripts")).unwrap();
         Fixture { dir }

@@ -4,7 +4,7 @@
 mod common;
 
 use common::run_image;
-use real_talk::runtime::Options;
+use othismo::runtime::Options;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -22,7 +22,7 @@ fn example(rel: &str) -> PathBuf {
 
 #[test]
 fn hello_world_echoes_lines_through_the_binary() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_real_talk"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_othismo"))
         .arg(example("hello/hello.img"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -57,11 +57,11 @@ fn greeter_uses_a_startup_request_and_a_second_object() {
 
 #[test]
 fn a_built_image_runs_without_its_sources() {
-    let dir = std::env::temp_dir().join(format!("real_talk_built_hello_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("othismo_built_hello_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let rti = dir.join("hello.rti");
-    let bin = env!("CARGO_BIN_EXE_real_talk");
+    let bin = env!("CARGO_BIN_EXE_othismo");
     let built = Command::new(bin).arg("build").arg(example("hello/hello.img")).arg("-o").arg(&rti).output().unwrap();
     assert!(built.status.success(), "stderr: {}", String::from_utf8_lossy(&built.stderr));
 

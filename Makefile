@@ -25,7 +25,7 @@ static: wasm
 	cargo run -- examples/static/static.img
 
 # The static example sealed into one file, modules and site included. It is
-# rebuilt when real_talk changes too, since the file format may have.
+# rebuilt when othismo changes too, since the file format may have.
 examples/static/static.rti: examples/static/static.img $(WASM) $(shell find examples/static/public -type f) $(wildcard src/*.rs) Cargo.toml
 	cargo run -- build $< -o $@
 

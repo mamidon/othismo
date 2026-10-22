@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Namespaces — Design — real_talk</title>
+  <title>Namespaces — Design — othismo</title>
   <meta name="description" content="The namespace design: views, verbs, the AssemblyScript SDK, environment objects and the host ABI.">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -193,8 +193,8 @@ the last. <code>list</code> and <code>watch</code> use this, as does accepting c
 is no other streaming or subscription mechanism.</p>
 <h2 id="the-assemblyscript-sdk">The AssemblyScript SDK</h2>
 <p>Message classes, <code>Writer</code>, <code>Reader</code> and <code>registerMessage</code> stay in
-<code>&quot;real-talk&quot;</code>. The namespace SDK is <code>&quot;real-talk/ns&quot;</code>. The conventional message
-types are in <code>&quot;real-talk/env&quot;</code>.</p>
+<code>&quot;othismo&quot;</code>. The namespace SDK is <code>&quot;othismo/ns&quot;</code>. The conventional message
+types are in <code>&quot;othismo/env&quot;</code>.</p>
 <pre><code class="language-ts">export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
 export function isSafe(v: Verb): bool
 
@@ -278,9 +278,9 @@ whatever <code>source</code> named at that moment. Unmounting <code>source</code
 affect it, as with Plan 9&#39;s <code>bind</code>.</li>
 </ul>
 <h3 id="example-a-site-controller">Example: a site controller</h3>
-<pre><code class="language-ts">import { Message } from &quot;real-talk&quot;
-import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from &quot;real-talk/ns&quot;
-import { Data } from &quot;real-talk/env&quot;
+<pre><code class="language-ts">import { Message } from &quot;othismo&quot;
+import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from &quot;othismo/ns&quot;
+import { Data } from &quot;othismo/env&quot;
 
 class Site extends Server {
   hits: u64 = 0
@@ -377,14 +377,14 @@ place an image sends it. An environment object&#39;s config is a <code>control /
 with its config message; objects can&#39;t send <code>control</code> themselves.</li>
 <li>The conventional message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
 <code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope. Importing them from
-<code>&quot;real-talk/env&quot;</code> is allowed but not needed. An import may redeclare one
+<code>&quot;othismo/env&quot;</code> is allowed but not needed. An import may redeclare one
 of them only with exactly the same fields.</li>
 </ul>
 <h3 id="what-the-checker-can-promise">What the checker can promise</h3>
 <p>An instance can only bind what it can see and only expose what it can see.
 So the set of instances it can ever reach is bounded by the transitive closure
 of the image&#39;s mount edges, which can be computed without running anything.
-Read-only flags carry through the closure. <code>real_talk --check</code> prints it:</p>
+Read-only flags carry through the closure. <code>othismo --check</code> prints it:</p>
 <pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
 
 net    listens on 127.0.0.1:8080
@@ -411,7 +411,7 @@ Module top-level code runs. It may already make requests, which are queued.</li>
 <h2 id="the-host-abi">The host ABI</h2>
 <p>The path, verb, status and ticket travel as arguments. Only bodies are BSON,
 as before.</p>
-<p>Imports (module <code>real_talk</code>), plus <code>env.abort</code>:</p>
+<p>Imports (module <code>othismo</code>), plus <code>env.abort</code>:</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -495,7 +495,7 @@ request, and replies to a call made with <code>expect</code> 0, are dropped.</p>
   <footer>
     <div class="wrap">
       <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
-      <small>real_talk &middot; served by real_talk</small>
+      <small>othismo &middot; served by othismo</small>
     </div>
   </footer>
 </body>

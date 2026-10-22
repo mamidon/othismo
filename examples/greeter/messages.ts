@@ -1,4 +1,4 @@
-import { Message, Reader, Writer, registerMessage } from "real-talk"
+import { Message, Reader, Writer, registerMessage } from "othismo"
 
 /** Configures a Greeter; sent once at startup by the image. */
 export class Greeting extends Message {

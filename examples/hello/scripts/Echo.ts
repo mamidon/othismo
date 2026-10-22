@@ -1,5 +1,5 @@
-import { Line } from "real-talk/env"
-import { Response, Server, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "real-talk/ns"
+import { Line } from "othismo/env"
+import { Response, Server, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
 import { Echoed } from "../messages"
 
 // The host's entry points into this module.

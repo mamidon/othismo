@@ -3,9 +3,9 @@
 mod common;
 
 use common::Fixture;
-use real_talk::pack::{self, BuildOptions, Pack};
-use real_talk::slots::{self, Given, GivenValue};
-use real_talk::tree::Node;
+use othismo::pack::{self, BuildOptions, Pack};
+use othismo::slots::{self, Given, GivenValue};
+use othismo::tree::Node;
 
 /// Modules aren't run here, so any bytes do.
 fn fixture(name: &str) -> Fixture {
@@ -71,7 +71,7 @@ fn corrupt_and_truncated_files_are_refused() {
     let mut old = sealed.clone();
     old[7] = 1;
     let e = err(&old);
-    assert!(e.contains("built by another version of real_talk (format 1, and this one reads 2); rebuild it"), "{e}");
+    assert!(e.contains("built by another version of othismo (format 1, and this one reads 2); rebuild it"), "{e}");
     assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
 }
 
@@ -269,7 +269,7 @@ fn the_cli_layers_value_files_then_set() {
     .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");
     let check = |extra: &[&str]| {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_real_talk"))
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_othismo"))
             .current_dir(&f.dir)
             .arg("--check")
             .args(extra)

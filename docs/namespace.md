@@ -99,8 +99,8 @@ is no other streaming or subscription mechanism.
 ## The AssemblyScript SDK
 
 Message classes, `Writer`, `Reader` and `registerMessage` stay in
-`"real-talk"`. The namespace SDK is `"real-talk/ns"`. The conventional message
-types are in `"real-talk/env"`.
+`"othismo"`. The namespace SDK is `"othismo/ns"`. The conventional message
+types are in `"othismo/env"`.
 
 ```ts
 export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
@@ -189,9 +189,9 @@ Some details of this API:
 ### Example: a site controller
 
 ```ts
-import { Message } from "real-talk"
-import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from "real-talk/ns"
-import { Data } from "real-talk/env"
+import { Message } from "othismo"
+import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from "othismo/ns"
+import { Data } from "othismo/env"
 
 class Site extends Server {
   hits: u64 = 0
@@ -279,7 +279,7 @@ instance http : HttpServer {
   with its config message; objects can't send `control` themselves.
 - The conventional message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
   `Accepted`, `Listen`, `FilesRoot`) are always in scope. Importing them from
-  `"real-talk/env"` is allowed but not needed. An import may redeclare one
+  `"othismo/env"` is allowed but not needed. An import may redeclare one
   of them only with exactly the same fields.
 
 ### What the checker can promise
@@ -287,7 +287,7 @@ instance http : HttpServer {
 An instance can only bind what it can see and only expose what it can see.
 So the set of instances it can ever reach is bounded by the transitive closure
 of the image's mount edges, which can be computed without running anything.
-Read-only flags carry through the closure. `real_talk --check` prints it:
+Read-only flags carry through the closure. `othismo --check` prints it:
 
 ```text
 slot listen : Listen { address: "127.0.0.1:8080" (default) }
@@ -321,7 +321,7 @@ The run ends when the queue is empty and no outside event can arrive any more.
 The path, verb, status and ticket travel as arguments. Only bodies are BSON,
 as before.
 
-Imports (module `real_talk`), plus `env.abort`:
+Imports (module `othismo`), plus `env.abort`:
 
 | Import | Meaning |
 |---|---|

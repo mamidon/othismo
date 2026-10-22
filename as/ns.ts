@@ -15,31 +15,31 @@ import { Message, encodeMessage, decodeMessage } from "./index"
 // Host interface
 
 // @ts-ignore: decorator
-@external("real_talk", "call")
+@external("othismo", "call")
 declare function host_call(verb: i32, path: usize, pathLen: i32, body: usize, bodyLen: i32, expect: i32): u32;
 
 // @ts-ignore: decorator
-@external("real_talk", "reply")
+@external("othismo", "reply")
 declare function host_reply(req: u32, status: i32, body: usize, bodyLen: i32, done: i32): void;
 
 // @ts-ignore: decorator
-@external("real_talk", "forward")
+@external("othismo", "forward")
 declare function host_forward(req: u32, path: usize, pathLen: i32): void;
 
 // @ts-ignore: decorator
-@external("real_talk", "cancel")
+@external("othismo", "cancel")
 declare function host_cancel(ticket: u32): void;
 
 // @ts-ignore: decorator
-@external("real_talk", "bind")
+@external("othismo", "bind")
 declare function host_bind(src: usize, srcLen: i32, at: usize, atLen: i32, flags: i32): i32;
 
 // @ts-ignore: decorator
-@external("real_talk", "unmount")
+@external("othismo", "unmount")
 declare function host_unmount(at: usize, atLen: i32): i32;
 
 // @ts-ignore: decorator
-@external("real_talk", "expose")
+@external("othismo", "expose")
 declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, flags: i32): i32;
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-# real_talk
+# othismo
 
 This is the runtime for **Othismo**: programs built from sandboxed objects
 that can reach only what a short, declarative image gives them, so you can

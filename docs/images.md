@@ -29,10 +29,10 @@ it declares (Console, Tcp, Files). Running `--check` on it gives the complete
 list of what it can touch on the machine.
 
 ```text
-real_talk build static.img -o static.rti     # seal
-real_talk run static.rti                     # run it, here or elsewhere
-real_talk static.img                         # build in memory, then run
-real_talk unpack static.rti out/             # modules, files and sources
+othismo build static.img -o static.rti     # seal
+othismo run static.rti                     # run it, here or elsewhere
+othismo static.img                         # build in memory, then run
+othismo unpack static.rti out/             # modules, files and sources
 ```
 
 Running a `.img` builds it in memory and runs the result, so there is one way
@@ -141,7 +141,7 @@ wrong type. `--check` prints each slot's final value and where each field came
 from, then what each environment object touches on the host:
 
 ```text
-$ real_talk --check static.rti --set listen.address=0.0.0.0:80
+$ othismo --check static.rti --set listen.address=0.0.0.0:80
 slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80

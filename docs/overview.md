@@ -180,7 +180,7 @@ file still tells the whole story.
 
 ## Where it stands
 
-Othismo is a work in progress, and the runtime here, `real_talk`, is a
+Othismo is a work in progress, and the runtime here, `othismo`, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used. Some things the premise needs aren't
 there yet. Interfaces are designed but not built, a trapped object stops the

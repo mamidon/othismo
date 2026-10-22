@@ -5,9 +5,9 @@ mod common;
 
 use bson::doc;
 use common::{Fixture, run_image};
-use real_talk::ns::{Status, Verb};
-use real_talk::runtime::Options;
-use real_talk::wire::Message;
+use othismo::ns::{Status, Verb};
+use othismo::runtime::Options;
+use othismo::wire::Message;
 
 const MESSAGES: &str = "export class Ping {}\n";
 
@@ -193,13 +193,13 @@ fn script_wat(s: &Script) -> String {
     let data: String = w.data.iter().map(|b| format!("\\{b:02x}")).collect();
     format!(
         r#"(module
-          (import "real_talk" "call" (func $call (param i32 i32 i32 i32 i32 i32) (result i32)))
-          (import "real_talk" "reply" (func $reply (param i32 i32 i32 i32 i32)))
-          (import "real_talk" "forward" (func $forward (param i32 i32 i32)))
-          (import "real_talk" "cancel" (func $cancel (param i32)))
-          (import "real_talk" "bind" (func $bind (param i32 i32 i32 i32 i32) (result i32)))
-          (import "real_talk" "unmount" (func $unmount (param i32 i32) (result i32)))
-          (import "real_talk" "expose" (func $expose (param i32 i32 i32 i32 i32) (result i32)))
+          (import "othismo" "call" (func $call (param i32 i32 i32 i32 i32 i32) (result i32)))
+          (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32)))
+          (import "othismo" "forward" (func $forward (param i32 i32 i32)))
+          (import "othismo" "cancel" (func $cancel (param i32)))
+          (import "othismo" "bind" (func $bind (param i32 i32 i32 i32 i32) (result i32)))
+          (import "othismo" "unmount" (func $unmount (param i32 i32) (result i32)))
+          (import "othismo" "expose" (func $expose (param i32 i32 i32 i32 i32) (result i32)))
           (memory (export "memory") 3)
           (data (i32.const 1024) "{data}")
           (global $req (mut i32) (i32.const 0))
@@ -445,12 +445,12 @@ fn packed_files_answer_like_files() {
     let f = fixture("packed", &[("a", &files_script(), "mount files /f  mount cons /out")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
-    let pack = real_talk::pack::load(&f.image()).unwrap();
+    let pack = othismo::pack::load(&f.image()).unwrap();
     // Nothing on disk is read once the image is built.
     std::fs::remove_dir_all(f.dir.join("public")).unwrap();
     let out = common::Captured::default();
-    let io = real_talk::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(out.clone()) };
-    real_talk::runtime::run(&pack, io, Options::default()).unwrap();
+    let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(out.clone()) };
+    othismo::runtime::run(&pack, io, Options::default()).unwrap();
     assert_eq!(out.text(), FILES_OUTPUT);
 }
 

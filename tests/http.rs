@@ -27,13 +27,13 @@ impl Server {
         for m in ["HttpServer", "StaticSite"] {
             assert!(example.join(format!("scripts/{m}.wasm")).exists(), "run `make wasm` first");
         }
-        let dir = std::env::temp_dir().join(format!("real_talk_http_{name}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("othismo_http_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut image = example.join("static.img");
         if built {
             let rti = dir.join("static.rti");
-            let status = Command::new(env!("CARGO_BIN_EXE_real_talk"))
+            let status = Command::new(env!("CARGO_BIN_EXE_othismo"))
                 .args(["build".as_ref(), image.as_os_str(), "-o".as_ref(), rti.as_os_str()])
                 .status()
                 .unwrap();
@@ -41,7 +41,7 @@ impl Server {
             image = rti;
         }
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_real_talk"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_othismo"))
             .args(["--set", "listen.address=127.0.0.1:0"])
             .arg(image)
             .stdin(Stdio::null())

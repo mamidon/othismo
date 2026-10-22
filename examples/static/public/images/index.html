@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Building images — Building — real_talk</title>
+  <title>Building images — Building — othismo</title>
   <meta name="description" content="Building images: sealing an image into one file, packed files, and slots the host fills in.">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -73,10 +73,10 @@ leaves them out.</li>
 <p>A built image&#39;s only contact with the host is through the environment objects
 it declares (Console, Tcp, Files). Running <code>--check</code> on it gives the complete
 list of what it can touch on the machine.</p>
-<pre><code class="language-text">real_talk build static.img -o static.rti     # seal
-real_talk run static.rti                     # run it, here or elsewhere
-real_talk static.img                         # build in memory, then run
-real_talk unpack static.rti out/             # modules, files and sources
+<pre><code class="language-text">othismo build static.img -o static.rti     # seal
+othismo run static.rti                     # run it, here or elsewhere
+othismo static.img                         # build in memory, then run
+othismo unpack static.rti out/             # modules, files and sources
 </code></pre>
 <p>Running a <code>.img</code> builds it in memory and runs the result, so there is one way
 to load an image. Packed trees are a snapshot taken when the image is built;
@@ -165,7 +165,7 @@ lists every missing field, e.g. <code>admin.text: required, not provided</code>.
 or field that the image doesn&#39;t declare is an error, and so is a value of the
 wrong type. <code>--check</code> prints each slot&#39;s final value and where each field came
 from, then what each environment object touches on the host:</p>
-<pre><code class="language-text">$ real_talk --check static.rti --set listen.address=0.0.0.0:80
+<pre><code class="language-text">$ othismo --check static.rti --set listen.address=0.0.0.0:80
 slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
 
 net    listens on 0.0.0.0:80
@@ -202,7 +202,7 @@ depends on timestamps or the order a directory is read in.</p>
   <footer>
     <div class="wrap">
       <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
-      <small>real_talk &middot; served by real_talk</small>
+      <small>othismo &middot; served by othismo</small>
     </div>
   </footer>
 </body>

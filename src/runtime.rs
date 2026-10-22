@@ -9,7 +9,7 @@
 //! completely before the next outside [`Event`] is taken.
 //!
 //! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`
-//! and the `real_talk` functions in [`ALLOWED_IMPORTS`]; anything else a
+//! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
 //! module asks for is refused before it is instantiated.
 
 use crate::check::{Kind, Program};
@@ -48,13 +48,13 @@ pub struct Options {
 /// Every host function a module may import.
 pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
     ("env", "abort"),
-    ("real_talk", "call"),
-    ("real_talk", "reply"),
-    ("real_talk", "forward"),
-    ("real_talk", "cancel"),
-    ("real_talk", "bind"),
-    ("real_talk", "unmount"),
-    ("real_talk", "expose"),
+    ("othismo", "call"),
+    ("othismo", "reply"),
+    ("othismo", "forward"),
+    ("othismo", "cancel"),
+    ("othismo", "bind"),
+    ("othismo", "unmount"),
+    ("othismo", "expose"),
 ];
 
 /// Who made a request, and so where its replies go.
@@ -477,7 +477,7 @@ fn status_code(r: Result<(), Status>) -> i32 {
 fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap(
-        "real_talk",
+        "othismo",
         "call",
         |mut caller: Caller<'_, HostState>, verb: i32, path: i32, path_len: i32, body: i32, body_len: i32, expect: i32| {
             let me = caller.data().me;
@@ -502,7 +502,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
     linker.func_wrap(
-        "real_talk",
+        "othismo",
         "reply",
         |mut caller: Caller<'_, HostState>, req: i32, status: i32, body: i32, body_len: i32, done: i32| -> HostResult<()> {
             let me = caller.data().me;
@@ -513,7 +513,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
         },
     )?;
     linker.func_wrap(
-        "real_talk",
+        "othismo",
         "forward",
         |mut caller: Caller<'_, HostState>, req: i32, path: i32, path_len: i32| -> HostResult<()> {
             let me = caller.data().me;
@@ -523,12 +523,12 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             shared.forward(me, req as u32, &path).map_err(host_err)
         },
     )?;
-    linker.func_wrap("real_talk", "cancel", |caller: Caller<'_, HostState>, ticket: i32| {
+    linker.func_wrap("othismo", "cancel", |caller: Caller<'_, HostState>, ticket: i32| {
         let me = caller.data().me;
         caller.data().shared.borrow_mut().cancel(me, ticket as u32);
     })?;
     linker.func_wrap(
-        "real_talk",
+        "othismo",
         "bind",
         |mut caller: Caller<'_, HostState>, src: i32, src_len: i32, at: i32, at_len: i32, flags: i32| -> HostResult<i32> {
             let me = caller.data().me;
@@ -540,14 +540,14 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             }))
         },
     )?;
-    linker.func_wrap("real_talk", "unmount", |mut caller: Caller<'_, HostState>, at: i32, at_len: i32| -> HostResult<i32> {
+    linker.func_wrap("othismo", "unmount", |mut caller: Caller<'_, HostState>, at: i32, at_len: i32| -> HostResult<i32> {
         let me = caller.data().me;
         let at = read_path(&mut caller, at, at_len)?;
         let mut shared = caller.data().shared.borrow_mut();
         Ok(status_code(at.ok_or(Status::Invalid).and_then(|at| shared.ns.unmount(me, &at))))
     })?;
     linker.func_wrap(
-        "real_talk",
+        "othismo",
         "expose",
         |mut caller: Caller<'_, HostState>, at: i32, at_len: i32, src: i32, src_len: i32, flags: i32| -> HostResult<i32> {
             let me = caller.data().me;

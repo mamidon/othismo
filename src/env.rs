@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn files_stay_inside_the_root() {
-        let base = std::env::temp_dir().join(format!("real_talk_files_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("othismo_files_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("root/sub")).unwrap();
         std::fs::write(base.join("root/a.txt"), "A").unwrap();

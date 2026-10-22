@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn extracts_fields_and_skips_methods() {
         let src = r#"
-            import { Message, Writer } from "real-talk"
+            import { Message, Writer } from "othismo"
 
             // A line of text.
             export class Line extends Message {

@@ -224,16 +224,16 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     if !is_sealed(bytes) {
         bail!("not a built image (bad magic number)");
     }
-    let rebuild = "rebuild it from its .img with this real_talk's `build`";
+    let rebuild = "rebuild it from its .img with this othismo's `build`";
     if bytes[7] != VERSION {
-        bail!("it was built by another version of real_talk (format {}, and this one reads {VERSION}); {rebuild}", bytes[7]);
+        bail!("it was built by another version of othismo (format {}, and this one reads {VERSION}); {rebuild}", bytes[7]);
     }
     let rest = &bytes[MAGIC.len()..];
     let Some((len, rest)) = rest.split_first_chunk::<8>() else { bail!("truncated header") };
     let len = usize::try_from(u64::from_le_bytes(*len)).ok().filter(|&n| n <= rest.len());
     let Some(len) = len else { bail!("truncated manifest") };
     let (manifest, blobs) = rest.split_at(len);
-    let malformed = || format!("malformed manifest; if it was built by another version of real_talk, {rebuild}");
+    let malformed = || format!("malformed manifest; if it was built by another version of othismo, {rebuild}");
     let doc = bson::Document::from_reader(manifest).with_context(malformed)?;
     let m: Manifest = bson::deserialize_from_document(doc).with_context(malformed)?;
 

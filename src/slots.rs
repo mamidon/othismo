@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn values_come_from_files_and_set() {
-        let dir = std::env::temp_dir().join(format!("real_talk_values_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("othismo_values_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("prod.vals");
         std::fs::write(&file, "listen {\n  address: \"0.0.0.0:80\"\n}\ninfo { size: 1 }").unwrap();

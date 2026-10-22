@@ -167,7 +167,7 @@ read or generated from it.
   own `##` comment is the guide. Small objects need only the comment; large
   ones keep a paragraph there and the rest in Markdown.
 
-`real_talk doc` prints a module's guide followed by a reference generated from
+`othismo doc` prints a module's guide followed by a reference generated from
 its declarations, and the project's reference pages are built the same way.
 
 ### Built-in objects
@@ -275,10 +275,10 @@ bindings from the same header.
 
 The library has three parts:
 
-- `real-talk`: messages and their encoding.
-- `real-talk/ns`: `Server`, with `serve` and `start` to override, `Request`
+- `othismo`: messages and their encoding.
+- `othismo/ns`: `Server`, with `serve` and `start` to override, `Request`
   and `Response`, and `ns`, which makes requests and rearranges the view.
-- `real-talk/env`: the runtime's message types, generated from `env`'s
+- `othismo/env`: the runtime's message types, generated from `env`'s
   header.
 
 Some of its shape comes from AssemblyScript's limits. There are no closures

@@ -2,7 +2,7 @@
 // conventional bodies for the namespace verbs.
 //
 // These are always in scope in an image. Object modules import them with
-// `import { ... } from "real-talk/env"`. The runtime embeds this file, and an
+// `import { ... } from "othismo/env"`. The runtime embeds this file, and an
 // image that redeclares one of these types must give it exactly these fields.
 
 import { Message, Reader, Writer, registerMessage } from "./index"

@@ -18,7 +18,7 @@ pub const PACKED: &str = "Packed.Files";
 
 /// The import path for the runtime's message types, and their declarations.
 /// These types are always in scope in an image; importing them is optional.
-pub const ENV_MODULE: &str = "real-talk/env";
+pub const ENV_MODULE: &str = "othismo/env";
 const ENV_SOURCE: &str = include_str!("../as/env.ts");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -440,7 +440,7 @@ mod tests {
 
     /// Writes MESSAGES and `img` to a temp dir and checks the image.
     fn check_src(img: &str) -> Result<Program> {
-        let dir = std::env::temp_dir().join(format!("real_talk_check_{}_{:?}", std::process::id(), std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!("othismo_check_{}_{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("messages.ts"), MESSAGES).unwrap();
         let path = dir.join("test.img");
@@ -601,14 +601,14 @@ mod tests {
 
     #[test]
     fn runtime_types_can_only_be_redeclared_exactly() {
-        let dir = std::env::temp_dir().join(format!("real_talk_envshape_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("othismo_envshape_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("m.ts"), "export class Listen { port: i32 }\nexport class Line { text: string }").unwrap();
-        let ok = image::parse(r#"import { Line } from "./m" import { Text } from "real-talk/env""#).unwrap();
+        let ok = image::parse(r#"import { Line } from "./m" import { Text } from "othismo/env""#).unwrap();
         assert!(check(&ok, &dir).is_ok());
         let bad = image::parse(r#"import { Listen } from "./m""#).unwrap();
         let e = format!("{:#}", check(&bad, &dir).unwrap_err());
-        let missing = image::parse(r#"import { Nope } from "real-talk/env""#).unwrap();
+        let missing = image::parse(r#"import { Nope } from "othismo/env""#).unwrap();
         let e2 = format!("{:#}", check(&missing, &dir).unwrap_err());
         std::fs::remove_dir_all(&dir).ok();
         assert!(e.contains("`Listen` is a runtime type and must be declared as { address: string }"), "{e}");

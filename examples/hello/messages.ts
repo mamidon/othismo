@@ -1,4 +1,4 @@
-import { Message, Reader, Writer, registerMessage } from "real-talk"
+import { Message, Reader, Writer, registerMessage } from "othismo"
 
 export class Echoed extends Message {
   text: string
