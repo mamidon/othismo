@@ -22,7 +22,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x04";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x05";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.
@@ -136,7 +136,8 @@ impl Pack {
     }
 }
 
-fn add(blobs: &mut BTreeMap<Hash, Rc<[u8]>>, bytes: Vec<u8>) -> Hash {
+/// Stores `bytes` in `blobs`, once, returning its hash.
+pub(crate) fn add(blobs: &mut BTreeMap<Hash, Rc<[u8]>>, bytes: Vec<u8>) -> Hash {
     let hash = hash(&bytes);
     blobs.entry(hash.clone()).or_insert_with(|| bytes.into());
     hash
@@ -174,8 +175,11 @@ pub fn describe(pack: &Pack) -> String {
         let inst = &p.instances[i];
         Some(match &inst.kind {
             Kind::Wasm { .. } => return None,
+            Kind::Console if inst.in_memory => "a console in memory".to_string(),
             Kind::Console => "reads stdin, writes stdout".to_string(),
+            Kind::Tcp if inst.in_memory => "listens in memory, for /dial".to_string(),
             Kind::Tcp => format!("listens on {}", config(inst, "address")),
+            Kind::Files if inst.in_memory => format!("serves a snapshot of host files under {}, taken at start", config(inst, "path")),
             Kind::Files => format!("reads host files under {}", config(inst, "path")),
             Kind::Packed { .. } => {
                 let (files, size) = pack.trees.get(&inst.name)?.size();
@@ -298,7 +302,7 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         let mut tree = Tree::default();
         for inc in includes {
             let replaced = tree
-                .include(&dir, inc, &mut |bytes| add(&mut pack.blobs, bytes))
+                .include(&dir.join(&inst.dir), inc, &mut |bytes| add(&mut pack.blobs, bytes))
                 .with_context(|| format!("instance `{}`: include \"{}\"", inst.name, inc.source))?;
             for path in replaced {
                 pack.log.push(format!("{}: include \"{}\" replaced {path}", inst.name, inc.source));
@@ -313,7 +317,7 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         if pack.modules.contains_key(type_name) {
             continue;
         }
-        let module = module_path(&dir, type_name);
+        let module = module_path(&dir.join(&inst.dir), type_name);
         let bytes = std::fs::read(&module).with_context(|| {
             format!("instance `{}`: cannot read {} (did you compile {type_name}.ts?)", inst.name, module.display())
         })?;

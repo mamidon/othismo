@@ -24,6 +24,11 @@ pub const NATIVE: &[&str] = &[CONSOLE, LISTENER, FILES];
 /// so there is nothing to choose.
 pub const PACKED: &str = "Packed.Files";
 
+/// What an imported image's instance of one of the runtime's traits is run
+/// as: in memory, with a trait of its own that the importing image can use
+/// to drive it from the other side.
+const MEMORY: &[(&str, Option<&str>)] = &[(CONSOLE, Some("Terminal")), (LISTENER, Some("Dialer")), (FILES, None)];
+
 /// What the runtime's objects were called when images named them directly.
 const RENAMED: &[(&str, &str)] =
     &[("Environment.Console", CONSOLE), ("Environment.Tcp", LISTENER), ("Environment.Files", FILES)];
@@ -54,10 +59,17 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub name: String,
-    /// As written: a module name, one of the runtime's traits, such as
-    /// `Listener`, or `Packed.Files`.
+    /// A module name, one of the runtime's traits, such as `Listener`, or
+    /// `Packed.Files`; or for one of those traits run in memory, such as
+    /// `Memory.Listener`.
     pub type_name: String,
     pub kind: Kind,
+    /// The directory of the image that declared it, relative to this one's,
+    /// which its relative paths (module, includes, files root) start from.
+    pub dir: String,
+    /// One of the runtime's objects in an imported image, which runs in
+    /// memory and touches nothing on the host.
+    pub in_memory: bool,
     /// An environment object's config.
     pub config: Option<Arg>,
     /// The initial view.
@@ -137,16 +149,77 @@ fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{}: {msg}", id.pos)
 }
 
-/// Reads, parses and checks the image at `path`, reading each module's
-/// header from the module.
+/// Reads, parses and checks the image at `path`, with the images it
+/// imports, reading each module's header from the module.
 pub fn load(path: &Path) -> Result<Program> {
-    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let img = image::parse(&src).with_context(|| format!("parsing {}", path.display()))?;
+    let mut sources = vec![];
+    let img = gather(path, Path::new(""), 0, &mut sources)?;
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut modules = |name: &str| module_header(dir, name);
+    // Each module comes from the directory of the image that uses it.
+    let mut module_dirs: BTreeMap<&str, &str> = BTreeMap::new();
+    for inst in &img.instances {
+        let ty = inst.type_name.name.as_str();
+        if ty.contains('.') || builtin(ty, false).is_some() {
+            continue;
+        }
+        if let Some(prev) = module_dirs.insert(ty, &inst.dir)
+            && prev != inst.dir
+        {
+            bail!(
+                "{}: `{ty}` would come from both {} and {}; an image can't use two modules of one name",
+                inst.type_name.pos,
+                Path::new(prev).join("scripts").display(),
+                Path::new(&inst.dir).join("scripts").display()
+            );
+        }
+    }
+    let mut modules = |name: &str| module_header(&dir.join(module_dirs.get(name).copied().unwrap_or("")), name);
     let mut program = check(&img, dir, &mut modules).with_context(|| format!("checking {}", path.display()))?;
-    program.sources.insert(0, path.to_path_buf());
+    sources.extend(program.sources);
+    program.sources = sources;
     Ok(program)
+}
+
+/// The image at `path`, with every image it imports merged in ahead of its
+/// own declarations, so their requests are made first. `rel` is `path`'s
+/// directory relative to the top image's; `sources` collects every image
+/// read.
+fn gather(path: &Path, rel: &Path, depth: usize, sources: &mut Vec<PathBuf>) -> Result<Image> {
+    if depth > 16 {
+        bail!("images import each other in a loop");
+    }
+    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let own = image::parse(&src).with_context(|| format!("parsing {}", path.display()))?;
+    sources.push(path.to_path_buf());
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut img = Image { imports: vec![], images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
+    for imp in &own.images {
+        let child = Path::new(&imp.path);
+        let child_rel = rel.join(child.parent().unwrap_or(Path::new("")));
+        let theirs = gather(&dir.join(child), &child_rel, depth + 1, sources)
+            .with_context(|| format!("{}: importing {}", imp.pos, imp.path))?;
+        img.imports.extend(theirs.imports);
+        img.requires.extend(theirs.requires);
+        img.instances.extend(theirs.instances);
+        img.mounts.extend(theirs.mounts);
+        img.requests.extend(theirs.requests);
+    }
+    // Header files an image imports types from are relative to it.
+    img.imports.extend(own.imports.into_iter().map(|mut i| {
+        if let image::Source::Path(p) = &i.from {
+            i.from = image::Source::Path(rel.join(p).to_string_lossy().into_owned());
+        }
+        i
+    }));
+    img.requires.extend(own.requires);
+    img.instances.extend(own.instances.into_iter().map(|mut inst| {
+        inst.dir = rel.to_string_lossy().into_owned();
+        inst.imported = depth > 0;
+        inst
+    }));
+    img.mounts.extend(own.mounts);
+    img.requests.extend(own.requests);
+    Ok(img)
 }
 
 /// Module `name`'s header, from the module itself: `scripts/<name>.wasm`
@@ -173,7 +246,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     let mut headers: BTreeMap<String, Header> = BTreeMap::new();
     for inst in &img.instances {
         let ty = &inst.type_name;
-        if !ty.name.contains('.') && builtin(&ty.name).is_none() && !headers.contains_key(&ty.name) {
+        if !ty.name.contains('.') && builtin(&ty.name, false).is_none() && !headers.contains_key(&ty.name) {
             let header = modules(&ty.name).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
             headers.insert(ty.name.clone(), header);
         }
@@ -184,7 +257,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     let mut interfaces: BTreeMap<String, Object> =
         headers.iter().filter_map(|(name, h)| Some((name.clone(), h.object(name)?.clone()))).collect();
     for inst in &img.instances {
-        if let Some(o) = builtin(&inst.type_name.name) {
+        if let Some(o) = builtin(&inst.type_name.name, inst.imported) {
             interfaces.insert(o.name.clone(), o);
         }
     }
@@ -230,7 +303,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
         addressed.push((to.inst, to.path, full));
     }
-    let is_config = |to: usize, verb: Verb| verb == Verb::Control && builtin(&img.instances[to].type_name.name).is_some();
+    let is_config = |to: usize, verb: Verb| verb == Verb::Control && builtin(&img.instances[to].type_name.name, false).is_some();
 
     let mut instances = vec![];
     for (i, inst) in img.instances.iter().enumerate() {
@@ -238,7 +311,8 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         let requests: Vec<(&image::Request, &str)> =
             img.requests.iter().zip(&addressed).filter(|(_, (to, ..))| *to == i).map(|(r, (_, p, _))| (r, p.as_str())).collect();
         let mut config = None;
-        let obj = interfaces.get(&ty.name);
+        let type_name = run_as(inst);
+        let obj = interfaces.get(&type_name);
         if ty.name != PACKED
             && let Some(inc) = inst.includes.first()
         {
@@ -247,7 +321,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         // A built-in object's config is the image's `control` of it, taken
         // before the object is made rather than sent as a request.
         let controls: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, _)| is_config(i, r.verb)).collect();
-        let kind = match builtin(&ty.name) {
+        let kind = match builtin(&ty.name, inst.imported) {
             Some(builtin) => {
                 let name = builtin.name.as_str();
                 if let Some(m) = inst.mounts.first() {
@@ -279,7 +353,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                     }
                     (Some(_), _) => bail!(needs()),
                 };
-                builtin_kind(name, &inst.includes)?
+                builtin_kind(&ty.name, &inst.includes)?
             }
             None if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) => {
                 bail!(err_at(ty, format!("the runtime's objects are declared by their traits: `instance {} : {now}`", inst.name.name)))
@@ -306,7 +380,8 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
             check_requests(inst, obj, &requests, &messages_in_scope, &slots)?;
             check_mounts(img, inst, obj, &index, &interfaces)?;
         }
-        instances.push(Instance { name: inst.name.name.clone(), type_name: ty.name.clone(), kind, config, mounts });
+        let in_memory = inst.imported && NATIVE.contains(&ty.name.as_str());
+        instances.push(Instance { name: inst.name.name.clone(), type_name, kind, dir: inst.dir.clone(), in_memory, config, mounts });
     }
 
     let mut startup = vec![];
@@ -382,7 +457,7 @@ fn check_mounts(
         ats.push(at.clone());
         let Some(need) = obj.need(&at) else { continue };
         let target = &img.instances[index[m.target.name.as_str()]];
-        let Some(served) = interfaces.get(&target.type_name.name) else { continue };
+        let Some(served) = interfaces.get(&run_as(target)) else { continue };
         for e in &need.entries {
             for r in &e.requests {
                 if m.read_only && !r.verb.is_safe() {
@@ -477,13 +552,31 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
 
 /// The interface of the built-in type `name`, if it is one: one of the traits
 /// the runtime implements, as an object serving the trait's tree, or
-/// Packed.Files.
-fn builtin(name: &str) -> Option<Object> {
+/// Packed.Files. One of the traits `imported` is run in memory, and
+/// serves its other side too.
+fn builtin(name: &str, imported: bool) -> Option<Object> {
     let env = iface::env();
     if name == PACKED {
         return env.object(PACKED).cloned();
     }
-    env.traits.get(name).filter(|_| NATIVE.contains(&name)).map(Trait::as_object)
+    let mut o = env.traits.get(name).filter(|_| NATIVE.contains(&name)).map(Trait::as_object)?;
+    if imported {
+        o.name = format!("Memory.{name}");
+        if let Some((_, Some(other))) = MEMORY.iter().find(|(t, _)| *t == name) {
+            o.serves.extend(env.traits[*other].entries.iter().cloned());
+            o.traits.push(other.to_string());
+        }
+    }
+    Some(o)
+}
+
+/// What `inst` runs as: its type, or for one of the runtime's traits in an
+/// imported image, the trait in memory.
+fn run_as(inst: &image::Instance) -> String {
+    match builtin(&inst.type_name.name, inst.imported) {
+        Some(o) => o.name,
+        None => inst.type_name.name.clone(),
+    }
 }
 
 /// The config message a built-in object takes: whatever its header says its
@@ -564,8 +657,12 @@ fn resolve_imports(
             let Some(ty) = header.messages.get(&name.name) else {
                 bail!(err_at(name, format!("{} has no message type `{}`", imp.from, name.name)));
             };
-            if imported.insert(name.name.clone(), imp.from.to_string()).is_some() {
-                bail!(err_at(name, format!("`{}` is imported twice", name.name)));
+            // Images that import one another may well import the same types;
+            // a type is its name and fields, so only a different one clashes.
+            if let Some(prev) = imported.insert(name.name.clone(), imp.from.to_string())
+                && out.get(&name.name).is_some_and(|t| t.fields != ty.fields)
+            {
+                bail!(err_at(name, format!("`{}` is imported from {prev} and from {}, which declare it differently", name.name, imp.from)));
             }
             // The runtime's own types may be redeclared, but only exactly.
             if let Some(want) = env.get(&name.name)
@@ -784,6 +881,12 @@ mod tests {
     }
 
     #[test]
+    fn a_type_may_be_imported_again_unchanged() {
+        let twice = r#"import { Greeting } from "./messages.iface" import { Greeting } from "./messages.iface""#;
+        assert!(check_src(twice).is_ok(), "as two images that import one another may");
+    }
+
+    #[test]
     fn startup_requests_keep_the_order_they_are_written_in() {
         let p = check_src(&format!("{HEADER} invoke /b Ping instance a : A mount /a a invoke /a Ping instance b : B mount /b b invoke /b/x Ping"))
             .unwrap();
@@ -847,7 +950,7 @@ mod tests {
 
     #[test]
     fn config_types_come_from_the_runtimes_header() {
-        let config = |name: &str| config_type(&builtin(name).unwrap()).map(str::to_string);
+        let config = |name: &str| config_type(&builtin(name, false).unwrap()).map(str::to_string);
         assert_eq!(config(LISTENER).as_deref(), Some("Listen"));
         assert_eq!(config(FILES).as_deref(), Some("FilesRoot"));
         assert_eq!(config(CONSOLE), None);

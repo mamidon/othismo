@@ -21,6 +21,9 @@ impl std::fmt::Display for Pos {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     pub imports: Vec<Import>,
+    /// `import "<image>"`: other images, whose instances, mounts, slots and
+    /// requests become this one's.
+    pub images: Vec<Path>,
     pub requires: Vec<Require>,
     pub instances: Vec<Instance>,
     /// Top-level mounts: the image's own view, which its requests resolve in.
@@ -71,6 +74,12 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
     pub name: Ident,
+    /// The directory of the image that declared it, relative to this one's:
+    /// `""` for its own, and an imported image's for one it imported.
+    pub dir: String,
+    /// Declared by an imported image, so the runtime's objects among them
+    /// run in memory.
+    pub imported: bool,
     /// A module name (`scripts/<name>.wasm`) or a dotted environment type,
     /// e.g. `Console`.
     pub type_name: Ident,
@@ -384,10 +393,15 @@ impl Parser {
     }
 
     fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
+        let mut image = Image { imports: vec![], images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
         loop {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
+                Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => {
+                    self.next();
+                    let (Tok::Str(path), pos) = self.next() else { unreachable!("just matched") };
+                    image.images.push(Path { path, pos });
+                }
                 Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
                 Tok::Ident(kw) if kw == "require" => image.requires.push(self.require()?),
@@ -449,7 +463,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let type_name = self.ident("instance type", true)?;
-        let mut inst = Instance { name, type_name, mounts: vec![], includes: vec![] };
+        let mut inst = Instance { name, dir: String::new(), imported: false, type_name, mounts: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }

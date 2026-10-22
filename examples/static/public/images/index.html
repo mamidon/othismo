@@ -45,6 +45,7 @@ deployment, in the way a Docker image is built from a Dockerfile. It builds on
           <li><a href="#what-a-built-image-holds">What a built image holds</a></li>
           <li><a href="#packed-files">Packed files</a></li>
           <li><a href="#slots-values-from-the-host">Slots: values from the host</a></li>
+          <li><a href="#importing-an-image">Importing an image</a></li>
           <li><a href="#the-file-format">The file format</a></li>
           <li><a href="#not-yet">Not yet</a></li>
         </ol>
@@ -185,8 +186,45 @@ files  serves 11 built-in files, 105.6 KB
 </code></pre>
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
 <code>.img</code> or <code>.rti</code>.</p>
+<h2 id="importing-an-image">Importing an image</h2>
+<p>An image can import another, whole, to stand in front of it: to test it, or
+to drive it some other way.</p>
+<pre><code class="language-text"># static.test.img
+import &quot;./static.img&quot;
+
+instance out   : Console
+instance probe : Probe {
+  mount /net net              # static.img&#39;s listener
+  mount /out out
+}
+</code></pre>
+<ul>
+<li>Everything the imported image declares becomes this image&#39;s: its
+instances, its slots, its top-level mounts (so this image&#39;s view starts as
+its view) and its startup requests, which are made before this image&#39;s
+own. Names are shared: declaring an instance or a slot it already has, or
+mounting where it already has, is an error. Mounting one of its instances
+is the only time this image needs to know a name inside it.</li>
+<li>Its relative paths stay relative to it: its modules come from its own
+<code>scripts/</code>, its includes and a <code>Files</code> root from its directory.</li>
+<li><strong>The runtime&#39;s objects in it run in memory</strong>, and touch nothing on the
+host. This image&#39;s own run as usual. Each in-memory object also serves its
+other side, so this image can drive it:<ul>
+<li>a <code>Listener</code> serves <code>Dialer</code>: <code>create /dial</code> with a <code>Data</code> connects,
+the server receives the bytes, and the request&#39;s answers are everything
+the server writes, until it closes the connection;</li>
+<li>a <code>Console</code> serves <code>Terminal</code>: <code>write /typed</code> types a line, and
+<code>watch /printed</code> streams whatever is written to it;</li>
+<li>a <code>Files</code> serves a snapshot of its directory, taken when the image
+starts.</li>
+</ul>
+</li>
+</ul>
+<p><code>--check</code> says which objects run in memory. With every object of the
+imported image in memory, nothing outside can reach it, so a run ends as
+soon as everything sent has been answered.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x04        magic and format version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x05        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

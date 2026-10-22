@@ -675,3 +675,65 @@ fn missing_module_is_reported() {
     let f = fixture("missing", &[], "instance g : Ghost");
     assert!(run_err(&f).contains("did you compile Ghost.ts?"));
 }
+
+#[test]
+fn an_imported_image_runs_in_memory_and_can_be_dialed() {
+    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/static.img");
+    let request = "GET /index.html HTTP/1.1\r\nHost: anything\r\n\r\n";
+    let probe = Script {
+        start: vec![Act::Call {
+            verb: Verb::Create,
+            path: "/net/dial",
+            body: Some(Message { type_name: "Data".into(), fields: doc! { "mime": "", "data": othismo::wire::bytes(request.into()) } }),
+            expect: true,
+        }],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let f = Fixture::new("import");
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs /net Dialer needs /out Console }"));
+    f.file(
+        "test.img",
+        format!(
+            "import \"{}\"\ninstance out : Console\ninstance probe : Probe {{\n  mount /net net\n  mount /out out\n}}\n",
+            site.display()
+        ),
+    );
+    let out = run(&f).unwrap();
+    assert!(out.starts_with("Data {\"mime\": \"\", \"data\": \"HTTP/1.1 200 OK\\r\\n"), "{out}");
+    assert!(out.contains("<!doctype html>") || out.contains("<!DOCTYPE html>"), "the page itself: {out}");
+    assert!(out.ends_with("ok\n"), "the server hung up once it had answered: {out}");
+}
+
+#[test]
+fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
+    let probe = Script {
+        start: vec![call(Verb::Read, "/f/hello.txt"), call(Verb::Read, "/f/missing")],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let f = Fixture::new("import_files");
+    // The imported image is in a directory of its own, with its files there.
+    std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
+    f.file("site/site.img", "instance files : Files\nmount /files files\ncontrol /files FilesRoot { path: \"public\" }\n");
+    f.file("site/public/hello.txt", "hi");
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Files } from env object Probe { needs /f Files needs /out Console }"));
+    f.file("test.img", "import \"./site/site.img\"\ninstance out : Console\ninstance probe : Probe {\n  mount /f files\n  mount /out out\n}\n");
+    let out = run(&f).unwrap();
+    assert_eq!(out, "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\nnot_found\n");
+
+    let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap());
+    assert!(described.contains("files  serves a snapshot of host files under public, taken at start"), "{described}");
+}
+
+#[test]
+fn an_import_shares_names_with_the_image() {
+    let f = Fixture::new("import_clash");
+    f.file("site.img", "instance cons : Console\nmount /cons cons\n");
+    f.file("test.img", "import \"./site.img\"\ninstance cons : Console\n");
+    assert!(run_err(&f).contains("instance `cons` is declared twice"), "{}", run_err(&f));
+    f.file("test.img", "import \"./site.img\"\ninstance other : Console\nmount /cons other\n");
+    assert!(run_err(&f).contains("`/cons` is already mounted in the image's view"), "{}", run_err(&f));
+    f.file("test.img", "import \"./nope.img\"\n");
+    assert!(run_err(&f).contains("1:8: importing ./nope.img"), "{}", run_err(&f));
+}

@@ -30,3 +30,11 @@ trait Listener {
   ## write to send; remove to close our side once everything is sent.
   /{conn}     Connection
 }
+
+## The other side of a listener run in memory, which an image that imports
+## another can drive it with.
+trait Dialer {
+  ## Connect, sending the request's bytes, and get back everything the
+  ## server writes, until it closes the connection.
+  /dial   create Data -> Data*
+}

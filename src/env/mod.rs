@@ -13,15 +13,16 @@ mod files;
 mod packed;
 mod tcp;
 
-pub use console::{Console, spawn_stdin};
+pub use console::{Console, MemoryConsole, spawn_stdin};
 pub use files::Files;
 pub use packed::Packed;
-pub use tcp::Tcp;
+pub use tcp::{MemoryListener, Tcp};
 
-use crate::check::{Instance, Kind};
+use crate::check::{Instance, IncludeDecl, Kind};
 use crate::messages::MessageType;
 use crate::ns::{Status, Verb};
-use crate::pack::Pack;
+use crate::pack::{self, Pack};
+use crate::tree::Tree;
 use crate::wire::Message;
 use anyhow::{Context, Result};
 use bson::Document;
@@ -77,6 +78,10 @@ pub enum EnvObject {
     Tcp(Tcp),
     Files(Files),
     Packed(Packed),
+    /// A Console in an imported image.
+    MemoryConsole(MemoryConsole),
+    /// A Listener in an imported image.
+    MemoryListener(MemoryListener),
 }
 
 fn msg(type_name: &str, fields: Document) -> Message {
@@ -86,13 +91,26 @@ fn msg(type_name: &str, fields: Document) -> Message {
 impl EnvObject {
     /// `None` for instances implemented in Wasm. A Tcp listener is bound
     /// here, so its address is known before anything starts. A relative
-    /// files root is relative to the image's directory.
+    /// files root is relative to the directory of the image that declared
+    /// it. One of the runtime's objects in an imported image runs in memory:
+    /// a Files instance serves a snapshot of its directory, taken now.
     pub fn new(inst: &Instance, pack: &Pack) -> Result<Option<EnvObject>> {
+        let dir = pack.dir.join(&inst.dir);
         Ok(Some(match &inst.kind {
             Kind::Wasm { .. } => return Ok(None),
+            Kind::Console if inst.in_memory => EnvObject::MemoryConsole(MemoryConsole::default()),
             Kind::Console => EnvObject::Console(Console::default()),
+            Kind::Tcp if inst.in_memory => EnvObject::MemoryListener(MemoryListener::default()),
             Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config_str(inst, "address")?)?),
-            Kind::Files => EnvObject::Files(Files::open(pack.dir.join(config_str(inst, "path")?))?),
+            Kind::Files if inst.in_memory => {
+                let root = config_str(inst, "path")?;
+                let snapshot = IncludeDecl { source: format!("{}/", root.trim_end_matches('/')), at: None };
+                let (mut tree, mut blobs) = (Tree::default(), BTreeMap::new());
+                tree.include(&dir, &snapshot, &mut |bytes| pack::add(&mut blobs, bytes))
+                    .with_context(|| format!("taking a snapshot of {}", dir.join(&root).display()))?;
+                EnvObject::Packed(Packed::new(tree, blobs))
+            }
+            Kind::Files => EnvObject::Files(Files::open(dir.join(config_str(inst, "path")?))?),
             Kind::Packed { .. } => {
                 let tree = pack.trees.get(&inst.name).context("its files are missing")?.clone();
                 EnvObject::Packed(Packed::new(tree, pack.blobs.clone()))
@@ -127,17 +145,31 @@ impl EnvObject {
             EnvObject::Tcp(t) => t.serve(req, verb, path, body),
             EnvObject::Files(f) => f.serve(req, verb, path),
             EnvObject::Packed(p) => p.serve(req, verb, path),
+            EnvObject::MemoryConsole(c) => c.serve(req, verb, path, body),
+            EnvObject::MemoryListener(l) => l.serve(req, verb, path, body),
         })
     }
 
     /// The caller gave up on `req`.
     pub fn cancel(&mut self, req: u32) -> Vec<Reply> {
-        match self {
-            EnvObject::Console(c) => c.cancel(req),
-            EnvObject::Tcp(t) => t.cancel(req),
-            EnvObject::Files(_) | EnvObject::Packed(_) => {}
-        }
-        vec![Reply::end(req)]
+        let mut replies = match self {
+            EnvObject::Console(c) => {
+                c.cancel(req);
+                vec![]
+            }
+            EnvObject::Tcp(t) => {
+                t.cancel(req);
+                vec![]
+            }
+            EnvObject::MemoryConsole(c) => {
+                c.cancel(req);
+                vec![]
+            }
+            EnvObject::MemoryListener(l) => l.cancel(req),
+            EnvObject::Files(_) | EnvObject::Packed(_) => vec![],
+        };
+        replies.push(Reply::end(req));
+        replies
     }
 
     /// Turns an outside event into replies, updating state on the way.
@@ -145,7 +177,7 @@ impl EnvObject {
         match self {
             EnvObject::Console(c) => c.on_event(what),
             EnvObject::Tcp(t) => t.on_event(what),
-            EnvObject::Files(_) | EnvObject::Packed(_) => unreachable!("only stdin and sockets report events"),
+            _ => unreachable!("only stdin and sockets report events"),
         }
     }
 }

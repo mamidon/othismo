@@ -350,6 +350,8 @@ arrives before anyone watches is kept for the first watcher. Files answers
 anything outside its root, including through symlinks, with <code>not_found</code>. <code>Console</code> prints
 a message whose only field is <code>text: string</code> verbatim, and anything else
 JSON-ish.</p>
+<p>In an image another one imports, these run in memory instead, touching
+nothing on the host (see <a href="images.md#importing-an-image">Importing an image</a>).</p>
 <h2 id="the-image">The image</h2>
 <p>What&#39;s left of the image language is instances, the mounts that make up each
 view, and startup requests, plus the packing and slots

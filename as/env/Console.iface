@@ -13,3 +13,12 @@ trait Console {
   ## Watch for every line of input, until it ends; write to print.
   /   watch -> Line*, write Opaque
 }
+
+## The other side of a console run in memory, which an image that imports
+## another can drive it with: type lines into it, and watch what it prints.
+trait Terminal {
+  ## Type a line, as if on stdin.
+  /typed     write Line
+  ## Everything written to the console, as it is written.
+  /printed   watch -> Opaque*
+}

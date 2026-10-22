@@ -156,6 +156,107 @@ impl Tcp {
     }
 }
 
+/// A listener run in memory, for an imported image: connections come from
+/// whoever creates `/dial`, with the request's bytes as what the server
+/// receives, and everything the server writes streams back to the dialer
+/// until the server removes the connection. Nothing touches the host.
+#[derive(Default)]
+pub struct MemoryListener {
+    /// Requests watching `/accept`.
+    accept_watchers: Vec<u32>,
+    /// Dialed before anyone watched `/accept`, so not yet announced.
+    unannounced: Vec<u32>,
+    conns: HashMap<u32, MemoryConn>,
+    next: u32,
+}
+
+struct MemoryConn {
+    /// The `/dial` request, which the server's writes answer.
+    dialer: u32,
+    /// The server's request watching `/<conn>`, if any.
+    watcher: Option<u32>,
+    /// Sent by the dialer before the server watched.
+    pending: Vec<Vec<u8>>,
+}
+
+fn accepted(conn: u32) -> Message {
+    msg("Accepted", doc! { "conn": conn.to_string(), "peer": "memory" })
+}
+
+/// The bytes of a `Data` body.
+fn data_of(body: Option<&Message>) -> Option<&[u8]> {
+    match body.map(|m| (m.type_name.as_str(), m.fields.get("data"))) {
+        Some(("Data", Some(Bson::Binary(b)))) => Some(&b.bytes),
+        _ => None,
+    }
+}
+
+impl MemoryListener {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Message>) -> Vec<Reply> {
+        match (verb, path) {
+            (Verb::Read, "/address") => return vec![Reply::ok(req, msg("Text", doc! { "text": "memory" }))],
+            (Verb::Watch, "/accept") => {
+                self.accept_watchers.push(req);
+                return self.unannounced.drain(..).map(|conn| Reply::more(req, accepted(conn))).collect();
+            }
+            (Verb::Create, "/dial") => {
+                let Some(data) = data_of(body) else { return vec![Reply::fail(req, Status::Invalid)] };
+                self.next += 1;
+                let conn = self.next;
+                self.conns.insert(conn, MemoryConn { dialer: req, watcher: None, pending: vec![data.to_vec()] });
+                if self.accept_watchers.is_empty() {
+                    self.unannounced.push(conn);
+                }
+                return self.accept_watchers.iter().map(|&w| Reply::more(w, accepted(conn))).collect();
+            }
+            (_, "/address" | "/accept" | "/dial") => return vec![Reply::fail(req, Status::NotSupported)],
+            _ => {}
+        }
+        let Some(conn) = path.strip_prefix('/').and_then(|n| n.parse::<u32>().ok()) else {
+            return vec![Reply::fail(req, Status::NotFound)];
+        };
+        let Some(c) = self.conns.get_mut(&conn) else { return vec![Reply::fail(req, Status::NotFound)] };
+        match verb {
+            Verb::Watch if c.watcher.is_some() => vec![Reply::fail(req, Status::Exists)],
+            Verb::Watch => {
+                c.watcher = Some(req);
+                c.pending.drain(..).map(|d| Reply::more(req, data_msg(d))).collect()
+            }
+            Verb::Write => match data_of(body) {
+                Some(data) => vec![Reply::more(c.dialer, data_msg(data.to_vec())), Reply::end(req)],
+                None => vec![Reply::fail(req, Status::Invalid)],
+            },
+            // The server hangs up: the dialer has everything, and the server
+            // hears the dialer hang up too.
+            Verb::Remove => {
+                let c = self.conns.remove(&conn).expect("just found");
+                let mut replies = vec![Reply::end(c.dialer)];
+                replies.extend(c.watcher.map(Reply::end));
+                replies.push(Reply::end(req));
+                replies
+            }
+            _ => vec![Reply::fail(req, Status::NotSupported)],
+        }
+    }
+
+    /// A dialer that gives up hangs up its side; the server hears it close.
+    pub(super) fn cancel(&mut self, req: u32) -> Vec<Reply> {
+        self.accept_watchers.retain(|&w| w != req);
+        let mut replies = vec![];
+        if let Some(&conn) = self.conns.iter().find(|(_, c)| c.dialer == req).map(|(n, _)| n) {
+            let c = self.conns.remove(&conn).expect("just found");
+            self.unannounced.retain(|&n| n != conn);
+            replies.extend(c.watcher.map(Reply::end));
+        }
+        for c in self.conns.values_mut() {
+            if c.watcher == Some(req) {
+                c.watcher = None;
+            }
+        }
+        replies
+    }
+}
+
 fn accept_loop(listener: TcpListener, to: usize, events: Sender<Event>) {
     for (conn, stream) in (1u32..).zip(listener.incoming()) {
         let stream = match stream {
@@ -190,4 +291,32 @@ fn read_loop(mut stream: TcpStream, to: usize, conn: u32, events: Sender<Event>)
         }
     }
     let _ = events.send(Event { to, what: What::Closed { conn } });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data(bytes: &str) -> Message {
+        data_msg(bytes.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn a_dial_is_a_connection_the_server_answers() {
+        let mut l = MemoryListener::default();
+        // Dialed before anyone watches: announced to the first watcher.
+        assert!(l.serve(1, Verb::Create, "/dial", Some(&data("GET /"))).is_empty());
+        assert_eq!(l.serve(2, Verb::Watch, "/accept", None), [Reply::more(2, accepted(1))]);
+        assert_eq!(l.serve(3, Verb::Watch, "/1", None), [Reply::more(3, data("GET /"))]);
+        assert_eq!(l.serve(4, Verb::Write, "/1", Some(&data("200"))), [Reply::more(1, data("200")), Reply::end(4)]);
+        assert_eq!(l.serve(5, Verb::Remove, "/1", None), [Reply::end(1), Reply::end(3), Reply::end(5)]);
+        assert_eq!(l.serve(6, Verb::Watch, "/1", None)[0].status, Status::NotFound);
+
+        // Dialed while watched: announced at once.
+        assert_eq!(l.serve(7, Verb::Create, "/dial", Some(&data("x"))), [Reply::more(2, accepted(2))]);
+        assert_eq!(l.serve(8, Verb::Watch, "/2", None), [Reply::more(8, data("x"))]);
+        assert_eq!(l.cancel(7), [Reply::end(8)], "the dialer hung up");
+        assert_eq!(l.serve(9, Verb::Create, "/dial", None)[0].status, Status::Invalid);
+        assert_eq!(l.serve(10, Verb::Read, "/address", None)[0].body, Some(msg("Text", doc! { "text": "memory" })));
+    }
 }

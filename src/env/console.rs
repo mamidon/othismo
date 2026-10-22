@@ -70,6 +70,50 @@ impl Console {
     }
 }
 
+/// A console run in memory, for an imported image: lines come from whoever
+/// writes to `/typed`, and whatever is written goes to whoever watches
+/// `/printed`. Nothing touches the host.
+#[derive(Default)]
+pub struct MemoryConsole {
+    /// Requests watching `/`.
+    watchers: Vec<u32>,
+    /// Requests watching `/printed`.
+    printed: Vec<u32>,
+}
+
+impl MemoryConsole {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Message>) -> Vec<Reply> {
+        match (path, verb, body) {
+            ("/", Verb::Watch, _) => {
+                self.watchers.push(req);
+                vec![]
+            }
+            ("/", Verb::Write, Some(m)) => {
+                let mut replies: Vec<Reply> = self.printed.iter().map(|&w| Reply::more(w, m.clone())).collect();
+                replies.push(Reply::end(req));
+                replies
+            }
+            ("/typed", Verb::Write, Some(m)) => {
+                let mut replies: Vec<Reply> = self.watchers.iter().map(|&w| Reply::more(w, m.clone())).collect();
+                replies.push(Reply::end(req));
+                replies
+            }
+            ("/printed", Verb::Watch, _) => {
+                self.printed.push(req);
+                vec![]
+            }
+            ("/" | "/typed", Verb::Write, None) => vec![Reply::fail(req, Status::Invalid)],
+            ("/" | "/typed" | "/printed", ..) => vec![Reply::fail(req, Status::NotSupported)],
+            _ => vec![Reply::fail(req, Status::NotFound)],
+        }
+    }
+
+    pub(super) fn cancel(&mut self, req: u32) {
+        self.watchers.retain(|&w| w != req);
+        self.printed.retain(|&w| w != req);
+    }
+}
+
 /// Reads lines and hands them to the Console instances in turn, until EOF,
 /// which every Console is told about.
 pub fn spawn_stdin(mut input: Box<dyn BufRead + Send>, instances: Vec<usize>, events: Sender<Event>) {
@@ -122,5 +166,20 @@ mod tests {
         assert_eq!(w, [Reply::end(4)]);
         assert_eq!(out, b"out\n");
         assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out, &messages).unwrap()), [Status::NotFound]);
+    }
+
+    #[test]
+    fn a_memory_console_is_typed_into_and_printed_from() {
+        let mut c = MemoryConsole::default();
+        assert!(c.serve(1, Verb::Watch, "/", None).is_empty());
+        assert!(c.serve(2, Verb::Watch, "/printed", None).is_empty());
+        let line = msg("Line", doc! { "text": "hi" });
+        assert_eq!(c.serve(3, Verb::Write, "/typed", Some(&line)), [Reply::more(1, line.clone()), Reply::end(3)]);
+        let out = msg("Text", doc! { "text": "out" });
+        assert_eq!(c.serve(4, Verb::Write, "/", Some(&out)), [Reply::more(2, out), Reply::end(4)]);
+        c.cancel(2);
+        assert_eq!(c.serve(5, Verb::Write, "/", Some(&line)), [Reply::end(5)]);
+        assert_eq!(status(c.serve(6, Verb::Read, "/printed", None)), [Status::NotSupported]);
+        assert_eq!(status(c.serve(7, Verb::Read, "/x", None)), [Status::NotFound]);
     }
 }

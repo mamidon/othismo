@@ -249,6 +249,9 @@ anything outside its root, including through symlinks, with `not_found`. `Consol
 a message whose only field is `text: string` verbatim, and anything else
 JSON-ish.
 
+In an image another one imports, these run in memory instead, touching
+nothing on the host (see [Importing an image](images.md#importing-an-image)).
+
 ## The image
 
 What's left of the image language is instances, the mounts that make up each

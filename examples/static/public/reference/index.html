@@ -150,6 +150,23 @@ answers as <code>Files</code> does.</p>
 </tbody></table></div>
 <h2 id="shapes">Shapes</h2>
 <p>Traits and protocols the objects above are made of, for headers to use.</p>
+<h3 id="dialer"><code>Dialer</code></h3>
+<p>The other side of a listener run in memory, which an image that imports
+another can drive it with.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/dial</code></td>
+<td><code>create Data -&gt; Data*</code></td>
+<td>Connect, sending the request&#39;s bytes, and get back everything the server writes, until it closes the connection.</td>
+</tr>
+</tbody></table></div>
 <h3 id="filetree"><code>FileTree</code></h3>
 <p>A tree of files, read-only.</p>
 <div class="table"><table>
@@ -164,6 +181,28 @@ answers as <code>Files</code> does.</p>
 <td><code>/**</code></td>
 <td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
 <td></td>
+</tr>
+</tbody></table></div>
+<h3 id="terminal"><code>Terminal</code></h3>
+<p>The other side of a console run in memory, which an image that imports
+another can drive it with: type lines into it, and watch what it prints.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/typed</code></td>
+<td><code>write Line</code></td>
+<td>Type a line, as if on stdin.</td>
+</tr>
+<tr>
+<td><code>/printed</code></td>
+<td><code>watch -&gt; Opaque*</code></td>
+<td>Everything written to the console, as it is written.</td>
 </tr>
 </tbody></table></div>
 <h3 id="protocols">Protocols</h3>

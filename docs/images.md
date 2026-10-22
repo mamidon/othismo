@@ -162,10 +162,49 @@ files  serves 11 built-in files, 105.6 KB
 A relative `FilesRoot` path resolves against the directory holding the image,
 `.img` or `.rti`.
 
+## Importing an image
+
+An image can import another, whole, to stand in front of it: to test it, or
+to drive it some other way.
+
+```text
+# static.test.img
+import "./static.img"
+
+instance out   : Console
+instance probe : Probe {
+  mount /net net              # static.img's listener
+  mount /out out
+}
+```
+
+- Everything the imported image declares becomes this image's: its
+  instances, its slots, its top-level mounts (so this image's view starts as
+  its view) and its startup requests, which are made before this image's
+  own. Names are shared: declaring an instance or a slot it already has, or
+  mounting where it already has, is an error. Mounting one of its instances
+  is the only time this image needs to know a name inside it.
+- Its relative paths stay relative to it: its modules come from its own
+  `scripts/`, its includes and a `Files` root from its directory.
+- **The runtime's objects in it run in memory**, and touch nothing on the
+  host. This image's own run as usual. Each in-memory object also serves its
+  other side, so this image can drive it:
+  - a `Listener` serves `Dialer`: `create /dial` with a `Data` connects,
+    the server receives the bytes, and the request's answers are everything
+    the server writes, until it closes the connection;
+  - a `Console` serves `Terminal`: `write /typed` types a line, and
+    `watch /printed` streams whatever is written to it;
+  - a `Files` serves a snapshot of its directory, taken when the image
+    starts.
+
+`--check` says which objects run in memory. With every object of the
+imported image in memory, nothing outside can reach it, so a run ends as
+soon as everything sent has been answered.
+
 ## The file format
 
 ```text
-"RTIMAGE" 0x04        magic and format version
+"RTIMAGE" 0x05        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back
