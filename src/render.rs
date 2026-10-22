@@ -81,10 +81,10 @@ mod tests {
 
     #[test]
     fn other_messages_print_json_ish_in_declared_order() {
-        let ty = MessageType {
-            name: "P".into(),
-            fields: vec![("y".into(), FieldType::F64), ("x".into(), FieldType::I32), ("s".into(), FieldType::String)],
-        };
+        let ty = MessageType::new(
+            "P",
+            vec![("y".into(), FieldType::F64), ("x".into(), FieldType::I32), ("s".into(), FieldType::String)],
+        );
         let messages = BTreeMap::from([("P".to_string(), ty)]);
         let msg = Message { type_name: "P".into(), fields: doc! { "x": 1, "s": "a\nb", "y": 2.0 } };
         assert_eq!(render(&msg, &messages), r#"P {"y": 2.0, "x": 1, "s": "a\nb"}"#);

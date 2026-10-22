@@ -16,10 +16,9 @@ pub const TCP: &str = "Environment.Tcp";
 pub const FILES: &str = "Environment.Files";
 pub const PACKED: &str = "Packed.Files";
 
-/// The import path for the runtime's message types, and their declarations.
-/// These types are always in scope in an image; importing them is optional.
+/// The import path for the runtime's message types. These types are always
+/// in scope in an image; importing them is optional.
 pub const ENV_MODULE: &str = "othismo/env";
-const ENV_SOURCE: &str = include_str!("../as/env.ts");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
@@ -133,9 +132,9 @@ pub fn load(path: &Path) -> Result<Program> {
     Ok(program)
 }
 
-/// The runtime's own message types (`as/env.ts`).
+/// The runtime's own message types, from its header (`as/env.iface`).
 pub fn env_messages() -> BTreeMap<String, MessageType> {
-    messages::parse(ENV_SOURCE).expect("as/env.ts parses")
+    crate::iface::env().messages.clone()
 }
 
 /// Validates `img`; relative import paths resolve against `dir`.
@@ -318,27 +317,31 @@ fn resolve_imports(img: &Image, dir: &Path) -> Result<(BTreeMap<String, MessageT
     let mut imported: HashMap<String, PathBuf> = HashMap::new();
     let mut sources = vec![];
     for imp in &img.imports {
-        let path = if imp.path == ENV_MODULE {
-            PathBuf::from(ENV_MODULE)
-        } else if imp.path.starts_with('.') || imp.path.starts_with('/') {
-            let mut path = dir.join(&imp.path);
-            if path.extension().is_none() {
-                path.set_extension("ts");
+        let is_env = match &imp.from {
+            image::Source::Module(m) if m.name == "env" => true,
+            image::Source::Path(p) if p == ENV_MODULE => true,
+            _ => false,
+        };
+        let path = match &imp.from {
+            _ if is_env => PathBuf::from(ENV_MODULE),
+            image::Source::Path(p) if p.starts_with('.') || p.starts_with('/') => {
+                let mut path = dir.join(p);
+                if path.extension().is_none() {
+                    path.set_extension("ts");
+                }
+                path
             }
-            path
-        } else {
-            bail!("{}: unknown module \"{}\"; use a relative path or \"{ENV_MODULE}\"", imp.pos, imp.path);
+            other => bail!("{}: unknown module {other}; use a relative path or `env`", imp.pos),
         };
         if !parsed.contains_key(&path) {
-            let src = if imp.path == ENV_MODULE {
-                ENV_SOURCE.to_string()
+            let decls = if is_env {
+                env.clone()
             } else {
-                std::fs::read_to_string(&path).with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?
-            };
-            let decls = messages::parse(&src).with_context(|| format!("in {}", path.display()))?;
-            if imp.path != ENV_MODULE {
+                let src = std::fs::read_to_string(&path)
+                    .with_context(|| format!("{}: cannot read import {}", imp.pos, path.display()))?;
                 sources.push(path.clone());
-            }
+                messages::parse(&src).with_context(|| format!("in {}", path.display()))?
+            };
             parsed.insert(path.clone(), decls);
         }
         let decls = &parsed[&path];

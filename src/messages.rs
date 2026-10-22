@@ -28,7 +28,7 @@ pub enum FieldType {
 }
 
 impl FieldType {
-    fn from_name(s: &str) -> Option<FieldType> {
+    pub fn from_name(s: &str) -> Option<FieldType> {
         Some(match s {
             "string" => FieldType::String,
             "bool" | "boolean" => FieldType::Bool,
@@ -42,7 +42,7 @@ impl FieldType {
             "u64" => FieldType::U64,
             "f32" => FieldType::F32,
             "f64" => FieldType::F64,
-            "ArrayBuffer" => FieldType::Bytes,
+            "bytes" | "ArrayBuffer" => FieldType::Bytes,
             _ => return None,
         })
     }
@@ -89,9 +89,21 @@ pub struct MessageType {
     pub name: String,
     /// Fields in declaration order.
     pub fields: Vec<(String, FieldType)>,
+    /// The type's `##` documentation, Markdown; empty if it has none.
+    #[serde(default)]
+    pub doc: String,
+    /// Each field's documentation, in the same order as `fields`.
+    #[serde(default)]
+    pub field_docs: Vec<String>,
 }
 
 impl MessageType {
+    /// An undocumented type.
+    pub fn new(name: impl Into<String>, fields: Vec<(String, FieldType)>) -> MessageType {
+        let field_docs = vec![String::new(); fields.len()];
+        MessageType { name: name.into(), fields, doc: String::new(), field_docs }
+    }
+
     pub fn field(&self, name: &str) -> Option<FieldType> {
         self.fields.iter().find(|(n, _)| n == name).map(|(_, t)| *t)
     }
@@ -237,7 +249,7 @@ pub fn parse(src: &str) -> Result<BTreeMap<String, MessageType>> {
         if out.contains_key(&name) {
             bail!("class `{name}` is declared twice");
         }
-        out.insert(name.clone(), MessageType { name, fields });
+        out.insert(name.clone(), MessageType::new(name, fields));
     }
     Ok(out)
 }

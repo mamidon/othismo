@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn shape_check() {
-        let ty = MessageType { name: "P".into(), fields: vec![("x".into(), FieldType::U8)] };
+        let ty = MessageType::new("P", vec![("x".into(), FieldType::U8)]);
         let mut fields = Document::new();
         fields.insert("x", 300);
         let msg = Message { type_name: "P".into(), fields };

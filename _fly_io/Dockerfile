@@ -26,8 +26,8 @@ FROM rust:1.95-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-# The checker embeds the runtime's message types from here (src/check.rs).
-COPY as/env.ts as/env.ts
+# The runtime embeds its own header from here (src/iface.rs).
+COPY as/env.iface as/env.iface
 RUN cargo build --release --locked
 COPY _fly_io/docs.img /ship/docs.img
 COPY --from=web /src/examples/static/scripts/HttpServer.wasm /src/examples/static/scripts/StaticSite.wasm /ship/scripts/

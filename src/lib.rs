@@ -3,6 +3,7 @@
 
 pub mod check;
 pub mod env;
+pub mod iface;
 pub mod image;
 pub mod messages;
 pub mod ns;

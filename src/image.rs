@@ -1,4 +1,6 @@
-//! Lexer, AST and parser for the image language (`.img` files).
+//! Lexer, AST and parser for the image language (`.img` files). Headers
+//! (`.iface` files, see [`crate::iface`]) are written in the same language
+//! and share the lexer and parser.
 
 use crate::ns::Verb;
 use anyhow::{Result, bail};
@@ -26,8 +28,26 @@ pub struct Image {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub names: Vec<Ident>,
-    pub path: String,
+    pub from: Source,
     pub pos: Pos,
+}
+
+/// Where an import's types come from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// `from env` or `from Greeter`: the runtime's header, or a module's.
+    Module(Ident),
+    /// `from "./shared.iface"`: a file, relative to the importing one.
+    Path(String),
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Source::Module(m) => f.write_str(&m.name),
+            Source::Path(p) => write!(f, "{p:?}"),
+        }
+    }
 }
 
 /// `require <name> : <Type> [{ defaults }]`: a slot the host fills in.
@@ -109,7 +129,7 @@ pub enum Value {
 // Lexer
 
 #[derive(Debug, Clone, PartialEq)]
-enum Tok {
+pub(crate) enum Tok {
     Ident(String),
     /// Starts with `/`: `/www`, `/hosts/localhost`.
     Path(String),
@@ -120,6 +140,12 @@ enum Tok {
     RBrace,
     Comma,
     Colon,
+    /// `->`, before what a request is answered with.
+    Arrow,
+    /// `*` after an answer's type: a stream.
+    Star,
+    /// A `##` comment, which documents what follows. Only headers keep them.
+    Doc(String),
     Eof,
 }
 
@@ -135,12 +161,17 @@ impl std::fmt::Display for Tok {
             Tok::RBrace => write!(f, "`}}`"),
             Tok::Comma => write!(f, "`,`"),
             Tok::Colon => write!(f, "`:`"),
+            Tok::Arrow => write!(f, "`->`"),
+            Tok::Star => write!(f, "`*`"),
+            Tok::Doc(_) => write!(f, "a `##` comment"),
             Tok::Eof => write!(f, "end of file"),
         }
     }
 }
 
-fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
+/// Tokenizes `src`. With `docs`, `##` comments are kept as [`Tok::Doc`];
+/// otherwise every comment is dropped.
+pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
     let chars: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
     let (mut i, mut line, mut col) = (0, 1, 1);
@@ -163,15 +194,39 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
         if c.is_whitespace() {
             bump!();
         } else if c == '#' {
+            let start = i;
             while i < chars.len() && chars[i] != '\n' {
                 bump!();
             }
+            let text: String = chars[start..i].iter().collect();
+            if docs && let Some(doc) = text.strip_prefix("##") {
+                toks.push((Tok::Doc(doc.strip_prefix(' ').unwrap_or(doc).trim_end().to_string()), pos));
+            }
         } else if c == '/' {
             let start = i;
-            while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '{' | '}' | ',') {
+            while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '}' | ',') {
+                // `{` only belongs to a path as a `{name}` segment.
+                if chars[i] == '{' {
+                    if chars[i - 1] != '/' {
+                        break;
+                    }
+                    while i < chars.len() && chars[i] != '}' && !chars[i].is_whitespace() {
+                        bump!();
+                    }
+                    if chars.get(i) != Some(&'}') {
+                        bail!("{pos}: unterminated `{{` in a path");
+                    }
+                }
                 bump!();
             }
             toks.push((Tok::Path(chars[start..i].iter().collect()), pos));
+        } else if c == '-' && chars.get(i + 1) == Some(&'>') {
+            toks.push((Tok::Arrow, pos));
+            bump!();
+            bump!();
+        } else if c == '*' {
+            toks.push((Tok::Star, pos));
+            bump!();
         } else if c == '{' || c == '}' || c == ',' || c == ':' {
             toks.push((
                 match c {
@@ -243,29 +298,33 @@ fn lex(src: &str) -> Result<Vec<(Tok, Pos)>> {
 // ---------------------------------------------------------------------------
 // Parser
 
-/// Words that can never be names. Member keywords (`mount`, `send`,
-/// `include`, `readonly`, `at` and the verbs) only mean something inside an
-/// instance block.
-const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
+/// Words that can never be names. Member keywords (`mount`, `include`,
+/// `readonly`, `at` and the verbs) only mean something inside an instance
+/// block.
+pub(crate) const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
 
 /// Words that start a member of an instance block, besides the verbs.
 const MEMBERS: &[&str] = &["mount", "include"];
 
-struct Parser {
+pub(crate) struct Parser {
     toks: Vec<(Tok, Pos)>,
     i: usize,
 }
 
 impl Parser {
-    fn peek(&self) -> &Tok {
+    pub(crate) fn new(src: &str, docs: bool) -> Result<Parser> {
+        Ok(Parser { toks: lex(src, docs)?, i: 0 })
+    }
+
+    pub(crate) fn peek(&self) -> &Tok {
         &self.toks[self.i].0
     }
 
-    fn pos(&self) -> Pos {
+    pub(crate) fn pos(&self) -> Pos {
         self.toks[self.i].1
     }
 
-    fn next(&mut self) -> (Tok, Pos) {
+    pub(crate) fn next(&mut self) -> (Tok, Pos) {
         let t = self.toks[self.i].clone();
         if self.i + 1 < self.toks.len() {
             self.i += 1;
@@ -273,11 +332,11 @@ impl Parser {
         t
     }
 
-    fn is_kw(&self, kw: &str) -> bool {
+    pub(crate) fn is_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
     }
 
-    fn expect(&mut self, want: Tok) -> Result<Pos> {
+    pub(crate) fn expect(&mut self, want: Tok) -> Result<Pos> {
         let (tok, pos) = self.next();
         if tok != want {
             bail!("{pos}: expected {want}, found {tok}");
@@ -285,7 +344,7 @@ impl Parser {
         Ok(pos)
     }
 
-    fn expect_kw(&mut self, kw: &str) -> Result<Pos> {
+    pub(crate) fn expect_kw(&mut self, kw: &str) -> Result<Pos> {
         let (tok, pos) = self.next();
         match tok {
             Tok::Ident(s) if s == kw => Ok(pos),
@@ -294,7 +353,7 @@ impl Parser {
     }
 
     /// A plain identifier: not a keyword and (unless `dotted`) no dots.
-    fn ident(&mut self, what: &str, dotted: bool) -> Result<Ident> {
+    pub(crate) fn ident(&mut self, what: &str, dotted: bool) -> Result<Ident> {
         let (tok, pos) = self.next();
         match tok {
             Tok::Ident(name) if !KEYWORDS.contains(&name.as_str()) && (dotted || !name.contains('.')) => {
@@ -314,7 +373,7 @@ impl Parser {
         Ok(out)
     }
 
-    fn path(&mut self) -> Result<Path> {
+    pub(crate) fn path(&mut self) -> Result<Path> {
         match self.next() {
             (Tok::Path(path), pos) => Ok(Path { path, pos }),
             (other, pos) => bail!("{pos}: expected a path starting with `/`, found {other}"),
@@ -338,17 +397,19 @@ impl Parser {
         }
     }
 
-    fn import(&mut self) -> Result<Import> {
+    /// `import { A, B } from env`, `from Module` or `from "./file.iface"`.
+    pub(crate) fn import(&mut self) -> Result<Import> {
         let pos = self.expect_kw("import")?;
         self.expect(Tok::LBrace)?;
         let names = self.ident_list("type name")?;
         self.expect(Tok::RBrace)?;
         self.expect_kw("from")?;
-        let path = match self.next() {
-            (Tok::Str(s), _) => s,
-            (other, pos) => bail!("{pos}: expected import path string, found {other}"),
+        let from = match self.next() {
+            (Tok::Str(s), _) => Source::Path(s),
+            (Tok::Ident(name), pos) if !KEYWORDS.contains(&name.as_str()) => Source::Module(Ident { name, pos }),
+            (other, pos) => bail!("{pos}: expected a module name or a quoted path to import from, found {other}"),
         };
-        Ok(Import { names, path, pos })
+        Ok(Import { names, from, pos })
     }
 
     fn require(&mut self) -> Result<Require> {
@@ -461,7 +522,7 @@ impl Parser {
 }
 
 pub fn parse(src: &str) -> Result<Image> {
-    Parser { toks: lex(src)?, i: 0 }.image()
+    Parser::new(src, false)?.image()
 }
 
 /// One block of a value file.
@@ -474,7 +535,7 @@ pub struct SlotValues {
 /// Parses a value file, which gives slots their values in the image's own
 /// block syntax: `listen { address: "0.0.0.0:80" }`.
 pub fn parse_values(src: &str) -> Result<Vec<SlotValues>> {
-    Parser { toks: lex(src)?, i: 0 }.values()
+    Parser::new(src, false)?.values()
 }
 
 #[cfg(test)]
@@ -508,7 +569,7 @@ mod tests {
 
         assert_eq!(img.imports.len(), 2);
         assert_eq!(names(&img.imports[0].names), ["Greeting", "Ping"]);
-        assert_eq!(img.imports[0].path, "./messages");
+        assert_eq!(img.imports[0].from, Source::Path("./messages".into()));
 
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].type_name.name, "Environment.Console");
@@ -578,6 +639,40 @@ mod tests {
         assert_eq!(inst.requests[0].body, None, "`include` ends a body-less request");
         let e = parse("instance f : Packed.Files { include public/ }").unwrap_err().to_string();
         assert!(e.contains("expected a quoted file or directory"), "{e}");
+    }
+
+    #[test]
+    fn imports_name_a_module_or_a_path() {
+        let img = parse("import { Line } from env\nimport { Greeting } from Greeter").unwrap();
+        let froms: Vec<String> = img.imports.iter().map(|i| i.from.to_string()).collect();
+        assert_eq!(froms, ["env", "Greeter"]);
+        assert!(parse("import { Line } from instance").is_err(), "a keyword isn't a module");
+    }
+
+    #[test]
+    fn paths_may_hold_name_segments() {
+        let toks: Vec<Tok> = lex("/hosts/{name} /a/{b}/** /x{ /c}", false).unwrap().into_iter().map(|t| t.0).collect();
+        assert_eq!(
+            toks,
+            [
+                Tok::Path("/hosts/{name}".into()),
+                Tok::Path("/a/{b}/**".into()),
+                Tok::Path("/x".into()),
+                Tok::LBrace,
+                Tok::Path("/c".into()),
+                Tok::RBrace,
+                Tok::Eof
+            ]
+        );
+        assert!(lex("/a/{b", false).is_err());
+    }
+
+    #[test]
+    fn doc_comments_are_kept_only_when_asked() {
+        let src = "## Says hi.\n# not a doc\nx -> Y*";
+        let toks: Vec<Tok> = lex(src, true).unwrap().into_iter().map(|t| t.0).collect();
+        assert_eq!(toks, [Tok::Doc("Says hi.".into()), Tok::Ident("x".into()), Tok::Arrow, Tok::Ident("Y".into()), Tok::Star, Tok::Eof]);
+        assert_eq!(lex(src, false).unwrap()[0].0, Tok::Ident("x".into()));
     }
 
     #[test]
