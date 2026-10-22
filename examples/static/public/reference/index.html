@@ -1,0 +1,312 @@
+<!doctype html>
+<!-- Generated from as/env.iface by examples/static/site.mjs (task build:docs). Edit the source, not this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Built-in objects — Reference — othismo</title>
+  <meta name="description" content="The built-in objects and the runtime's message types, generated from the runtime's header.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/objects/">Objects</a>
+          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/images/">Building</a>
+          <a class="nav-link" href="/reference/" aria-current="page">Reference</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Reference</div>
+        <h1>Built-in objects</h1>
+        <p class="lede">The objects the runtime implements, which are the only way any object reaches the world outside the image, and the message types the runtime and its objects use. They are declared in the runtime&#39;s own header, <code>env</code>, and this page is generated from it.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#environment-console">Environment.Console</a></li>
+          <li><a href="#environment-tcp">Environment.Tcp</a></li>
+          <li><a href="#environment-files">Environment.Files</a></li>
+          <li><a href="#packed-files">Packed.Files</a></li>
+          <li><a href="#messages">Messages</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<h2 id="environment-console">Environment.Console</h2>
+<p>The console: the host&#39;s stdin and stdout.</p>
+<p>Whatever is written to it is printed on a line of its own. A message whose
+only field is a string <code>text</code>, such as a <code>Line</code>, prints as that text; any
+other as its type and fields.</p>
+<h3 id="serves">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/</code></td>
+<td><code>watch -&gt; Line*</code>, <code>write Opaque</code></td>
+<td>Watch for every line of stdin, until it ends; write to print.</td>
+</tr>
+</tbody></table></div>
+<h2 id="environment-tcp">Environment.Tcp</h2>
+<p>A TCP listener, on the address the image configures it with.</p>
+<h3 id="serves-2">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/</code></td>
+<td><code>control Listen</code></td>
+<td>Configured by the image only.</td>
+</tr>
+<tr>
+<td><code>/address</code></td>
+<td><code>read -&gt; Text</code></td>
+<td>The bound address, e.g. &quot;127.0.0.1:8080&quot;.</td>
+</tr>
+<tr>
+<td><code>/accept</code></td>
+<td><code>watch -&gt; Accepted*</code></td>
+<td>Every connection accepted, as it is.</td>
+</tr>
+<tr>
+<td><code>/{conn}</code></td>
+<td><code>watch -&gt; Data*</code>, <code>write Data</code>, <code>remove</code></td>
+<td>A connection: watch for the bytes received, until the peer closes; write to send; remove to close our side once everything is sent.</td>
+</tr>
+</tbody></table></div>
+<h2 id="environment-files">Environment.Files</h2>
+<p>Read-only access to one directory on the host, and nothing above it.</p>
+<p>A file&#39;s MIME type comes from its extension. Reading a directory answers
+<code>is_directory</code>, and a listing is sorted by name.</p>
+<h3 id="serves-3">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/</code></td>
+<td><code>control FilesRoot</code>, <code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td>Configured by the image only.</td>
+</tr>
+<tr>
+<td><code>/**</code></td>
+<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h2 id="packed-files">Packed.Files</h2>
+<p>Files packed into the image when it was built, by its <code>include</code>s. It
+answers as <code>Environment.Files</code> does.</p>
+<h3 id="serves-4">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/**</code></td>
+<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h2 id="messages">Messages</h2>
+<h3 id="text"><code>Text</code></h3>
+<p>A string value: a setting, an address, a name.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>text</code></td>
+<td>string</td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h3 id="data"><code>Data</code></h3>
+<p>The contents of something, as <code>read</code> answers.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>mime</code></td>
+<td>string</td>
+<td>Its MIME type, or &quot;&quot; if it isn&#39;t known.</td>
+</tr>
+<tr>
+<td><code>data</code></td>
+<td>bytes</td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h3 id="info"><code>Info</code></h3>
+<p>What <code>stat</code> answers.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>kind</code></td>
+<td>string</td>
+<td>&quot;file&quot; or &quot;dir&quot;.</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td>i64</td>
+<td>In bytes; 0 for a directory.</td>
+</tr>
+<tr>
+<td><code>mime</code></td>
+<td>string</td>
+<td>Its MIME type, or &quot;&quot; if it isn&#39;t known.</td>
+</tr>
+</tbody></table></div>
+<h3 id="entry"><code>Entry</code></h3>
+<p>One name in a <code>list</code> stream, or what <code>create</code> made.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td>string</td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>string</td>
+<td>&quot;file&quot; or &quot;dir&quot;.</td>
+</tr>
+</tbody></table></div>
+<h3 id="line"><code>Line</code></h3>
+<p>One line of text, without its line ending.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>text</code></td>
+<td>string</td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h3 id="listen"><code>Listen</code></h3>
+<p>Configures a Tcp listener.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>address</code></td>
+<td>string</td>
+<td>The address to listen on, e.g. &quot;127.0.0.1:8080&quot;.</td>
+</tr>
+</tbody></table></div>
+<h3 id="accepted"><code>Accepted</code></h3>
+<p>A new connection.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>conn</code></td>
+<td>string</td>
+<td>Its name under the listener: watch, write or remove <code>/&lt;conn&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>peer</code></td>
+<td>string</td>
+<td>The remote address.</td>
+</tr>
+</tbody></table></div>
+<h3 id="filesroot"><code>FilesRoot</code></h3>
+<p>Configures Files.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>path</code></td>
+<td>string</td>
+<td>The directory served, relative to the image.</td>
+</tr>
+</tbody></table></div>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>othismo &middot; served by othismo</small>
+    </div>
+  </footer>
+</body>
+</html>

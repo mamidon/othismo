@@ -8,6 +8,8 @@ import { Accepted, Data, Entry, Info, Line, Text } from env
 ## nothing about files. Every response is logged to `/dev/cons`. One request
 ## per connection; every response closes it.
 object HttpServer {
+  guide "./HttpServer.md"
+
   ## The listener it serves HTTP on.
   needs /net/tcp {
     /address  read -> Text

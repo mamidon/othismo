@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use othismo::{bindings, iface, pack, runtime, slots};
+use othismo::{bindings, doc, iface, pack, runtime, slots};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -8,6 +8,7 @@ const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>
        othismo unpack <image> <dir>
        othismo bindings [--library <path>] <header.iface> [-o <out.ts>]
        othismo embed <header.iface> <module.wasm>
+       othismo doc <module.wasm | header.iface | built-in type | env>
 
 An image is a .img source, which is built in memory, or a built .rti file.
 
@@ -27,7 +28,11 @@ gets no file. They import the library from \"othismo\", or from --library.
 
 `embed` puts a module's header into the module, replacing any already there.
 The header declares one object, named for the module: `object Echo` for
-Echo.wasm.";
+Echo.wasm.
+
+`doc` prints an object's guide and a reference generated from its header, as
+Markdown: a module's, from the header inside it; each object in a header
+file; a built-in object, such as Environment.Tcp; or, for `env`, all of them.";
 
 /// A command-line mistake: print the usage and exit with status 2.
 struct Usage;
@@ -62,6 +67,10 @@ fn command(args: &[String]) -> Result<Result<()>, Usage> {
         },
         Some("run") => run(&args[1..]),
         Some("bindings") => bindings(&args[1..]),
+        Some("doc") => match &args[1..] {
+            [target] if !target.starts_with('-') => Ok(document(target).map(|md| print!("{md}"))),
+            _ => Err(Usage),
+        },
         Some("embed") => match &args[1..] {
             [header, module] if !header.starts_with('-') && !module.starts_with('-') => {
                 Ok(embed(header.as_ref(), module.as_ref()))
@@ -131,6 +140,27 @@ fn embed(header: &Path, module: &Path) -> Result<()> {
     let wasm = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
     let wasm = iface::embed(&wasm, &resolved).with_context(|| module.display().to_string())?;
     std::fs::write(module, wasm).with_context(|| format!("writing {}", module.display()))
+}
+
+fn document(target: &str) -> Result<String> {
+    let path = Path::new(target);
+    let ext = path.extension().and_then(|e| e.to_str());
+    if target == "env" {
+        return Ok(doc::env());
+    }
+    if let Some(o) = iface::env().object(target) {
+        return Ok(doc::object(o, iface::env(), &doc::types_used(o)));
+    }
+    let header = match ext {
+        Some("wasm") => {
+            let wasm = std::fs::read(path).with_context(|| format!("reading {target}"))?;
+            iface::embedded(&wasm).with_context(|| target.to_string())?.with_context(|| format!("{target} has no header"))?
+        }
+        Some("iface") => iface::load(path)?,
+        _ => anyhow::bail!("{target} is not a module, a header or a built-in type"),
+    };
+    let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &header, &header.declared)).collect();
+    Ok(pages.join("\n"))
 }
 
 fn run(args: &[String]) -> Result<Result<()>, Usage> {

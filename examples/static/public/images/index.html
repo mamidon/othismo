@@ -23,6 +23,7 @@
           <a class="nav-link" href="/objects/">Objects</a>
           <a class="nav-link" href="/docs/">Design</a>
           <a class="nav-link" href="/images/" aria-current="page">Building</a>
+          <a class="nav-link" href="/reference/">Reference</a>
         </div>
       </nav>
 
@@ -176,7 +177,7 @@ files  serves 10 built-in files, 95.0 KB
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
 <code>.img</code> or <code>.rti</code>.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x02        magic and format version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x03        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

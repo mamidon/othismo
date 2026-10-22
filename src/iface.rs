@@ -40,6 +40,8 @@ pub fn env() -> &'static Header {
 pub struct Header {
     /// Every message type the header can name: its own and its imports.
     pub messages: BTreeMap<String, MessageType>,
+    /// The ones it declares itself, in order.
+    pub declared: Vec<String>,
     pub objects: Vec<Object>,
 }
 
@@ -568,7 +570,8 @@ pub fn resolve(
         let serves = entries(&o.serves, &messages)?;
         objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), guide, needs, serves });
     }
-    Ok(Header { messages, objects })
+    let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
+    Ok(Header { messages, declared, objects })
 }
 
 fn reserve(name: &Ident) -> Result<()> {
@@ -697,6 +700,7 @@ mod tests {
     fn parses_and_resolves_a_header() {
         let h = resolve_str(GREETER).unwrap();
         assert_eq!(h.messages.keys().collect::<Vec<_>>(), ["Greeting", "Line", "Stats"], "its own types and its imports");
+        assert_eq!(h.declared, ["Greeting", "Stats"]);
         let g = &h.messages["Greeting"];
         assert_eq!(g.doc, "Configures a Greeter.");
         assert_eq!(g.fields, [("prefix".into(), FieldType::String), ("excited".into(), FieldType::Bool)]);

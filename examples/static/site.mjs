@@ -4,18 +4,24 @@
 //   docs/objects.md    -> public/objects/index.html
 //   docs/namespace.md  -> public/docs/index.html
 //   docs/images.md     -> public/images/index.html
+//   `othismo doc env`  -> public/reference/index.html
 //
 // Each page takes its title from the document's `# heading` and its lede
 // from the first paragraph, and gets a contents list of its `##` sections.
+// The reference is generated from the runtime's header by othismo itself:
+// $OTHISMO, or target/debug/othismo, or the one on the PATH.
 // Run with `task build:docs`; the output is committed so the example needs no build.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Marked } from "marked"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, "..", "..")
+const built = join(root, "target", "debug", "othismo")
+const OTHISMO = process.env.OTHISMO ?? (existsSync(built) ? built : "othismo")
 
 const PAGES = [
   {
@@ -46,6 +52,14 @@ const PAGES = [
     eyebrow: "Building",
     description: "Building images: sealing an image into one file, packed files, and slots the host fills in.",
   },
+  {
+    source: "as/env.iface",
+    doc: "env",
+    out: "reference/index.html",
+    nav: "/reference/",
+    eyebrow: "Reference",
+    description: "The built-in objects and the runtime's message types, generated from the runtime's header.",
+  },
 ]
 
 /** Where links between the docs point on the site. */
@@ -70,11 +84,16 @@ function escape(s) {
 
 function render(markdown) {
   const toc = []
+  const ids = new Map()
   const marked = new Marked({
     renderer: {
       heading({ tokens, depth }) {
         const html = this.parser.parseInline(tokens)
-        const id = slug(html)
+        // Headings repeat in the reference ("Serves"), and ids mustn't.
+        const base = slug(html)
+        const n = (ids.get(base) ?? 0) + 1
+        ids.set(base, n)
+        const id = n === 1 ? base : `${base}-${n}`
         if (depth === 2) toc.push({ id, html })
         return `<h${depth} id="${id}">${html}</h${depth}>\n`
       },
@@ -137,6 +156,7 @@ function page(p, doc) {
           ${navLink("/objects/", "Objects")}
           ${navLink("/docs/", "Design")}
           ${navLink("/images/", "Building")}
+          ${navLink("/reference/", "Reference")}
         </div>
       </nav>
 
@@ -175,9 +195,12 @@ ${doc.body}
 }
 
 for (const p of PAGES) {
-  const doc = render(readFileSync(join(root, p.source), "utf8"))
+  const markdown = p.doc
+    ? execFileSync(OTHISMO, ["doc", p.doc], { encoding: "utf8" })
+    : readFileSync(join(root, p.source), "utf8")
+  const doc = render(markdown)
   const out = join(here, "public", p.out)
   mkdirSync(dirname(out), { recursive: true })
   writeFileSync(out, page(p, doc))
-  console.log(`${p.source} -> ${join("examples/static/public", p.out)}`)
+  console.log(`${p.doc ? `othismo doc ${p.doc}` : p.source} -> ${join("examples/static/public", p.out)}`)
 }

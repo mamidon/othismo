@@ -3,6 +3,7 @@
 
 pub mod bindings;
 pub mod check;
+pub mod doc;
 pub mod env;
 pub mod iface;
 pub mod image;
