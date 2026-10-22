@@ -38,7 +38,41 @@
   </header>
 
   <main>
-    <section id="ideas">
+    <section id="image">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="eyebrow">The image</div>
+          <h2>Everything this server can touch.</h2>
+        </div>
+        <div class="showcase">
+          <div>
+            <p>It touches the host in two ways: one listener, whose address the deployer can change, and the console for the access log. The site itself is packed into the image, and the HTTP server reaches it only through the site controller.</p>
+            <p>The site also serves a file that exists only in its code. It counts the requests it has forwarded:</p>
+            <p><span class="counter" id="hits">&ndash;</span></p>
+            <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
+          </div>
+          <pre><code>require listen : Listen { address: "127.0.0.1:8080" }
+
+instance net   : Environment.Tcp     { control / listen }
+instance cons  : Environment.Console
+instance files : Packed.Files        { include "./public/" }
+
+instance site : StaticSite {
+  mount files /files readonly
+}
+
+instance http : HttpServer {
+  mount net  /net/tcp
+  mount site /www
+  mount cons /dev/cons
+  control /hosts/* Text { text: "/www" }
+  control /hosts/files.localhost Text { text: "/www/static" }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="white" id="ideas">
       <div class="wrap">
         <div class="section-head">
           <div class="eyebrow">The model</div>
@@ -66,7 +100,7 @@
       </div>
     </section>
 
-    <section class="white" id="request">
+    <section id="request">
       <div class="wrap">
         <div class="section-head">
           <div class="eyebrow">How this page reached you</div>
@@ -107,50 +141,16 @@
       </div>
     </section>
 
-    <section id="image">
-      <div class="wrap">
-        <div class="section-head">
-          <div class="eyebrow">The image</div>
-          <h2>Everything this server can touch.</h2>
-        </div>
-        <div class="showcase">
-          <div>
-            <p>It touches the host in two ways: one listener, whose address the deployer can change, and the console for the access log. The site itself is packed into the image, and the HTTP server reaches it only through the site controller.</p>
-            <p>The site also serves a file that exists only in its code. It counts the requests it has forwarded:</p>
-            <p><span class="counter" id="hits">&ndash;</span></p>
-            <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
-          </div>
-          <pre><code>require listen : Listen { address: "127.0.0.1:8080" }
-
-instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console
-instance files : Packed.Files        { include "./public/" }
-
-instance site : StaticSite {
-  mount files /files readonly
-}
-
-instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
-  control /hosts/* Text { text: "/www" }
-  control /hosts/files.localhost Text { text: "/www/static" }
-}</code></pre>
-        </div>
-      </div>
-    </section>
-
     <section class="cta">
       <div class="wrap">
         <div class="cta-card">
           <div class="eyebrow">Try it</div>
           <h2>Serve these docs yourself.</h2>
-          <p class="lede">Requires Rust and Node. The site is the docs, rendered.</p>
-          <pre><code>make static     # http://127.0.0.1:8080
-make site       # re-render the docs into examples/static/public
-cargo run -- build examples/static/static.img -o static.rti
-cargo run -- static.rti --set listen.address=0.0.0.0:8080</code></pre>
+          <p class="lede">Requires Rust, Node and Task. The site is the docs, rendered.</p>
+          <pre><code>task run:example:static     # http://127.0.0.1:8080
+task build:docs             # re-render the docs into examples/static/public
+task build:example:static   # seal it into examples/static/static.rti
+task run:example:static -- --set listen.address=0.0.0.0:8080</code></pre>
         </div>
       </div>
     </section>
