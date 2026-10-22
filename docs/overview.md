@@ -125,8 +125,8 @@ instance site : StaticSite {
 }
 
 # a socket
-instance net   : Environment.Tcp
-instance cons  : Environment.Console
+instance net   : Listener
+instance cons  : Console
 # brings the host's ./public folder into the image, at build time
 instance files : Packed.Files { include "./public/" }
 

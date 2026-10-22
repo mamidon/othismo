@@ -1,6 +1,8 @@
 # The runtime's own header, `env`, is this directory: the conventional
-# bodies for the verbs, here, and one file for each built-in object with the
-# types it adds. The runtime embeds every file and joins them into `env`.
+# bodies for the verbs, here, and one file for each trait the runtime
+# implements, with the types it adds. An image declares one of those objects
+# by its trait, `instance net : Listener`, and the runtime picks how to run
+# it. The runtime embeds every file and joins them into `env`.
 #
 # Its types are always in scope in an image. A header imports them with
 # `import { ... } from env`, and AssemblyScript with

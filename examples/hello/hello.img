@@ -5,4 +5,4 @@ instance echo : Echo {
   mount /dev/cons cons
 }
 
-instance cons : Environment.Console
+instance cons : Console

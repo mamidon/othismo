@@ -1,4 +1,4 @@
-//! `Environment.Tcp`: one TCP listener and the connections it accepts.
+//! `Listener`, run as a TCP listener and the connections it accepts.
 
 use super::{Event, Reply, What, msg};
 use crate::ns::{Status, Verb};

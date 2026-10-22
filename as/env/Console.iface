@@ -3,15 +3,13 @@ message Line {
   text: string
 }
 
-## Lines in, and anything out.
-trait Console {
-  ## Watch for every line of input, until it ends; write to print.
-  /   watch -> Line*, write Opaque
-}
-
-## The console: the host's stdin and stdout.
+## A console: lines in, and anything out. The runtime runs it on the host's
+## stdin and stdout.
 ##
 ## Whatever is written to it is printed on a line of its own. A message whose
 ## only field is a string `text`, such as a `Line`, prints as that text; any
 ## other as its type and fields.
-object Environment.Console : Console {}
+trait Console {
+  ## Watch for every line of input, until it ends; write to print.
+  /   watch -> Line*, write Opaque
+}

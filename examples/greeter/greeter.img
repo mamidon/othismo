@@ -12,7 +12,7 @@ instance shouter : Shouter {
   mount /dev/cons cons
 }
 
-instance cons : Environment.Console
+instance cons : Console
 
 mount /greeter greeter
 write /greeter/greeting Greeting { prefix: "Hello, ", excited: true }

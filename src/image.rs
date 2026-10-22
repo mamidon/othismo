@@ -72,7 +72,7 @@ pub struct Ident {
 pub struct Instance {
     pub name: Ident,
     /// A module name (`scripts/<name>.wasm`) or a dotted environment type,
-    /// e.g. `Environment.Console`.
+    /// e.g. `Console`.
     pub type_name: Ident,
     pub mounts: Vec<Mount>,
     /// `include "<path>" [at <path>]`: files to pack into the image.
@@ -586,8 +586,8 @@ mod tests {
             import { Greeting, Ping } from "./messages"   # trailing comment
             import { Tick } from "./other"
 
-            instance cons : Environment.Console
-            instance net : Environment.Tcp
+            instance cons : Console
+            instance net : Listener
             control /net Listen { address: "127.0.0.1:0" }
             instance echo : Echo {
               mount /dev/cons cons
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(img.imports[0].from, Source::Path("./messages".into()));
 
         assert_eq!(img.instances.len(), 3);
-        assert_eq!(img.instances[0].type_name.name, "Environment.Console");
+        assert_eq!(img.instances[0].type_name.name, "Console");
         let echo = &img.instances[2];
         let mounts: Vec<_> = echo.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
         assert_eq!(mounts, [("cons", "/dev/cons", false), ("net", "/net/tcp", true)]);
@@ -640,7 +640,7 @@ mod tests {
         let img = parse(
             r#"require listen : Listen { address: "127.0.0.1:8080" }
             require admin : Text
-            instance net : Environment.Tcp
+            instance net : Listener
             control /net listen"#,
         )
         .unwrap();

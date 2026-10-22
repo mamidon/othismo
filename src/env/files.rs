@@ -1,4 +1,4 @@
-//! `Environment.Files`: read-only access to one directory on the host.
+//! `Files`, run as read-only access to one directory on the host.
 
 use super::{Reply, msg};
 use crate::ns::{Status, Verb};

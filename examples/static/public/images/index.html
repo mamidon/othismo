@@ -54,7 +54,7 @@ deployment, in the way a Docker image is built from a Dockerfile. It builds on
     <article class="prose">
 <p>A <code>.img</code> file is a source. Running it reads several other files: the compiled
 modules in <code>scripts/</code>, each with its header inside, any header files it
-imports types from, and whatever an <code>Environment.Files</code> root points at. A <strong>built image</strong> (<code>.rti</code>)
+imports types from, and whatever a <code>Files</code> root points at. A <strong>built image</strong> (<code>.rti</code>)
 holds everything the image needs except what it explicitly takes from the
 host, so it can be copied to another machine and run there.</p>
 <h2 id="what-a-built-image-holds">What a built image holds</h2>
@@ -73,7 +73,7 @@ if present. Anyone who unpacks the file can read them; the runtime never
 does. <code>--no-sources</code> leaves them out.</li>
 </ul>
 <p>A built image&#39;s only contact with the host is through the environment objects
-it declares (Console, Tcp, Files). Running <code>--check</code> on it gives the complete
+it declares (Console, Listener, Files). Running <code>--check</code> on it gives the complete
 list of what it can touch on the machine.</p>
 <pre><code class="language-text">othismo build static.img -o static.rti     # seal
 othismo run static.rti                     # run it, here or elsewhere
@@ -82,13 +82,13 @@ othismo unpack static.rti out/             # modules, files and sources
 </code></pre>
 <p>Running a <code>.img</code> builds it in memory and runs the result, so there is one way
 to load an image. Packed trees are a snapshot taken when the image is built;
-for live edits during development, use <code>Environment.Files</code>.</p>
+for live edits during development, use <code>Files</code>.</p>
 <h2 id="packed-files">Packed files</h2>
 <p><code>Packed.Files</code> serves a tree that was copied into the image when it was built.
-It is the build-time counterpart of <code>Environment.Files</code>, which reads the host
+It is the build-time counterpart of <code>Files</code>, which reads the host
 at run time:</p>
 <pre><code class="language-text"># The host&#39;s files, live:
-instance files : Environment.Files
+instance files : Files
 mount /files files
 control /files FilesRoot { path: &quot;/var/www&quot; }
 
@@ -100,7 +100,7 @@ instance files : Packed.Files {
 </code></pre>
 <p><code>Packed.Files</code> touches nothing on the host when the image runs, and <code>--check</code>
 reports it as built in.</p>
-<p>It answers <code>read</code>, <code>stat</code> and <code>list</code> exactly as <code>Environment.Files</code> does
+<p>It answers <code>read</code>, <code>stat</code> and <code>list</code> exactly as <code>Files</code> does
 (<code>Data</code>, <code>Info</code>, a sorted stream of <code>Entry</code>, the same MIME types and statuses).
 Every unsafe verb gets <code>read_only</code>.</p>
 <h3 id="include"><code>include</code></h3>
@@ -135,7 +135,7 @@ values; the image supplies the types and, optionally, defaults:</p>
 }
 require admin : Text            # no defaults: the host must give it
 
-instance net  : Environment.Tcp
+instance net  : Listener
 instance http : HttpServer
 
 mount /net  net

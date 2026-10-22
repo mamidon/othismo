@@ -24,7 +24,7 @@ fn fixture(name: &str) -> Fixture {
         .file(
             "test.img",
             r#"import { Ping } from "./messages.iface"
-            instance cons : Environment.Console
+            instance cons : Console
             instance a : A { mount /dev/cons cons }  mount /a a  invoke /a Ping
             instance b : B { mount /a a readonly }
             instance a2 : A { mount /dev/cons cons }"#,
@@ -246,13 +246,13 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require root : FilesRoot
-        instance net   : Environment.Tcp
-        instance files : Environment.Files
+        instance net   : Listener
+        instance files : Files
         mount /net net
         mount /files files
         control /net listen
         control /files root
-        instance cons  : Environment.Console"#,
+        instance cons  : Console"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
     let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
@@ -281,7 +281,7 @@ fn the_cli_layers_value_files_then_set() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info
-        instance net : Environment.Tcp
+        instance net : Listener
         mount /net net
         control /net listen"#,
     )

@@ -1,4 +1,4 @@
-//! How `Environment.Stdout` turns a message into a line of text.
+//! How the console turns a message into a line of text.
 
 use crate::messages::MessageType;
 use crate::wire::Message;

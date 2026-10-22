@@ -1,6 +1,6 @@
 //! Resolves and validates a parsed image into a [`Program`] the runtime can run.
 
-use crate::iface::{self, Header, Object};
+use crate::iface::{self, Header, Object, Trait};
 use crate::image::{self, Ident, Image, Source, Value};
 use crate::messages::{FieldType, MessageType};
 use crate::ns::{self, Namespace, Status, Verb};
@@ -14,10 +14,19 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-pub const CONSOLE: &str = "Environment.Console";
-pub const TCP: &str = "Environment.Tcp";
-pub const FILES: &str = "Environment.Files";
+/// The traits the runtime implements itself. An image declares an instance
+/// of one by the trait, and the runtime picks how to run it.
+pub const CONSOLE: &str = "Console";
+pub const LISTENER: &str = "Listener";
+pub const FILES: &str = "Files";
+pub const NATIVE: &[&str] = &[CONSOLE, LISTENER, FILES];
+/// The one built-in written by its own name: it touches nothing on the host,
+/// so there is nothing to choose.
 pub const PACKED: &str = "Packed.Files";
+
+/// What the runtime's objects were called when images named them directly.
+const RENAMED: &[(&str, &str)] =
+    &[("Environment.Console", CONSOLE), ("Environment.Tcp", LISTENER), ("Environment.Files", FILES)];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
@@ -45,7 +54,8 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub name: String,
-    /// As written: a module name, or a built-in type such as `Environment.Tcp`.
+    /// As written: a module name, one of the runtime's traits, such as
+    /// `Listener`, or `Packed.Files`.
     pub type_name: String,
     pub kind: Kind,
     /// An environment object's config.
@@ -163,7 +173,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     let mut headers: BTreeMap<String, Header> = BTreeMap::new();
     for inst in &img.instances {
         let ty = &inst.type_name;
-        if !ty.name.contains('.') && !headers.contains_key(&ty.name) {
+        if !ty.name.contains('.') && builtin(&ty.name).is_none() && !headers.contains_key(&ty.name) {
             let header = modules(&ty.name).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
             headers.insert(ty.name.clone(), header);
         }
@@ -174,8 +184,8 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     let mut interfaces: BTreeMap<String, Object> =
         headers.iter().filter_map(|(name, h)| Some((name.clone(), h.object(name)?.clone()))).collect();
     for inst in &img.instances {
-        if let Some(o) = iface::env().object(&inst.type_name.name) {
-            interfaces.insert(o.name.clone(), o.clone());
+        if let Some(o) = builtin(&inst.type_name.name) {
+            interfaces.insert(o.name.clone(), o);
         }
     }
 
@@ -220,8 +230,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
         addressed.push((to.inst, to.path, full));
     }
-    let is_config =
-        |to: usize, verb: Verb| verb == Verb::Control && iface::env().object(&img.instances[to].type_name.name).is_some();
+    let is_config = |to: usize, verb: Verb| verb == Verb::Control && builtin(&img.instances[to].type_name.name).is_some();
 
     let mut instances = vec![];
     for (i, inst) in img.instances.iter().enumerate() {
@@ -238,7 +247,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         // A built-in object's config is the image's `control` of it, taken
         // before the object is made rather than sent as a request.
         let controls: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, _)| is_config(i, r.verb)).collect();
-        let kind = match iface::env().object(&ty.name) {
+        let kind = match builtin(&ty.name) {
             Some(builtin) => {
                 let name = builtin.name.as_str();
                 if let Some(m) = inst.mounts.first() {
@@ -247,7 +256,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                 if let Some((c, path)) = controls.iter().find(|(_, path)| *path != "/") {
                     bail!("{}: {name} is configured at its root, and `{}` is `{path}` in it", c.path.pos, c.path.path);
                 }
-                let config_type = config_type(builtin);
+                let config_type = config_type(&builtin);
                 let needs = || {
                     let t = config_type.unwrap();
                     err_at(
@@ -272,9 +281,20 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                 };
                 builtin_kind(name, &inst.includes)?
             }
+            None if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) => {
+                bail!(err_at(ty, format!("the runtime's objects are declared by their traits: `instance {} : {now}`", inst.name.name)))
+            }
+            None if iface::env().traits.contains_key(&ty.name) => bail!(err_at(
+                ty,
+                format!(
+                    "`{}` is a shape the runtime has no implementation of; it runs {}, and {PACKED}",
+                    ty.name,
+                    NATIVE.join(", ")
+                )
+            )),
             None if ty.name.starts_with("Environment.") || ty.name.starts_with("Packed.") => {
-                let known: Vec<&str> = iface::env().objects.iter().map(|o| o.name.as_str()).collect();
-                bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {})", ty.name, known.join(", "))));
+                let known = NATIVE.iter().chain([&PACKED]).copied().collect::<Vec<_>>().join(", ");
+                bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {known})", ty.name)));
             }
             None if ty.name.contains('.') => bail!(err_at(ty, format!("`{}` is not a module name", ty.name))),
             None => Kind::Wasm { type_name: ty.name.clone() },
@@ -455,6 +475,17 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
     out
 }
 
+/// The interface of the built-in type `name`, if it is one: one of the traits
+/// the runtime implements, as an object serving the trait's tree, or
+/// Packed.Files.
+fn builtin(name: &str) -> Option<Object> {
+    let env = iface::env();
+    if name == PACKED {
+        return env.object(PACKED).cloned();
+    }
+    env.traits.get(name).filter(|_| NATIVE.contains(&name)).map(Trait::as_object)
+}
+
 /// The config message a built-in object takes: whatever its header says its
 /// root takes with `control`, if anything.
 fn config_type(builtin: &Object) -> Option<&str> {
@@ -462,12 +493,12 @@ fn config_type(builtin: &Object) -> Option<&str> {
     root.requests.iter().find(|r| r.verb == Verb::Control).and_then(|r| r.body.as_deref())
 }
 
-/// How the runtime implements the built-in object `name`. A `Packed.Files`
+/// How the runtime implements the built-in type `name`. A `Packed.Files`
 /// serves its `includes`.
 fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
     Ok(match name {
         CONSOLE => Kind::Console,
-        TCP => Kind::Tcp,
+        LISTENER => Kind::Tcp,
         FILES => Kind::Files,
         PACKED => {
             let mut decls = vec![];
@@ -482,7 +513,7 @@ fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
             }
             Kind::Packed { includes: decls }
         }
-        other => bail!("the runtime's header declares {other}, but the runtime doesn't implement it"),
+        other => bail!("the runtime doesn't implement {other}"),
     })
 }
 
@@ -696,7 +727,7 @@ mod tests {
 
     const HEADER: &str = r#"
         import { Greeting, Config, Ping, Blob } from "./messages.iface"
-        instance cons : Environment.Console
+        instance cons : Console
     "#;
 
     #[test]
@@ -717,7 +748,7 @@ mod tests {
         assert!(e.contains("`/x/../y` is not a clean absolute path"), "{e}");
         let e = err(&format!("{HEADER} instance a : A {{ mount /c cons mount /c/ cons }}"));
         assert!(e.contains("`/c` is already mounted"), "{e}");
-        let e = err(&format!("{HEADER} instance net : Environment.Console {{ mount /c cons }}"));
+        let e = err(&format!("{HEADER} instance net : Console {{ mount /c cons }}"));
         assert!(e.contains("only serves"), "{e}");
         // Forward references are fine: views are built once every instance exists.
         let p = check_src(&format!("{HEADER} instance a : A {{ mount /b b readonly }} instance b : B")).unwrap();
@@ -788,8 +819,8 @@ mod tests {
     #[test]
     fn environment_objects_take_config_from_the_image() {
         let p = check_src(
-            r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "127.0.0.1:0" }
-            instance fs : Environment.Files mount /fs fs control /fs FilesRoot { path: "public" }"#,
+            r#"instance net : Listener mount /net net control /net Listen { address: "127.0.0.1:0" }
+            instance fs : Files mount /fs fs control /fs FilesRoot { path: "public" }"#,
         )
         .unwrap();
         assert_eq!(p.instances[0].kind, Kind::Tcp);
@@ -798,27 +829,32 @@ mod tests {
         assert_eq!(p.instances[1].kind, Kind::Files);
         assert!(p.startup.is_empty(), "config isn't a request");
 
-        let e = err("instance net : Environment.Tcp");
+        let e = err("instance net : Listener");
         assert!(e.contains("needs exactly one config message: mount it in the image's view and `control` its root with a Listen"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "a" } control /net Listen { address: "b" }"#);
+        let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } control /net Listen { address: "b" }"#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(r#"instance c : Environment.Console mount /c c control /c Listen { address: "a" }"#);
+        let e = err(r#"instance c : Console mount /c c control /c Listen { address: "a" }"#);
         assert!(e.contains("takes no config"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp mount /net net control /net/x Listen { address: "a" }"#);
-        assert!(e.contains("Environment.Tcp is configured at its root, and `/net/x` is `/x` in it"), "{e}");
+        let e = err(r#"instance net : Listener mount /net net control /net/x Listen { address: "a" }"#);
+        assert!(e.contains("Listener is configured at its root, and `/net/x` is `/x` in it"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
+        let e = err("instance net : Environment.Tcp");
+        assert!(e.contains("the runtime's objects are declared by their traits: `instance net : Listener`"), "{e}");
+        let e = err("instance t : FileTree");
+        assert!(e.contains("`FileTree` is a shape the runtime has no implementation of; it runs Console, Listener, Files, and Packed.Files"), "{e}");
     }
 
     #[test]
     fn config_types_come_from_the_runtimes_header() {
-        let config = |name: &str| config_type(iface::env().object(name).unwrap());
-        assert_eq!(config(TCP), Some("Listen"));
-        assert_eq!(config(FILES), Some("FilesRoot"));
+        let config = |name: &str| config_type(&builtin(name).unwrap()).map(str::to_string);
+        assert_eq!(config(LISTENER).as_deref(), Some("Listen"));
+        assert_eq!(config(FILES).as_deref(), Some("FilesRoot"));
         assert_eq!(config(CONSOLE), None);
         assert_eq!(config(PACKED), None);
-        for o in &iface::env().objects {
-            assert!(builtin_kind(&o.name, &[]).is_ok(), "the runtime implements {}", o.name);
+        for name in NATIVE.iter().chain([&PACKED]) {
+            assert!(iface::env().traits.contains_key(*name) || iface::env().object(name).is_some(), "env declares {name}");
+            assert!(builtin_kind(name, &[]).is_ok(), "the runtime implements {name}");
         }
     }
 
@@ -844,7 +880,7 @@ mod tests {
         let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
         assert!(e.contains("only serves"), "{e}");
         let e = err(r#"instance f : Packed.Dirs"#);
-        assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Environment.Console, Environment.Tcp, Environment.Files, Packed.Files)"), "{e}");
+        assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Console, Listener, Files, Packed.Files)"), "{e}");
     }
 
     #[test]
@@ -853,7 +889,7 @@ mod tests {
             r#"{HEADER}
             require listen : Listen
             require config : Config {{ name: "x", count: 3 }}
-            instance net : Environment.Tcp mount /net net control /net listen
+            instance net : Listener mount /net net control /net listen
             instance e : Echo mount /e e write /e/config config"#
         ))
         .unwrap();
@@ -875,7 +911,7 @@ mod tests {
         assert!(e.contains("unknown message type `Nope`"), "{e}");
         let e = err(&inst("require g : Greeting", "write /e g { text: \"x\" }"));
         assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
-        let e = err("require t : Text instance net : Environment.Tcp mount /net net control /net t");
+        let e = err("require t : Text instance net : Listener mount /net net control /net t");
         assert!(e.contains("needs exactly one config message"), "{e}");
     }
 
@@ -946,7 +982,7 @@ mod tests {
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let e = err_with(r#"instance g : G mount /g g write /g/greeting Line { text: "x" }"#, &[("G", greeter)]);
         assert!(e.contains("doesn't take `write Line` at `/greeting`"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "a" } read /net/a/b"#);
+        let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } read /net/a/b"#);
         assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
     }
 
@@ -960,7 +996,7 @@ mod tests {
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
         let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write Line` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
-        let files = r#"instance f : Environment.Files mount /f f control /f FilesRoot { path: "." }"#;
+        let files = r#"instance f : Files mount /f f control /f FilesRoot { path: "." }"#;
         let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
         assert!(e.contains("`e` needs `/ watch -> Line*` at `/dev/cons`, and `f` serves `/ control FilesRoot, read -> Data, stat -> Info, list -> Entry*`, `/** read -> Data, stat -> Info, list -> Entry*`"), "{e}");
     }
@@ -979,7 +1015,7 @@ mod tests {
         let site = "import { Data, Info, Text } from env object Site { serves { /hits read -> Text  /** read -> Data, stat -> Info } }";
         let strict = "import { Data } from env object Strict { needs /** { /** read -> Data } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
-        let net = r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "127.0.0.1:0" }"#;
+        let net = r#"instance net : Listener mount /net net control /net Listen { address: "127.0.0.1:0" }"#;
         let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
@@ -991,8 +1027,8 @@ mod tests {
     #[test]
     fn describes_views_and_reach() {
         let p = check_src(
-            r#"instance cons : Environment.Console
-            instance files : Environment.Files mount /files files control /files FilesRoot { path: "." }
+            r#"instance cons : Console
+            instance files : Files mount /files files control /files FilesRoot { path: "." }
             instance site : Site { mount /files files readonly }
             instance http : Http { mount /www site  mount /dev/cons cons }"#,
         )

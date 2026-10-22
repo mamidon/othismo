@@ -250,7 +250,8 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
         }
         let (at, target) = (words[i + 1], words[i + 2]);
         let ro = words.get(i + 3) == Some(&"readonly");
-        let entries: Vec<String> = match env.object(&types[target]) {
+        let built_in = env.object(&types[target]).cloned().or_else(|| env.traits.get(&types[target]).map(|t| t.as_object()));
+        let entries: Vec<String> = match built_in {
             None => vec![anything(ro)],
             Some(built_in) => built_in
                 .serves
@@ -288,7 +289,7 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Environment.Console\n{extra}\n");
+    let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Console\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
         img.push_str(&format!("instance {obj} : {ty} {{ {members} }}\n"));
@@ -499,7 +500,7 @@ const FILES_OUTPUT: &str = "not_supported\n\
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Environment.Files  mount /files files  control /files FilesRoot { path: \"public\" }";
+    let files = "instance files : Files  mount /files files  control /files FilesRoot { path: \"public\" }";
     let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");

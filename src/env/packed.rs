@@ -1,5 +1,5 @@
 //! `Packed.Files`: files packed into the image when it was built, which it
-//! answers for as `Environment.Files` does.
+//! answers for as `Files` does.
 
 use super::files::mime;
 use super::{Reply, msg};

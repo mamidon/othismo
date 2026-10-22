@@ -1,4 +1,4 @@
-//! `Environment.Console`: the host's stdin and stdout.
+//! `Console`, run on the host's stdin and stdout.
 
 use super::{Event, Reply, What, msg};
 use crate::messages::MessageType;

@@ -1,6 +1,7 @@
 //! Reference documentation generated from headers, as Markdown: what
 //! `othismo doc` prints, and what the site's reference pages are made of.
 
+use crate::check;
 use crate::iface::{self, Entry, Header, Object};
 use crate::messages::MessageType;
 use std::fmt::Write;
@@ -22,21 +23,42 @@ pub fn object(o: &Object, header: &Header, types: &[String]) -> String {
     out
 }
 
-/// The runtime's page: every built-in object, and the runtime's types.
+/// The runtime's page: the traits it runs, Packed.Files, the shapes they
+/// are made of, and the runtime's types.
 pub fn env() -> String {
     let env = iface::env();
     let mut out = String::from(
         "# Built-in objects\n\n\
          The objects the runtime implements, which are the only way any object reaches the world \
-         outside the image, and the message types the runtime and its objects use. They are \
-         declared in the runtime's own header, `env`, and this page is generated from it.\n\n",
+         outside the image, and the shapes and message types they use. An image declares one by \
+         its trait, `instance net : Listener`, and the runtime picks how to run it; `Packed.Files` \
+         is declared by its own name. They are declared in the runtime's own header, `env`, and \
+         this page is generated from it.\n\n",
     );
-    for o in &env.objects {
+    let runs = check::NATIVE.iter().map(|name| env.traits[*name].as_object()).chain(env.objects.iter().cloned());
+    for o in runs {
         writeln!(out, "## {}\n", o.name).unwrap();
         if !o.doc.is_empty() {
             writeln!(out, "{}\n", o.doc).unwrap();
         }
-        reference(&mut out, o, "###");
+        reference(&mut out, &o, "###");
+    }
+    let shapes: Vec<_> = env.traits.values().filter(|t| !check::NATIVE.contains(&t.name.as_str())).collect();
+    if !shapes.is_empty() || !env.protocols.is_empty() {
+        out.push_str("## Shapes\n\nTraits and protocols the objects above are made of, for headers to use.\n\n");
+        for t in shapes {
+            writeln!(out, "### `{}`\n", t.name).unwrap();
+            if !t.doc.is_empty() {
+                writeln!(out, "{}\n", t.doc).unwrap();
+            }
+            entries(&mut out, &t.entries);
+        }
+        out.push_str("### Protocols\n\n| Protocol | Requests | |\n|---|---|---|\n");
+        for p in env.protocols.values() {
+            let reqs: Vec<String> = p.requests.iter().map(|r| format!("`{r}`")).collect();
+            writeln!(out, "| `{}` | {} | {} |", p.name, reqs.join(", "), cell(&p.doc)).unwrap();
+        }
+        out.push('\n');
     }
     messages(&mut out, env, &env.declared, "##");
     out
@@ -166,10 +188,11 @@ mod tests {
     fn documents_the_built_in_objects() {
         let out = env();
         assert!(out.starts_with("# Built-in objects\n\n"), "{out}");
-        for o in ["## Environment.Console", "## Environment.Tcp", "## Packed.Files", "## Messages", "### `Accepted`"] {
+        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Accepted`"] {
             assert!(out.contains(&format!("{o}\n")), "{o}: {out}");
         }
-        let console = iface::env().object("Environment.Console").unwrap();
-        assert_eq!(types_used(console), ["Line"]);
+        assert!(out.contains("| `Connection` | `watch -> Data*`, `write Data`, `remove` |"), "{out}");
+        let console = iface::env().traits["Console"].as_object();
+        assert_eq!(types_used(&console), ["Line"]);
     }
 }

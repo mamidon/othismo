@@ -33,7 +33,8 @@ Echo.wasm.
 
 `doc` prints an object's guide and a reference generated from its header, as
 Markdown: a module's, from the header inside it; each object in a header
-file; a built-in object, such as Environment.Tcp; or, for `env`, all of them.";
+file; one of the runtime's traits, such as Listener; or, for `env`, all of
+them.";
 
 /// A command-line mistake: print the usage and exit with status 2.
 struct Usage;
@@ -147,8 +148,9 @@ fn document(target: &str) -> Result<String> {
     if target == "env" {
         return Ok(doc::env());
     }
-    if let Some(o) = iface::env().object(target) {
-        return Ok(doc::object(o, iface::env(), &doc::types_used(o)));
+    let env = iface::env();
+    if let Some(o) = env.object(target).cloned().or_else(|| env.traits.get(target).map(|t| t.as_object())) {
+        return Ok(doc::object(&o, env, &doc::types_used(&o)));
     }
     let header = match ext {
         Some("wasm") => {

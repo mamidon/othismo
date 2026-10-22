@@ -6,7 +6,7 @@ deployment, in the way a Docker image is built from a Dockerfile. It builds on
 
 A `.img` file is a source. Running it reads several other files: the compiled
 modules in `scripts/`, each with its header inside, any header files it
-imports types from, and whatever an `Environment.Files` root points at. A **built image** (`.rti`)
+imports types from, and whatever a `Files` root points at. A **built image** (`.rti`)
 holds everything the image needs except what it explicitly takes from the
 host, so it can be copied to another machine and run there.
 
@@ -26,7 +26,7 @@ host, so it can be copied to another machine and run there.
   does. `--no-sources` leaves them out.
 
 A built image's only contact with the host is through the environment objects
-it declares (Console, Tcp, Files). Running `--check` on it gives the complete
+it declares (Console, Listener, Files). Running `--check` on it gives the complete
 list of what it can touch on the machine.
 
 ```text
@@ -38,17 +38,17 @@ othismo unpack static.rti out/             # modules, files and sources
 
 Running a `.img` builds it in memory and runs the result, so there is one way
 to load an image. Packed trees are a snapshot taken when the image is built;
-for live edits during development, use `Environment.Files`.
+for live edits during development, use `Files`.
 
 ## Packed files
 
 `Packed.Files` serves a tree that was copied into the image when it was built.
-It is the build-time counterpart of `Environment.Files`, which reads the host
+It is the build-time counterpart of `Files`, which reads the host
 at run time:
 
 ```text
 # The host's files, live:
-instance files : Environment.Files
+instance files : Files
 mount /files files
 control /files FilesRoot { path: "/var/www" }
 
@@ -62,7 +62,7 @@ instance files : Packed.Files {
 `Packed.Files` touches nothing on the host when the image runs, and `--check`
 reports it as built in.
 
-It answers `read`, `stat` and `list` exactly as `Environment.Files` does
+It answers `read`, `stat` and `list` exactly as `Files` does
 (`Data`, `Info`, a sorted stream of `Entry`, the same MIME types and statuses).
 Every unsafe verb gets `read_only`.
 
@@ -104,7 +104,7 @@ require listen : Listen {
 }
 require admin : Text            # no defaults: the host must give it
 
-instance net  : Environment.Tcp
+instance net  : Listener
 instance http : HttpServer
 
 mount /net  net

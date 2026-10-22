@@ -17,8 +17,8 @@ instance site : StaticSite {
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp
-instance cons  : Environment.Console
+instance net   : Listener
+instance cons  : Console
 instance files : Packed.Files { include "./public/" }
 
 # What the image itself can reach, to configure it.

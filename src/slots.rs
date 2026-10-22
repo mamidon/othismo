@@ -163,7 +163,7 @@ mod tests {
     const IMAGE: &str = r#"
         require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info { kind: "file" }
-        instance net : Environment.Tcp
+        instance net : Listener
         instance a : A
         mount /net net
         mount /a a
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn an_image_without_slots_needs_nothing() {
-        let mut p = program("instance cons : Environment.Console");
+        let mut p = program("instance cons : Console");
         bind(&mut p, &[]).unwrap();
         let e = bind(&mut p, &[text("--set", "x", "y", "z")]).unwrap_err().to_string();
         assert!(e.contains("there is no slot `x`"), "{e}");

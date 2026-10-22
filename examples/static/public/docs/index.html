@@ -307,7 +307,10 @@ run(new Site())
 </code></pre>
 <h2 id="environment-objects">Environment objects</h2>
 <p>Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration is a <code>control</code> of their
+way to reach the outside world. An image declares one by its trait, from the
+runtime&#39;s own header, <code>env</code>: <code>instance net : Listener</code>. The trait is all the
+image and its objects know of it, and the runtime picks how to run it. Their
+configuration is a <code>control</code> of their
 root from the image (<code>control /net Listen { ... }</code>, with <code>net</code> mounted at
 <code>/net</code> in the image&#39;s view), and objects can&#39;t send <code>control</code>, so no object can open another port
 or move a files root. Changing it while the image runs isn&#39;t supported yet:
@@ -315,28 +318,28 @@ they answer <code>control</code> with <code>not_supported</code>.</p>
 <div class="table"><table>
 <thead>
 <tr>
-<th>Type</th>
+<th>Trait</th>
 <th>Config</th>
 <th>Serves</th>
 </tr>
 </thead>
 <tbody><tr>
-<td><code>Environment.Console</code></td>
+<td><code>Console</code></td>
 <td>none</td>
 <td><code>watch /</code>: a stream of <code>Line</code>, one per line of stdin, ending at EOF. <code>write /</code>: prints the body</td>
 </tr>
 <tr>
-<td><code>Environment.Tcp</code></td>
+<td><code>Listener</code></td>
 <td><code>Listen { address }</code></td>
 <td><code>read /address</code>: <code>Text</code> with the bound address. <code>watch /accept</code>: a stream of <code>Accepted { conn }</code>. <code>watch /&lt;conn&gt;</code>: a stream of <code>Data</code> received, ending when the peer closes. <code>write /&lt;conn&gt;</code>: sends a <code>Data</code>&#39;s bytes. <code>remove /&lt;conn&gt;</code>: closes our side</td>
 </tr>
 <tr>
-<td><code>Environment.Files</code></td>
+<td><code>Files</code></td>
 <td><code>FilesRoot { path }</code></td>
 <td><code>read</code>: <code>Data</code> with a MIME type from the extension. <code>stat</code>: <code>Info</code>. <code>list</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>read_only</code></td>
 </tr>
 </tbody></table></div>
-<p><code>Packed.Files</code> answers exactly as <code>Environment.Files</code> does, from files copied
+<p><code>Packed.Files</code> answers exactly as <code>Files</code> does, from files copied
 into the image when it was built (see <a href="/images/">Building images</a>). It isn&#39;t
 an environment object, since it touches nothing outside the image.</p>
 <p>Console reads stdin only if something is watching it by the time the image
@@ -363,8 +366,8 @@ instance site : StaticSite {           # scripts/StaticSite.wasm
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp
-instance cons  : Environment.Console
+instance net   : Listener
+instance cons  : Console
 instance files : Packed.Files { include &quot;./public/&quot; }
 
 mount /net  net                        # the image&#39;s own view

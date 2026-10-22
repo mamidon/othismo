@@ -23,8 +23,8 @@ instance site : StaticSite {
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp
-instance cons  : Environment.Console               # the access log, which `fly logs` shows
+instance net   : Listener
+instance cons  : Console               # the access log, which `fly logs` shows
 instance files : Packed.Files { include "./public/" }
 
 # What the image itself can reach, to configure it.

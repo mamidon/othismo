@@ -220,19 +220,22 @@ run(new Site())
 ## Environment objects
 
 Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration is a `control` of their
+way to reach the outside world. An image declares one by its trait, from the
+runtime's own header, `env`: `instance net : Listener`. The trait is all the
+image and its objects know of it, and the runtime picks how to run it. Their
+configuration is a `control` of their
 root from the image (`control /net Listen { ... }`, with `net` mounted at
 `/net` in the image's view), and objects can't send `control`, so no object can open another port
 or move a files root. Changing it while the image runs isn't supported yet:
 they answer `control` with `not_supported`.
 
-| Type | Config | Serves |
+| Trait | Config | Serves |
 |---|---|---|
-| `Environment.Console` | none | `watch /`: a stream of `Line`, one per line of stdin, ending at EOF. `write /`: prints the body |
-| `Environment.Tcp` | `Listen { address }` | `read /address`: `Text` with the bound address. `watch /accept`: a stream of `Accepted { conn }`. `watch /<conn>`: a stream of `Data` received, ending when the peer closes. `write /<conn>`: sends a `Data`'s bytes. `remove /<conn>`: closes our side |
-| `Environment.Files` | `FilesRoot { path }` | `read`: `Data` with a MIME type from the extension. `stat`: `Info`. `list`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `read_only` |
+| `Console` | none | `watch /`: a stream of `Line`, one per line of stdin, ending at EOF. `write /`: prints the body |
+| `Listener` | `Listen { address }` | `read /address`: `Text` with the bound address. `watch /accept`: a stream of `Accepted { conn }`. `watch /<conn>`: a stream of `Data` received, ending when the peer closes. `write /<conn>`: sends a `Data`'s bytes. `remove /<conn>`: closes our side |
+| `Files` | `FilesRoot { path }` | `read`: `Data` with a MIME type from the extension. `stat`: `Info`. `list`: a stream of `Entry`, sorted by name. Read-only: unsafe verbs get `read_only` |
 
-`Packed.Files` answers exactly as `Environment.Files` does, from files copied
+`Packed.Files` answers exactly as `Files` does, from files copied
 into the image when it was built (see [Building images](images.md)). It isn't
 an environment object, since it touches nothing outside the image.
 
@@ -265,8 +268,8 @@ instance site : StaticSite {           # scripts/StaticSite.wasm
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp
-instance cons  : Environment.Console
+instance net   : Listener
+instance cons  : Console
 instance files : Packed.Files { include "./public/" }
 
 mount /net  net                        # the image's own view

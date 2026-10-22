@@ -21,13 +21,13 @@ use std::sync::OnceLock;
 pub const OPAQUE: &str = "Opaque";
 
 /// The runtime's own header, one file at a time: the bodies its objects
-/// share, then each built-in object with the types it adds. A file may
-/// import from the files before it.
+/// share, then each trait it implements with the types it adds, and
+/// Packed.Files. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
     ("bodies.iface", include_str!("../as/env/bodies.iface")),
-    ("Environment.Console.iface", include_str!("../as/env/Environment.Console.iface")),
-    ("Environment.Tcp.iface", include_str!("../as/env/Environment.Tcp.iface")),
-    ("Environment.Files.iface", include_str!("../as/env/Environment.Files.iface")),
+    ("Console.iface", include_str!("../as/env/Console.iface")),
+    ("Listener.iface", include_str!("../as/env/Listener.iface")),
+    ("Files.iface", include_str!("../as/env/Files.iface")),
     ("Packed.Files.iface", include_str!("../as/env/Packed.Files.iface")),
 ];
 
@@ -144,6 +144,14 @@ pub struct Answer {
 impl Header {
     pub fn object(&self, name: &str) -> Option<&Object> {
         self.objects.iter().find(|o| o.name == name)
+    }
+}
+
+impl Trait {
+    /// An object that serves the trait's tree and needs nothing: how the
+    /// runtime sees an instance declared by the trait.
+    pub fn as_object(&self) -> Object {
+        Object { name: self.name.clone(), doc: self.doc.clone(), traits: vec![], guide: None, needs: vec![], serves: self.entries.clone() }
     }
 }
 
@@ -1099,11 +1107,13 @@ mod tests {
     }
 
     #[test]
-    fn env_declares_the_built_in_objects() {
+    fn env_declares_traits_and_packed_files() {
         let env = env();
-        for name in ["Environment.Console", "Environment.Tcp", "Environment.Files", "Packed.Files"] {
-            assert!(env.object(name).is_some(), "{name}");
+        for name in ["Console", "Listener", "Files", "FileTree"] {
+            assert!(env.traits.contains_key(name), "{name}");
         }
+        let objects: Vec<&str> = env.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(objects, ["Packed.Files"], "the rest are declared by trait");
         assert!(env.messages.contains_key("Line"));
     }
 
