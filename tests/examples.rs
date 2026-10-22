@@ -1,5 +1,5 @@
 //! Acceptance tests over examples/, which need the AssemblyScript modules
-//! built first: `make wasm` (or just `make test`).
+//! built first: `task test`.
 
 mod common;
 
@@ -14,7 +14,7 @@ fn example(rel: &str) -> PathBuf {
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
         if ts.extension().is_some_and(|e| e == "ts") {
-            assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `make wasm`", ts.display());
+            assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `task test`", ts.display());
         }
     }
     path

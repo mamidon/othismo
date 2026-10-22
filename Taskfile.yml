@@ -1,0 +1,121 @@
+version: '3'
+
+# Every examples/<name>/<name>.img is an example; its objects are the
+# scripts/*.ts next to it, compiled to scripts/*.wasm.
+vars:
+  EXAMPLES:
+    sh: for img in examples/*/*.img; do basename "$img" .img; done
+  BIN: target/debug/othismo
+
+tasks:
+  build:
+    desc: cargo build
+    cmds:
+      - cargo build
+
+  run:
+    desc: cargo run, passing on what follows --
+    cmds:
+      - cargo run -- {{.CLI_ARGS}}
+
+  test:
+    desc: Compile every example's objects, then cargo test
+    deps: [wasm]
+    cmds:
+      - cargo test {{.CLI_ARGS}}
+
+  build:docs:
+    desc: Re-render docs/*.md into the static example's site
+    deps: [npm]
+    sources:
+      - docs/*.md
+      - examples/static/site.mjs
+    cmds:
+      - node examples/static/site.mjs
+
+  build:examples:
+    desc: cargo build, then seal every example into its .rti
+    deps: [build]
+    cmds:
+      - for: { var: EXAMPLES }
+        task: image
+        vars: { NAME: '{{.ITEM}}' }
+
+  build:example:*:
+    desc: cargo build, then seal one example into its .rti (e.g. build:example:hello)
+    vars:
+      NAME: '{{index .MATCH 0}}'
+    deps: [build]
+    cmds:
+      - task: image
+        vars: { NAME: '{{.NAME}}' }
+
+  run:example:*:
+    desc: Build one example's .rti and run it, passing on what follows -- (e.g. run:example:static)
+    vars:
+      NAME: '{{index .MATCH 0}}'
+    cmds:
+      - task: build:example:{{.NAME}}
+      - '{{.BIN}} examples/{{.NAME}}/{{.NAME}}.rti {{.CLI_ARGS}}'
+
+  deploy:
+    desc: cargo build, re-render the docs, and deploy the docs site to fly.io
+    cmds:
+      - task: build
+      - task: build:docs
+      - fly deploy
+
+  clean:
+    desc: Remove compiled objects and sealed images
+    cmds:
+      - rm -f examples/*/scripts/*.wasm examples/*/*.rti
+
+  # Internal tasks.
+
+  npm:
+    internal: true
+    sources:
+      - package.json
+      - package-lock.json
+      - as/package.json
+    status:
+      - test -d node_modules
+    cmds:
+      - npm install
+
+  wasm:
+    internal: true
+    cmds:
+      - for: { var: EXAMPLES }
+        task: wasm:one
+        vars: { NAME: '{{.ITEM}}' }
+
+  wasm:one:
+    internal: true
+    label: wasm:{{.NAME}}
+    deps: [npm]
+    sources:
+      - as/*.ts
+      - examples/{{.NAME}}/*.ts
+      - examples/{{.NAME}}/scripts/*.ts
+    generates:
+      - examples/{{.NAME}}/scripts/*.wasm
+    cmds:
+      - for: { var: SCRIPTS }
+        cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize
+    vars:
+      SCRIPTS:
+        sh: ls examples/{{.NAME}}/scripts/*.ts
+
+  # Seals examples/<NAME>/<NAME>.img into a .rti with the othismo that
+  # `build` just made, so the two always match.
+  image:
+    internal: true
+    label: image:{{.NAME}}
+    preconditions:
+      - sh: test -f examples/{{.NAME}}/{{.NAME}}.img
+        msg: 'no example named "{{.NAME}}"; examples are: {{.EXAMPLES | splitLines | join ", "}}'
+    cmds:
+      - task: wasm:one
+        vars: { NAME: '{{.NAME}}' }
+      - '{{.BIN}} build examples/{{.NAME}}/{{.NAME}}.img -o examples/{{.NAME}}/{{.NAME}}.rti'
