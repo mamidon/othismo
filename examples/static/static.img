@@ -5,15 +5,6 @@
 # Where to listen. Deploy with e.g. `--set listen.address=0.0.0.0:80`.
 require listen : Listen { address: "127.0.0.1:8080" }
 
-instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console
-instance files : Packed.Files        { include "./public/" }
-
-# The site can read the files and nothing else.
-instance site : StaticSite {
-  mount files /files readonly
-}
-
 # HTTP in, namespace requests out. It reaches the files only through the site.
 instance http : HttpServer {
   mount net  /net/tcp
@@ -22,3 +13,12 @@ instance http : HttpServer {
   control /hosts/* Text { text: "/www" }
   control /hosts/files.localhost Text { text: "/www/static" }
 }
+
+# The site can read the files and nothing else.
+instance site : StaticSite {
+  mount files /files readonly
+}
+
+instance net   : Environment.Tcp     { control / listen }
+instance cons  : Environment.Console
+instance files : Packed.Files        { include "./public/" }

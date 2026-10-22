@@ -350,24 +350,26 @@ view, and startup requests, plus the packing and slots
 described in <a href="/images/">Building images</a>:</p>
 <pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
 
-instance cons  : Environment.Console
-instance net   : Environment.Tcp { control / listen }
-instance files : Packed.Files    { include &quot;./public/&quot; }
-
-instance site : StaticSite {           # scripts/StaticSite.wasm
-  mount files /files readonly
-}
-
 instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
   control /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
 }
+
+instance site : StaticSite {           # scripts/StaticSite.wasm
+  mount files /files readonly
+}
+
+instance net   : Environment.Tcp { control / listen }
+instance cons  : Environment.Console
+instance files : Packed.Files    { include &quot;./public/&quot; }
 </code></pre>
 <ul>
 <li><code>mount &lt;instance&gt; &lt;path&gt; [readonly]</code> puts that instance&#39;s whole served tree
-at <code>&lt;path&gt;</code> in this instance&#39;s view.</li>
+at <code>&lt;path&gt;</code> in this instance&#39;s view. Instances can be declared in any
+order, so an image can start from the instance at the top of the
+namespace and work down.</li>
 <li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes of this
 instance at startup, with <code>&lt;path&gt;</code> in its served tree. The image ignores
 replies, except that a failure is printed to stderr as a warning.</li>
@@ -391,13 +393,13 @@ of the image&#39;s mount edges, which can be computed without running anything.
 Read-only flags carry through the closure. <code>othismo --check</code> prints it:</p>
 <pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
 
+http   sees /net/tcp → net, /www → site, /dev/cons → cons
+       can reach at most: site rw, net rw, cons rw, files ro (via site)
+site   sees /files → files ro
+       can reach at most: files ro
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
 files  serves 11 built-in files, 105.6 KB
-site   sees /files → files ro
-       can reach at most: files ro
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, cons rw, files ro (via site), site rw
 </code></pre>
 <p>The checker also holds the image to its objects&#39; interfaces (see
 <a href="/objects/">Objects</a>): every mount must serve what its object needs there,
@@ -408,10 +410,15 @@ type; <code>--no-checks</code> turns that off.</p>
 <ol>
 <li>Every instance is created and every view is built from the image&#39;s mounts.
 Module top-level code runs. It may already make requests, which are queued.</li>
-<li>The image&#39;s startup requests are delivered in image order.</li>
-<li><code>start()</code> runs on every Wasm instance in image order.</li>
+<li>The image&#39;s startup requests are delivered, in start order.</li>
+<li><code>start()</code> runs on every Wasm instance, in start order.</li>
 <li>Environment objects start listening (stdin, sockets).</li>
 </ol>
+<p><strong>Start order</strong> follows the mounts: an instance starts after everything it
+mounts, so whatever it finds in its view has been configured and started
+first. Instances that don&#39;t depend on each other keep image order. Where
+instances mount each other, the one that comes first in the image starts
+last.</p>
 <p>The run ends when the queue is empty and no outside event can arrive any more.</p>
 <h2 id="the-host-abi">The host ABI</h2>
 <p>The path, verb, status and ticket travel as arguments. Only bodies are BSON,

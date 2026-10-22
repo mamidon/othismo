@@ -1,8 +1,8 @@
 # Echoes every line typed on stdin. Echo can see exactly one thing: the
 # console, at /dev/cons.
 
-instance cons : Environment.Console
-
 instance echo : Echo {
   mount cons /dev/cons
 }
+
+instance cons : Environment.Console

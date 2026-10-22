@@ -114,22 +114,22 @@ This one, slightly trimmed, serves this site:
 # there are defaults
 require listen : Listen { address: "127.0.0.1:8080" }
 
-# creates a socket, configured to listen to localhost on port 8080 by default
-instance net   : Environment.Tcp     { control / listen }
-# brings the host's ./public folder into the image, at build time
-instance files : Packed.Files        { include "./public/" }
-instance cons  : Environment.Console
-
-instance site : StaticSite {
-  mount files /files readonly
-}
-
 instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
   control /hosts/* Text { text: "/www" }
 }
+
+instance site : StaticSite {
+  mount files /files readonly
+}
+
+# creates a socket, configured to listen to localhost on port 8080 by default
+instance net   : Environment.Tcp     { control / listen }
+instance cons  : Environment.Console
+# brings the host's ./public folder into the image, at build time
+instance files : Packed.Files        { include "./public/" }
 ```
 
 Because an object can only pass on what it can see, the most any object can
@@ -140,13 +140,13 @@ image touches on the host:
 ```text
 slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
+http   sees /net/tcp → net, /www → site, /dev/cons → cons
+       can reach at most: site rw, net rw, cons rw, files ro (via site)
+site   sees /files → files ro
+       can reach at most: files ro
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
 files  serves 11 built-in files, 105.6 KB
-site   sees /files → files ro
-       can reach at most: files ro
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, cons rw, files ro (via site), site rw
 ```
 
 That is a promise about the code without reading the code: `StaticSite`

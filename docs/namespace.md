@@ -251,24 +251,26 @@ described in [Building images](images.md):
 ```text
 require listen : Listen { address: "127.0.0.1:8080" }   # the host may change it
 
-instance cons  : Environment.Console
-instance net   : Environment.Tcp { control / listen }
-instance files : Packed.Files    { include "./public/" }
-
-instance site : StaticSite {           # scripts/StaticSite.wasm
-  mount files /files readonly
-}
-
 instance http : HttpServer {
   mount net  /net/tcp
   mount site /www
   mount cons /dev/cons
   control /hosts/localhost Text { text: "/www" }   # a startup request to http itself
 }
+
+instance site : StaticSite {           # scripts/StaticSite.wasm
+  mount files /files readonly
+}
+
+instance net   : Environment.Tcp { control / listen }
+instance cons  : Environment.Console
+instance files : Packed.Files    { include "./public/" }
 ```
 
 - `mount <instance> <path> [readonly]` puts that instance's whole served tree
-  at `<path>` in this instance's view.
+  at `<path>` in this instance's view. Instances can be declared in any
+  order, so an image can start from the instance at the top of the
+  namespace and work down.
 - `<verb> <path> [Type { fields }]` is a request the image makes of this
   instance at startup, with `<path>` in its served tree. The image ignores
   replies, except that a failure is printed to stderr as a warning.
@@ -295,13 +297,13 @@ Read-only flags carry through the closure. `othismo --check` prints it:
 ```text
 slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
+http   sees /net/tcp → net, /www → site, /dev/cons → cons
+       can reach at most: site rw, net rw, cons rw, files ro (via site)
+site   sees /files → files ro
+       can reach at most: files ro
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
 files  serves 11 built-in files, 105.6 KB
-site   sees /files → files ro
-       can reach at most: files ro
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: net rw, cons rw, files ro (via site), site rw
 ```
 
 The checker also holds the image to its objects' interfaces (see

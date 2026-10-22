@@ -3,14 +3,14 @@
 # objects, and a view with more than one mount.
 import { Greeting } from Greeter
 
-instance cons : Environment.Console
-
-instance shouter : Shouter {
-  mount cons /dev/cons
-}
-
 instance greeter : Greeter {
   mount cons /dev/cons
   mount shouter /shouter
   write /greeting Greeting { prefix: "Hello, ", excited: true }
 }
+
+instance shouter : Shouter {
+  mount cons /dev/cons
+}
+
+instance cons : Environment.Console

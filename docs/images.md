@@ -145,6 +145,7 @@ from, then what each environment object touches on the host:
 $ othismo --check static.rti --set listen.address=0.0.0.0:80
 slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
+...
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
 files  serves 11 built-in files, 105.6 KB

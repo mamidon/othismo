@@ -11,15 +11,6 @@
 
 require listen : Listen { address: "0.0.0.0:8080" }
 
-instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console               # the access log, which `fly logs` shows
-instance files : Packed.Files        { include "./public/" }
-
-# The site can read the files and nothing else.
-instance site : StaticSite {
-  mount files /files readonly
-}
-
 # HTTP in, namespace requests out. Every host name is served the site.
 instance http : HttpServer {
   mount net  /net/tcp
@@ -27,3 +18,12 @@ instance http : HttpServer {
   mount cons /dev/cons
   control /hosts/* Text { text: "/www" }
 }
+
+# The site can read the files and nothing else.
+instance site : StaticSite {
+  mount files /files readonly
+}
+
+instance net   : Environment.Tcp     { control / listen }
+instance cons  : Environment.Console               # the access log, which `fly logs` shows
+instance files : Packed.Files        { include "./public/" }
