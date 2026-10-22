@@ -29,6 +29,16 @@ tasks:
     cmds:
       - cargo test {{.CLI_ARGS}}
 
+  test:e2e:
+    desc: Compile every example's objects, then run each examples/*/*.test.img with othismo test
+    deps: [wasm, build]
+    vars:
+      TEST_IMAGES:
+        sh: ls examples/*/*.test.img
+    cmds:
+      - for: { var: TEST_IMAGES }
+        cmd: '{{.BIN}} test {{.ITEM}}'
+
   build:docs:
     desc: Re-render docs/*.md, and the reference from as/env/, into the static example's site
     deps: [npm, build]
