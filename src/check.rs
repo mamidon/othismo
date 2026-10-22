@@ -123,9 +123,6 @@ pub struct IncludeDecl {
     pub at: Option<String>,
 }
 
-/// An environment type and the one config message it takes, if any.
-const BUILTINS: &[(&str, Option<&str>)] = &[(CONSOLE, None), (TCP, Some("Listen")), (FILES, Some("FilesRoot"))];
-
 fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{}: {msg}", id.pos)
 }
@@ -223,10 +220,8 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
         addressed.push((to.inst, to.path, full));
     }
-    let is_config = |to: usize, verb: Verb| {
-        let ty = img.instances[to].type_name.name.as_str();
-        verb == Verb::Control && (ty == PACKED || BUILTINS.iter().any(|(name, _)| *name == ty))
-    };
+    let is_config =
+        |to: usize, verb: Verb| verb == Verb::Control && iface::env().object(&img.instances[to].type_name.name).is_some();
 
     let mut instances = vec![];
     for (i, inst) in img.instances.iter().enumerate() {
@@ -240,18 +235,19 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         {
             bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, ty.name);
         }
-        let builtin = BUILTINS.iter().find(|(name, _)| *name == ty.name);
         // A built-in object's config is the image's `control` of it, taken
         // before the object is made rather than sent as a request.
         let controls: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, _)| is_config(i, r.verb)).collect();
-        let kind = match builtin {
-            Some(&(name, config_type)) => {
+        let kind = match iface::env().object(&ty.name) {
+            Some(builtin) => {
+                let name = builtin.name.as_str();
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
                 if let Some((c, path)) = controls.iter().find(|(_, path)| *path != "/") {
                     bail!("{}: {name} is configured at its root, and `{}` is `{path}` in it", c.path.pos, c.path.path);
                 }
+                let config_type = config_type(builtin);
                 let needs = || {
                     let t = config_type.unwrap();
                     err_at(
@@ -261,6 +257,9 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                 };
                 config = match (config_type, controls.as_slice()) {
                     (None, []) => None,
+                    (None, [(c, _), ..]) if name == PACKED => {
+                        bail!("{}: {PACKED} takes no config; `include` the files it serves", c.verb_pos)
+                    }
                     (None, [(c, _), ..]) => bail!("{}: {name} takes no config", c.verb_pos),
                     (Some(t), [(c, _)]) => {
                         let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
@@ -271,30 +270,10 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                     }
                     (Some(_), _) => bail!(needs()),
                 };
-                builtin_kind(name)
-            }
-            None if ty.name == PACKED => {
-                if let Some(m) = inst.mounts.first() {
-                    bail!(err_at(&m.target, format!("{PACKED} has no view to mount into; it only serves")));
-                }
-                if let Some((c, _)) = controls.first() {
-                    bail!("{}: {PACKED} takes no config; `include` the files it serves", c.verb_pos);
-                }
-                let mut includes = vec![];
-                for inc in &inst.includes {
-                    let at = match &inc.at {
-                        Some(p) => Some(
-                            ns::mount_point(&p.path)
-                                .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))?,
-                        ),
-                        None => None,
-                    };
-                    includes.push(IncludeDecl { source: inc.source.clone(), at });
-                }
-                Kind::Packed { includes }
+                builtin_kind(name, &inst.includes)?
             }
             None if ty.name.starts_with("Environment.") || ty.name.starts_with("Packed.") => {
-                let known: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).chain([PACKED]).collect();
+                let known: Vec<&str> = iface::env().objects.iter().map(|o| o.name.as_str()).collect();
                 bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {})", ty.name, known.join(", "))));
             }
             None if ty.name.contains('.') => bail!(err_at(ty, format!("`{}` is not a module name", ty.name))),
@@ -476,13 +455,35 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
     out
 }
 
-fn builtin_kind(name: &str) -> Kind {
-    match name {
+/// The config message a built-in object takes: whatever its header says its
+/// root takes with `control`, if anything.
+fn config_type(builtin: &Object) -> Option<&str> {
+    let root = builtin.serves.iter().find(|e| e.path.as_str() == "/")?;
+    root.requests.iter().find(|r| r.verb == Verb::Control).and_then(|r| r.body.as_deref())
+}
+
+/// How the runtime implements the built-in object `name`. A `Packed.Files`
+/// serves its `includes`.
+fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
+    Ok(match name {
         CONSOLE => Kind::Console,
         TCP => Kind::Tcp,
         FILES => Kind::Files,
-        other => unreachable!("unknown builtin {other}"),
-    }
+        PACKED => {
+            let mut decls = vec![];
+            for inc in includes {
+                let at = match &inc.at {
+                    Some(p) => Some(
+                        ns::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))?,
+                    ),
+                    None => None,
+                };
+                decls.push(IncludeDecl { source: inc.source.clone(), at });
+            }
+            Kind::Packed { includes: decls }
+        }
+        other => bail!("the runtime's header declares {other}, but the runtime doesn't implement it"),
+    })
 }
 
 /// The message types an image can write: the runtime's and its imports,
@@ -807,6 +808,18 @@ mod tests {
         assert!(e.contains("Environment.Tcp is configured at its root, and `/net/x` is `/x` in it"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
+    }
+
+    #[test]
+    fn config_types_come_from_the_runtimes_header() {
+        let config = |name: &str| config_type(iface::env().object(name).unwrap());
+        assert_eq!(config(TCP), Some("Listen"));
+        assert_eq!(config(FILES), Some("FilesRoot"));
+        assert_eq!(config(CONSOLE), None);
+        assert_eq!(config(PACKED), None);
+        for o in &iface::env().objects {
+            assert!(builtin_kind(&o.name, &[]).is_ok(), "the runtime implements {}", o.name);
+        }
     }
 
     #[test]
