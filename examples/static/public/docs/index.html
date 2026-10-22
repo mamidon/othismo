@@ -348,9 +348,7 @@ JSON-ish.</p>
 <p>What&#39;s left of the image language is instances, the mounts that make up each
 view, and startup requests, plus the packing and slots
 described in <a href="/images/">Building images</a>:</p>
-<pre><code class="language-text">import { Greeting } from &quot;./messages&quot;
-
-require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
+<pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
 
 instance cons  : Environment.Console
 instance net   : Environment.Tcp { control / listen }
@@ -376,10 +374,15 @@ replies, except that a failure is printed to stderr as a warning.</li>
 <li><code>control</code> is the operator&#39;s verb, and these startup requests are the only
 place an image sends it. An environment object&#39;s config is a <code>control /</code>
 with its config message; objects can&#39;t send <code>control</code> themselves.</li>
-<li>The conventional message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
-<code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope. Importing them from
-<code>&quot;othismo/env&quot;</code> is allowed but not needed. An import may redeclare one
-of them only with exactly the same fields.</li>
+<li>The runtime&#39;s message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
+<code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope; importing them
+<code>from env</code> is allowed but not needed. Any other type the image writes is
+imported from a header: <code>import { Greeting } from Greeter</code> takes it from
+that module, and <code>from &quot;./shared.iface&quot;</code> from a header file. An image never
+imports a type on its objects&#39; behalf, only the ones it writes itself. A
+type is its name and its fields, so a header may redeclare one of the
+runtime&#39;s types only with exactly the same fields, and two headers that
+declare one name differently can&#39;t be used in one image.</li>
 </ul>
 <h3 id="what-the-checker-can-promise">What the checker can promise</h3>
 <p>An instance can only bind what it can see and only expose what it can see.
@@ -390,16 +393,17 @@ Read-only flags carry through the closure. <code>othismo --check</code> prints i
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
        can reach at most: net rw, cons rw, files ro (via site), site rw
 </code></pre>
-<p>What is no longer checked ahead of time is message types along edges: there
-are no edges to check. With <code>--check-shapes</code>, bodies are checked against
-their declarations as they are sent, and a type the image doesn&#39;t know is an
-error.</p>
+<p>The checker also holds the image to its objects&#39; interfaces (see
+<a href="/objects/">Objects</a>): every mount must serve what its object needs there,
+and every startup request must be one its object serves. While the image
+runs, the runtime holds every object to its interface and every body to its
+type; <code>--no-checks</code> turns that off.</p>
 <h2 id="startup-order">Startup order</h2>
 <ol>
 <li>Every instance is created and every view is built from the image&#39;s mounts.

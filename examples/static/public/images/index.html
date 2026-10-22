@@ -53,8 +53,8 @@ deployment, in the way a Docker image is built from a Dockerfile. It builds on
 
     <article class="prose">
 <p>A <code>.img</code> file is a source. Running it reads several other files: the compiled
-modules in <code>scripts/</code>, the TypeScript it imports for message types, and
-whatever an <code>Environment.Files</code> root points at. A <strong>built image</strong> (<code>.rti</code>)
+modules in <code>scripts/</code>, each with its header inside, any header files it
+imports types from, and whatever an <code>Environment.Files</code> root points at. A <strong>built image</strong> (<code>.rti</code>)
 holds everything the image needs except what it explicitly takes from the
 host, so it can be copied to another machine and run there.</p>
 <h2 id="what-a-built-image-holds">What a built image holds</h2>
@@ -64,12 +64,13 @@ requests and slots (see below).</li>
 <li><strong>The modules</strong>: one compiled <code>.wasm</code> per Wasm instance type. Compiled Wasm
 is the only code a built image runs; <code>build</code> takes finished <code>.wasm</code> files
 and never runs the AssemblyScript compiler.</li>
-<li><strong>The message types</strong>, already parsed. The runtime never reads TypeScript.</li>
+<li><strong>The message types</strong> and each instance type&#39;s <strong>interface</strong>, already
+resolved from the headers.</li>
 <li><strong>Packed file trees</strong> for <code>Packed.Files</code> instances.</li>
-<li><strong>Sources</strong>, for reference only: the <code>.img</code> itself, the <code>.ts</code> files it
-imports and each module&#39;s <code>scripts/&lt;Type&gt;.ts</code> if present. Anyone who
-unpacks the file can read them; the runtime never does. <code>--no-sources</code>
-leaves them out.</li>
+<li><strong>Sources</strong>, for reference only: the <code>.img</code> itself, the header files it
+imports, and each module&#39;s <code>scripts/&lt;Type&gt;.iface</code> and <code>scripts/&lt;Type&gt;.ts</code>
+if present. Anyone who unpacks the file can read them; the runtime never
+does. <code>--no-sources</code> leaves them out.</li>
 </ul>
 <p>A built image&#39;s only contact with the host is through the environment objects
 it declares (Console, Tcp, Files). Running <code>--check</code> on it gives the complete
@@ -171,7 +172,7 @@ slot listen : Listen { address: &quot;0.0.0.0:80&quot; (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 ...
 </code></pre>
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,

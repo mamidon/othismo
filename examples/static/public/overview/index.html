@@ -167,7 +167,7 @@ image touches on the host:</p>
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
@@ -202,9 +202,9 @@ only by sending each other messages, kept and shipped as an image.</li>
 <p>Othismo is a work in progress, and the runtime here, <code>othismo</code>, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used. Some things the premise needs aren&#39;t
-there yet. Interfaces are designed but not built, a trapped object stops the
-whole run, calls never time out, and there is no support yet for testing an
-image&#39;s objects against stand-in environment objects.</p>
+there yet. A trapped object stops the whole run, calls never time out, and
+there is no support yet for testing an image&#39;s objects against stand-in
+environment objects.</p>
 <p>The details are in <a href="/objects/">Objects</a>, <a href="/docs/">Namespaces</a> and
 <a href="/images/">Building images</a>.</p>
 

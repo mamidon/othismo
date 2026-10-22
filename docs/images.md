@@ -5,8 +5,8 @@ deployment, in the way a Docker image is built from a Dockerfile. It builds on
 [the namespace design](namespace.md).
 
 A `.img` file is a source. Running it reads several other files: the compiled
-modules in `scripts/`, the TypeScript it imports for message types, and
-whatever an `Environment.Files` root points at. A **built image** (`.rti`)
+modules in `scripts/`, each with its header inside, any header files it
+imports types from, and whatever an `Environment.Files` root points at. A **built image** (`.rti`)
 holds everything the image needs except what it explicitly takes from the
 host, so it can be copied to another machine and run there.
 
@@ -17,12 +17,13 @@ host, so it can be copied to another machine and run there.
 - **The modules**: one compiled `.wasm` per Wasm instance type. Compiled Wasm
   is the only code a built image runs; `build` takes finished `.wasm` files
   and never runs the AssemblyScript compiler.
-- **The message types**, already parsed. The runtime never reads TypeScript.
+- **The message types** and each instance type's **interface**, already
+  resolved from the headers.
 - **Packed file trees** for `Packed.Files` instances.
-- **Sources**, for reference only: the `.img` itself, the `.ts` files it
-  imports and each module's `scripts/<Type>.ts` if present. Anyone who
-  unpacks the file can read them; the runtime never does. `--no-sources`
-  leaves them out.
+- **Sources**, for reference only: the `.img` itself, the header files it
+  imports, and each module's `scripts/<Type>.iface` and `scripts/<Type>.ts`
+  if present. Anyone who unpacks the file can read them; the runtime never
+  does. `--no-sources` leaves them out.
 
 A built image's only contact with the host is through the environment objects
 it declares (Console, Tcp, Files). Running `--check` on it gives the complete
@@ -146,7 +147,7 @@ slot listen : Listen { address: "0.0.0.0:80" (--set) }
 
 net    listens on 0.0.0.0:80
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 ...
 ```
 

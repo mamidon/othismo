@@ -27,11 +27,12 @@ functions, not the language it was written in.
 ## The interface
 
 Each module has a header, an `.iface` file written in the same language as
-images. It is the module's interface: the message types it uses, what it
-serves, what it needs, and its documentation.
+images, next to its source: `scripts/StaticSite.iface`. It is the module's
+interface: the message types it uses, what it serves, what it needs, and its
+documentation.
 
 ```text
-import { Data, Info, Entry, Text } from env
+import { Data, Info, Entry } from env
 
 ## Serves a static site from a files tree it is given read-only.
 ##
@@ -45,7 +46,7 @@ object StaticSite {
 
   serves {
     ## How many requests it has forwarded, as decimal text.
-    /hits   read -> Text
+    /hits   read -> Data
     ## The site, from `/files`.
     /**     read -> Data, stat -> Info, list -> Entry*
   }
@@ -153,7 +154,11 @@ name, and would promise something nothing can enforce.
 The checker reads every object's header and checks the image against them:
 
 - Each mount must provide what the object needs there. Whatever is mounted at
-  `/files` must serve everything `needs /files` lists.
+  `/files` must serve everything `needs /files` lists, and a mount that is
+  read-only can't provide a need to change anything.
+- A need for one mount point in particular, such as `needs /files`, must have
+  something mounted there. One under a pattern, such as `needs /**`, may
+  match no mount at all.
 - Each startup request must match an entry in the object's `serves`.
 
 Matching is structural. A mount satisfies a need if the mounted object serves
@@ -171,8 +176,13 @@ be: every message crosses a boundary the runtime controls, so it can hold
 objects to their headers while they run, without trusting their code.
 
 - A request that reaches an object must match its `serves`.
-- A request an object sends must match one of its `needs`.
-- An answer must carry the type its entry promised.
+- A request an object sends must match its `needs`: the block for the mount
+  point it goes through, and an entry there. A mount point the object binds
+  for itself needs a block too.
+- An answer must carry the type its entry promised, and only a stream may
+  have more than one.
+- Every body must be a type some header in the image declares, with exactly
+  its fields.
 
 A request that doesn't fit is refused before it arrives: `not_found` if no
 pattern matches, `not_supported` if the pattern doesn't take that verb, and
@@ -183,7 +193,8 @@ The `needs` side is the stronger promise. Mounts say what an object has been
 given; its `needs` say the most it can ask of each. An object given the
 console to write a log can't watch it for input unless its header says so.
 
-Enforcement is on by default; `--no-checks` turns it off.
+Enforcement is on by default; `--no-checks` turns it off. A malformed body
+stops the run, as an answer of the wrong type does.
 
 ### Documentation
 
@@ -277,14 +288,18 @@ A module is built from its header and its source:
 
 1. Bindings are generated from the `.iface` for the module's language:
    classes for its message types, with their encoders and decoders.
+   `othismo bindings scripts/Greeter.iface` writes `scripts/Greeter.iface.ts`,
+   which `Greeter.ts` imports as `"./Greeter.iface"`.
 2. The source is compiled to `.wasm`.
-3. The header is appended to the module as a custom section.
+3. The header is appended to the module as a custom section:
+   `othismo embed scripts/Greeter.iface scripts/Greeter.wasm`.
 
-The generated bindings are ordinary files, committed next to the source, so
-editors and compilers see them like any other source without a build first.
-Generating them means a type is written once and its encoding can't drift
-from its declaration; a build regenerates them, so a stale binding shows up as
-a diff.
+`task` does all three for the examples. The generated bindings are ordinary
+files, committed next to the source, so editors and compilers see them like
+any other source without a build first. Generating them means a type is
+written once and its encoding can't drift from its declaration; a build
+regenerates them, so a stale binding shows up as a diff, and the tests fail
+on one.
 
 Because the header is inside the module, a compiled object describes itself.
 It can be published as one file, and an image can import a type straight
@@ -332,8 +347,11 @@ as the image runs.
 
 ## Where it stands
 
-The interface is a design; the runtime doesn't implement it yet. Today
-message types are AssemblyScript classes, written by hand with their encoders
-and decoders and read by the runtime from the `.ts` source. Images import them
-from there, nothing declares what an object serves or needs, and shapes are
-checked only with `--check-shapes`.
+Headers work as described here. Every example object has one, the bindings
+are generated from them, the checker holds images to them, and the runtime
+holds the objects to them while they run.
+
+AssemblyScript is the only language with a bindings generator so far. The
+checker doesn't model exposures: a mount is checked against what its target
+serves, not what the target might expose there at run time, so only the
+runtime catches a mismatch behind an exposure.

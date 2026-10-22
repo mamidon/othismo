@@ -142,7 +142,7 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
@@ -183,9 +183,9 @@ file still tells the whole story.
 Othismo is a work in progress, and the runtime here, `othismo`, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used. Some things the premise needs aren't
-there yet. Interfaces are designed but not built, a trapped object stops the
-whole run, calls never time out, and there is no support yet for testing an
-image's objects against stand-in environment objects.
+there yet. A trapped object stops the whole run, calls never time out, and
+there is no support yet for testing an image's objects against stand-in
+environment objects.
 
 The details are in [Objects](objects.md), [Namespaces](namespace.md) and
 [Building images](images.md).

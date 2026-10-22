@@ -71,9 +71,10 @@ Nothing else about it is visible from outside: not its memory, not its
 functions, not the language it was written in.</p>
 <h2 id="the-interface">The interface</h2>
 <p>Each module has a header, an <code>.iface</code> file written in the same language as
-images. It is the module&#39;s interface: the message types it uses, what it
-serves, what it needs, and its documentation.</p>
-<pre><code class="language-text">import { Data, Info, Entry, Text } from env
+images, next to its source: <code>scripts/StaticSite.iface</code>. It is the module&#39;s
+interface: the message types it uses, what it serves, what it needs, and its
+documentation.</p>
+<pre><code class="language-text">import { Data, Info, Entry } from env
 
 ## Serves a static site from a files tree it is given read-only.
 ##
@@ -87,7 +88,7 @@ object StaticSite {
 
   serves {
     ## How many requests it has forwarded, as decimal text.
-    /hits   read -&gt; Text
+    /hits   read -&gt; Data
     ## The site, from `/files`.
     /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
   }
@@ -172,7 +173,11 @@ name, and would promise something nothing can enforce.</p>
 <p>The checker reads every object&#39;s header and checks the image against them:</p>
 <ul>
 <li>Each mount must provide what the object needs there. Whatever is mounted at
-<code>/files</code> must serve everything <code>needs /files</code> lists.</li>
+<code>/files</code> must serve everything <code>needs /files</code> lists, and a mount that is
+read-only can&#39;t provide a need to change anything.</li>
+<li>A need for one mount point in particular, such as <code>needs /files</code>, must have
+something mounted there. One under a pattern, such as <code>needs /**</code>, may
+match no mount at all.</li>
 <li>Each startup request must match an entry in the object&#39;s <code>serves</code>.</li>
 </ul>
 <p>Matching is structural. A mount satisfies a need if the mounted object serves
@@ -187,8 +192,13 @@ be: every message crosses a boundary the runtime controls, so it can hold
 objects to their headers while they run, without trusting their code.</p>
 <ul>
 <li>A request that reaches an object must match its <code>serves</code>.</li>
-<li>A request an object sends must match one of its <code>needs</code>.</li>
-<li>An answer must carry the type its entry promised.</li>
+<li>A request an object sends must match its <code>needs</code>: the block for the mount
+point it goes through, and an entry there. A mount point the object binds
+for itself needs a block too.</li>
+<li>An answer must carry the type its entry promised, and only a stream may
+have more than one.</li>
+<li>Every body must be a type some header in the image declares, with exactly
+its fields.</li>
 </ul>
 <p>A request that doesn&#39;t fit is refused before it arrives: <code>not_found</code> if no
 pattern matches, <code>not_supported</code> if the pattern doesn&#39;t take that verb, and
@@ -197,7 +207,8 @@ answering object&#39;s fault.</p>
 <p>The <code>needs</code> side is the stronger promise. Mounts say what an object has been
 given; its <code>needs</code> say the most it can ask of each. An object given the
 console to write a log can&#39;t watch it for input unless its header says so.</p>
-<p>Enforcement is on by default; <code>--no-checks</code> turns it off.</p>
+<p>Enforcement is on by default; <code>--no-checks</code> turns it off. A malformed body
+stops the run, as an answer of the wrong type does.</p>
 <h3 id="documentation">Documentation</h3>
 <p>Headers carry their documentation, so it travels with the module and can be
 read or generated from it.</p>
@@ -270,15 +281,19 @@ others, in image order.</li>
 <p>A module is built from its header and its source:</p>
 <ol>
 <li>Bindings are generated from the <code>.iface</code> for the module&#39;s language:
-classes for its message types, with their encoders and decoders.</li>
+classes for its message types, with their encoders and decoders.
+<code>othismo bindings scripts/Greeter.iface</code> writes <code>scripts/Greeter.iface.ts</code>,
+which <code>Greeter.ts</code> imports as <code>&quot;./Greeter.iface&quot;</code>.</li>
 <li>The source is compiled to <code>.wasm</code>.</li>
-<li>The header is appended to the module as a custom section.</li>
+<li>The header is appended to the module as a custom section:
+<code>othismo embed scripts/Greeter.iface scripts/Greeter.wasm</code>.</li>
 </ol>
-<p>The generated bindings are ordinary files, committed next to the source, so
-editors and compilers see them like any other source without a build first.
-Generating them means a type is written once and its encoding can&#39;t drift
-from its declaration; a build regenerates them, so a stale binding shows up as
-a diff.</p>
+<p><code>task</code> does all three for the examples. The generated bindings are ordinary
+files, committed next to the source, so editors and compilers see them like
+any other source without a build first. Generating them means a type is
+written once and its encoding can&#39;t drift from its declaration; a build
+regenerates them, so a stale binding shows up as a diff, and the tests fail
+on one.</p>
 <p>Because the header is inside the module, a compiled object describes itself.
 It can be published as one file, and an image can import a type straight
 from it:</p>
@@ -314,11 +329,13 @@ callers notice, is open.</p>
 <p>Calls never time out. A request whose server never answers waits for as long
 as the image runs.</p>
 <h2 id="where-it-stands">Where it stands</h2>
-<p>The interface is a design; the runtime doesn&#39;t implement it yet. Today
-message types are AssemblyScript classes, written by hand with their encoders
-and decoders and read by the runtime from the <code>.ts</code> source. Images import them
-from there, nothing declares what an object serves or needs, and shapes are
-checked only with <code>--check-shapes</code>.</p>
+<p>Headers work as described here. Every example object has one, the bindings
+are generated from them, the checker holds images to them, and the runtime
+holds the objects to them while they run.</p>
+<p>AssemblyScript is the only language with a bindings generator so far. The
+checker doesn&#39;t model exposures: a mount is checked against what its target
+serves, not what the target might expose there at run time, so only the
+runtime catches a mismatch behind an exposure.</p>
 
     </article>
   </main>

@@ -249,8 +249,6 @@ view, and startup requests, plus the packing and slots
 described in [Building images](images.md):
 
 ```text
-import { Greeting } from "./messages"
-
 require listen : Listen { address: "127.0.0.1:8080" }   # the host may change it
 
 instance cons  : Environment.Console
@@ -277,10 +275,15 @@ instance http : HttpServer {
 - `control` is the operator's verb, and these startup requests are the only
   place an image sends it. An environment object's config is a `control /`
   with its config message; objects can't send `control` themselves.
-- The conventional message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
-  `Accepted`, `Listen`, `FilesRoot`) are always in scope. Importing them from
-  `"othismo/env"` is allowed but not needed. An import may redeclare one
-  of them only with exactly the same fields.
+- The runtime's message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
+  `Accepted`, `Listen`, `FilesRoot`) are always in scope; importing them
+  `from env` is allowed but not needed. Any other type the image writes is
+  imported from a header: `import { Greeting } from Greeter` takes it from
+  that module, and `from "./shared.iface"` from a header file. An image never
+  imports a type on its objects' behalf, only the ones it writes itself. A
+  type is its name and its fields, so a header may redeclare one of the
+  runtime's types only with exactly the same fields, and two headers that
+  declare one name differently can't be used in one image.
 
 ### What the checker can promise
 
@@ -294,17 +297,18 @@ slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
 net    listens on 127.0.0.1:8080
 cons   reads stdin, writes stdout
-files  serves 10 built-in files, 95.0 KB
+files  serves 11 built-in files, 105.6 KB
 site   sees /files → files ro
        can reach at most: files ro
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
        can reach at most: net rw, cons rw, files ro (via site), site rw
 ```
 
-What is no longer checked ahead of time is message types along edges: there
-are no edges to check. With `--check-shapes`, bodies are checked against
-their declarations as they are sent, and a type the image doesn't know is an
-error.
+The checker also holds the image to its objects' interfaces (see
+[Objects](objects.md)): every mount must serve what its object needs there,
+and every startup request must be one its object serves. While the image
+runs, the runtime holds every object to its interface and every body to its
+type; `--no-checks` turns that off.
 
 ## Startup order
 
