@@ -75,6 +75,8 @@ sends a request to <code>/www/index.html</code>, <code>site</code> receives it a
   /www      → site
   /dev/cons → cons
 </code></pre>
+<p>The image has a view of its own as well, which only its startup requests use
+(see <a href="#the-image">The image</a>).</p>
 <p>Views are private. The same path can mean different things to different
 instances. Conventional names (<code>/dev/cons</code>, <code>/net/tcp</code>, <code>/files</code>) keep that
 manageable.</p>
@@ -305,8 +307,9 @@ run(new Site())
 </code></pre>
 <h2 id="environment-objects">Environment objects</h2>
 <p>Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration is a <code>control /</code> from the
-image, and objects can&#39;t send <code>control</code>, so no object can open another port
+way to reach the outside world. Their configuration is a <code>control</code> of their
+root from the image (<code>control /net Listen { ... }</code>, with <code>net</code> mounted at
+<code>/net</code> in the image&#39;s view), and objects can&#39;t send <code>control</code>, so no object can open another port
 or move a files root. Changing it while the image runs isn&#39;t supported yet:
 they answer <code>control</code> with <code>not_supported</code>.</p>
 <div class="table"><table>
@@ -354,28 +357,39 @@ instance http : HttpServer {
   mount /net/tcp net
   mount /www site
   mount /dev/cons cons
-  control /hosts/localhost Text { text: &quot;/www&quot; }   # a startup request to http itself
 }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp { control / listen }
+instance net   : Environment.Tcp
 instance cons  : Environment.Console
-instance files : Packed.Files    { include &quot;./public/&quot; }
+instance files : Packed.Files { include &quot;./public/&quot; }
+
+mount /net  net                        # the image&#39;s own view
+mount /http http
+
+control /net listen                                     # net&#39;s config
+control /http/hosts/localhost Text { text: &quot;/www&quot; }     # a startup request to http
 </code></pre>
 <ul>
 <li><code>mount &lt;path&gt; &lt;instance&gt; [readonly]</code> puts that instance&#39;s whole served tree
-at <code>&lt;path&gt;</code> in this instance&#39;s view. Instances can be declared in any
-order, so an image can start from the instance at the top of the
-namespace and work down.</li>
-<li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes of this
-instance at startup, with <code>&lt;path&gt;</code> in its served tree. The image ignores
-replies, except that a failure is printed to stderr as a warning.</li>
+at <code>&lt;path&gt;</code> in a view. Inside an instance&#39;s block it builds that instance&#39;s
+view. At the top level it builds the image&#39;s own view. Instances can be
+declared in any order, so an image can start from the instance at the top
+of the namespace and work down.</li>
+<li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes at startup,
+resolved in the image&#39;s view like any other request: <code>/http/hosts/localhost</code>
+reaches <code>/hosts/localhost</code> in <code>http</code>&#39;s served tree because <code>http</code> is
+mounted at <code>/http</code>. The image can only send requests to what it mounts, so
+an image with no top-level mounts sends none. Requests can appear anywhere
+in the image, and are made in the order they are written. The image
+ignores replies, except that a failure is printed to stderr as a warning.</li>
 <li><code>control</code> is the operator&#39;s verb, and these startup requests are the only
-place an image sends it. An environment object&#39;s config is a <code>control /</code>
-with its config message; objects can&#39;t send <code>control</code> themselves.</li>
+place an image sends it. An environment object&#39;s config is a <code>control</code> of
+its root, so to configure one the image mounts it and sends that:
+<code>control /net listen</code>. Objects can&#39;t send <code>control</code> themselves.</li>
 <li>The runtime&#39;s message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
 <code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope; importing them
 <code>from env</code> is allowed but not needed. Any other type the image writes is
@@ -392,6 +406,8 @@ So the set of instances it can ever reach is bounded by the transitive closure
 of the image&#39;s mount edges, which can be computed without running anything.
 Read-only flags carry through the closure. <code>othismo --check</code> prints it:</p>
 <pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
+
+the image sees /net → net, /http → http
 
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
        can reach at most: site rw, net rw, cons rw, files ro (via site)
@@ -410,7 +426,7 @@ type; <code>--no-checks</code> turns that off.</p>
 <ol>
 <li>Every instance is created and every view is built from the image&#39;s mounts.
 Module top-level code runs. It may already make requests, which are queued.</li>
-<li>The image&#39;s startup requests are delivered, in start order.</li>
+<li>The image&#39;s startup requests are delivered, in the order they are written.</li>
 <li><code>start()</code> runs on every Wasm instance, in start order.</li>
 <li>Environment objects start listening (stdin, sockets).</li>
 </ol>

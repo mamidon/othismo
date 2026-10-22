@@ -3,7 +3,7 @@
 use crate::iface::{self, Header, Object};
 use crate::image::{self, Ident, Image, Source, Value};
 use crate::messages::{FieldType, MessageType};
-use crate::ns::{self, Status, Verb};
+use crate::ns::{self, Namespace, Status, Verb};
 use crate::pattern::Pattern;
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, anyhow, bail};
@@ -31,6 +31,10 @@ pub struct Program {
     pub slots: Vec<Slot>,
     /// Instances in image order; everything else refers to them by index.
     pub instances: Vec<Instance>,
+    /// The image's own view, which its startup requests resolve in.
+    pub view: Vec<MountDecl>,
+    /// The image's startup requests, in the order it makes them.
+    pub startup: Vec<Startup>,
     /// The files the image was checked from: the `.img` and the headers it
     /// imports from files.
     /// Not kept in a built image, which has copies under its sources.
@@ -48,8 +52,6 @@ pub struct Instance {
     pub config: Option<Arg>,
     /// The initial view.
     pub mounts: Vec<MountDecl>,
-    /// Requests the image makes of this instance at startup.
-    pub startup: Vec<Startup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,7 +65,7 @@ pub struct MountDecl {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Startup {
     pub verb: Verb,
-    /// Clean, in the instance's served tree.
+    /// Clean, in the image's view.
     pub path: String,
     pub body: Option<Arg>,
 }
@@ -200,9 +202,37 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
     }
 
+    // The image's requests resolve in its own view, as an instance's do in
+    // its. Nothing has exposed anything yet, so this is where they land.
+    let view = mount_decls(&img.mounts, &index, "the image's view")?;
+    let image_view = img.instances.len();
+    let mut image_ns = Namespace::new(image_view + 1);
+    for m in &view {
+        image_ns.mount(image_view, &m.at, m.target, m.read_only);
+    }
+    // (the instance it lands in, the path there, the path in the image's view)
+    let mut addressed: Vec<(usize, String, String)> = vec![];
+    for r in &img.requests {
+        let full =
+            ns::clean(&r.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
+        let to = image_ns
+            .resolve(image_view, &full)
+            .map_err(|_| anyhow!("{}: nothing is mounted at `{full}` in the image's view", r.path.pos))?;
+        if to.read_only && !r.verb.is_safe() {
+            bail!("{}: `{full}` is read-only in the image's view, so it can't take `{}`", r.verb_pos, r.verb);
+        }
+        addressed.push((to.inst, to.path, full));
+    }
+    let is_config = |to: usize, verb: Verb| {
+        let ty = img.instances[to].type_name.name.as_str();
+        verb == Verb::Control && (ty == PACKED || BUILTINS.iter().any(|(name, _)| *name == ty))
+    };
+
     let mut instances = vec![];
-    for inst in &img.instances {
+    for (i, inst) in img.instances.iter().enumerate() {
         let ty = &inst.type_name;
+        let requests: Vec<(&image::Request, &str)> =
+            img.requests.iter().zip(&addressed).filter(|(_, (to, ..))| *to == i).map(|(r, (_, p, _))| (r, p.as_str())).collect();
         let mut config = None;
         let obj = interfaces.get(&ty.name);
         if ty.name != PACKED
@@ -213,27 +243,26 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         let builtin = BUILTINS.iter().find(|(name, _)| *name == ty.name);
         // A built-in object's config is the image's `control` of it, taken
         // before the object is made rather than sent as a request.
-        let (controls, requests): (Vec<_>, Vec<_>) = if builtin.is_some() || ty.name == PACKED {
-            inst.requests.iter().partition(|r| r.verb == Verb::Control)
-        } else {
-            (vec![], inst.requests.iter().collect())
-        };
+        let controls: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, _)| is_config(i, r.verb)).collect();
         let kind = match builtin {
             Some(&(name, config_type)) => {
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
-                if let Some(c) = controls.iter().find(|c| c.path.path != "/") {
-                    bail!("{}: {name} is configured at its root, with `control /`", c.path.pos);
+                if let Some((c, path)) = controls.iter().find(|(_, path)| *path != "/") {
+                    bail!("{}: {name} is configured at its root, and `{}` is `{path}` in it", c.path.pos, c.path.path);
                 }
                 let needs = || {
                     let t = config_type.unwrap();
-                    err_at(&inst.name, format!("{name} needs exactly one config message, `control / {t} {{ ... }}`"))
+                    err_at(
+                        &inst.name,
+                        format!("{name} needs exactly one config message: mount it in the image's view and `control` its root with a {t}"),
+                    )
                 };
                 config = match (config_type, controls.as_slice()) {
                     (None, []) => None,
-                    (None, [c, ..]) => bail!("{}: {name} takes no config", c.verb_pos),
-                    (Some(t), [c]) => {
+                    (None, [(c, _), ..]) => bail!("{}: {name} takes no config", c.verb_pos),
+                    (Some(t), [(c, _)]) => {
                         let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
                         if arg_type(&slots, &arg) != t {
                             bail!(needs());
@@ -248,7 +277,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{PACKED} has no view to mount into; it only serves")));
                 }
-                if let Some(c) = controls.first() {
+                if let Some((c, _)) = controls.first() {
                     bail!("{}: {PACKED} takes no config; `include` the files it serves", c.verb_pos);
                 }
                 let mut includes = vec![];
@@ -272,45 +301,57 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
             None => Kind::Wasm { type_name: ty.name.clone() },
         };
 
-        let mut mounts: Vec<MountDecl> = vec![];
-        for m in &inst.mounts {
-            let target = *index
-                .get(m.target.name.as_str())
-                .ok_or_else(|| err_at(&m.target, format!("unknown instance `{}`", m.target.name)))?;
-            let at = ns::mount_point(&m.at.path)
-                .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
-            if mounts.iter().any(|prev| prev.at == at) {
-                bail!("{}: `{at}` is already mounted in `{}`'s view", m.at.pos, inst.name.name);
-            }
-            mounts.push(MountDecl { at, target, read_only: m.read_only });
-        }
-
-        let mut startup = vec![];
-        for r in requests {
-            let path = ns::clean(&r.path.path)
-                .map_err(|_| anyhow::anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
-            let body = r.body.as_ref().map(|b| body_arg(&messages_in_scope, &slots, b)).transpose()?;
-            startup.push(Startup { verb: r.verb, path, body });
-        }
+        let mounts = mount_decls(&inst.mounts, &index, &format!("`{}`'s view", inst.name.name))?;
 
         if let Some(obj) = obj {
-            check_requests(inst, obj, &messages_in_scope, &slots)?;
+            check_requests(inst, obj, &requests, &messages_in_scope, &slots)?;
             check_mounts(img, inst, obj, &index, &interfaces)?;
         }
-        instances.push(Instance { name: inst.name.name.clone(), type_name: ty.name.clone(), kind, config, mounts, startup });
+        instances.push(Instance { name: inst.name.name.clone(), type_name: ty.name.clone(), kind, config, mounts });
     }
 
-    Ok(Program { messages, interfaces, slots, instances, sources })
+    let mut startup = vec![];
+    for (r, (to, _, full)) in img.requests.iter().zip(&addressed) {
+        if is_config(*to, r.verb) {
+            continue;
+        }
+        let body = r.body.as_ref().map(|b| body_arg(&messages_in_scope, &slots, b)).transpose()?;
+        startup.push(Startup { verb: r.verb, path: full.clone(), body });
+    }
+
+    Ok(Program { messages, interfaces, slots, instances, view, startup, sources })
 }
 
-/// Each of the image's requests of `inst` against what `obj` serves.
-fn check_requests(inst: &image::Instance, obj: &Object, scope: &BTreeMap<String, MessageType>, slots: &[Slot]) -> Result<()> {
+/// A view's mounts, resolved against the instances in `index`. `whose`
+/// names the view in errors.
+fn mount_decls(mounts: &[image::Mount], index: &HashMap<&str, usize>, whose: &str) -> Result<Vec<MountDecl>> {
+    let mut out: Vec<MountDecl> = vec![];
+    for m in mounts {
+        let target =
+            *index.get(m.target.name.as_str()).ok_or_else(|| err_at(&m.target, format!("unknown instance `{}`", m.target.name)))?;
+        let at = ns::mount_point(&m.at.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
+        if out.iter().any(|prev| prev.at == at) {
+            bail!("{}: `{at}` is already mounted in {whose}", m.at.pos);
+        }
+        out.push(MountDecl { at, target, read_only: m.read_only });
+    }
+    Ok(out)
+}
+
+/// Each of the image's requests of `inst`, with its path in `inst`'s
+/// served tree, against what `obj` serves.
+fn check_requests(
+    inst: &image::Instance,
+    obj: &Object,
+    requests: &[(&image::Request, &str)],
+    scope: &BTreeMap<String, MessageType>,
+    slots: &[Slot],
+) -> Result<()> {
     let name = &inst.name.name;
-    for r in &inst.requests {
-        let path = ns::clean(&r.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
+    for &(r, path) in requests {
         let body = r.body.as_ref().map(|b| body_arg(scope, slots, b)).transpose()?;
         let body_type = body.as_ref().map(|b| arg_type(slots, b));
-        let Some(entry) = obj.serving(&path) else {
+        let Some(entry) = obj.serving(path) else {
             bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
         };
         let given = match body_type {
@@ -396,7 +437,17 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
         p.instances.iter().map(|i| i.mounts.iter().map(|m| (m.target, m.read_only)).collect()).collect();
     let reach = ns::reach(&mounts);
     let width = p.instances.iter().map(|i| i.name.len()).max().unwrap_or(0);
+    let sees = |mounts: &[MountDecl]| -> String {
+        let sees: Vec<String> = mounts
+            .iter()
+            .map(|m| format!("{} → {}{}", m.at, p.instances[m.target].name, if m.read_only { " ro" } else { "" }))
+            .collect();
+        sees.join(", ")
+    };
     let mut out = String::new();
+    if !p.view.is_empty() {
+        writeln!(out, "the image sees {}\n", sees(&p.view)).unwrap();
+    }
     for (i, inst) in p.instances.iter().enumerate() {
         let mut name = inst.name.as_str();
         if let Some(about) = about(i) {
@@ -409,12 +460,7 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
             }
             continue;
         }
-        let sees: Vec<String> = inst
-            .mounts
-            .iter()
-            .map(|m| format!("{} → {}{}", m.at, p.instances[m.target].name, if m.read_only { " ro" } else { "" }))
-            .collect();
-        writeln!(out, "{name:width$}  sees {}", sees.join(", ")).unwrap();
+        writeln!(out, "{name:width$}  sees {}", sees(&inst.mounts)).unwrap();
         let reaches: Vec<String> = reach[i]
             .iter()
             .map(|(&t, r)| {
@@ -679,33 +725,61 @@ mod tests {
 
     #[test]
     fn startup_requests_are_typed() {
-        let inst = |req: &str| format!("{HEADER} instance e : Echo {{ {req} }}");
+        let inst = |req: &str| format!("{HEADER} instance e : Echo mount /e e {req}");
         let p = check_src(&inst(
-            "write /config Config { name: \"x\", count: 3, ratio: 2, on: true } invoke / Ping remove /a//b/",
+            "write /e/config Config { name: \"x\", count: 3, ratio: 2, on: true } invoke /e Ping remove /e/a//b/",
         ))
         .unwrap();
-        let s = &p.instances[1].startup;
+        let s = &p.startup;
         assert_eq!(s.len(), 3);
-        assert_eq!((s[0].verb, s[0].path.as_str()), (Verb::Write, "/config"));
+        assert_eq!((s[0].verb, s[0].path.as_str()), (Verb::Write, "/e/config"));
         let body = s[0].body.as_ref().unwrap().message().unwrap();
         assert_eq!(body.fields.get_i32("count").unwrap(), 3);
         assert_eq!(body.fields.get_f64("ratio").unwrap(), 2.0);
         assert_eq!(s[1].body.as_ref().unwrap().message().unwrap().type_name, "Ping");
-        assert_eq!((s[2].verb, s[2].path.as_str(), &s[2].body), (Verb::Remove, "/a/b/", &None));
+        assert_eq!((s[2].verb, s[2].path.as_str(), &s[2].body), (Verb::Remove, "/e/a/b/", &None));
 
-        assert!(err(&inst("write /c Config { name: \"x\" }")).contains("missing field `count`"));
-        assert!(err(&inst("write /c Config { name: 1, count: 1, ratio: 1, on: true }")).contains("is string"));
-        assert!(err(&inst("write /c Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
-        assert!(err(&inst("invoke / Ping { x: 1 }")).contains("no field `x`"));
-        assert!(err(&inst("invoke / Missing")).contains("unknown message type"));
-        assert!(err(&inst("write / Blob { data: 1 }")).contains("is bytes"));
-        assert!(err(&inst("read /../x")).contains("not a clean absolute path"));
+        assert!(err(&inst("write /e/c Config { name: \"x\" }")).contains("missing field `count`"));
+        assert!(err(&inst("write /e/c Config { name: 1, count: 1, ratio: 1, on: true }")).contains("is string"));
+        assert!(err(&inst("write /e/c Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
+        assert!(err(&inst("invoke /e Ping { x: 1 }")).contains("no field `x`"));
+        assert!(err(&inst("invoke /e Missing")).contains("unknown message type"));
+        assert!(err(&inst("write /e Blob { data: 1 }")).contains("is bytes"));
+        assert!(err(&inst("read /e/../x")).contains("not a clean absolute path"));
+        assert!(err(&inst("read /x")).contains("nothing is mounted at `/x` in the image's view"));
+        assert!(err(&inst("read /")).contains("nothing is mounted at `/` in the image's view"));
+        assert!(err(&format!("{HEADER} write /e Ping instance e : Echo")).contains("nothing is mounted at `/e`"));
+    }
+
+    #[test]
+    fn startup_requests_keep_the_order_they_are_written_in() {
+        let p = check_src(&format!("{HEADER} invoke /b Ping instance a : A mount /a a invoke /a Ping instance b : B mount /b b invoke /b/x Ping"))
+            .unwrap();
+        let order: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(order, ["/b", "/a", "/b/x"]);
+    }
+
+    #[test]
+    fn requests_resolve_in_the_images_view() {
+        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out Line {{ text: \"hi\" }}")).unwrap();
+        let view = [MountDecl { at: "/".into(), target: 1, read_only: false }, MountDecl { at: "/e/out".into(), target: 0, read_only: false }];
+        assert_eq!(p.view, view);
+        let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, ["/x", "/e/out"], "kept as written, and resolved again when the image runs");
+
+        let e = err(&format!("{HEADER} mount /e e readonly  instance e : Echo  invoke /e Ping"));
+        assert!(e.contains("`/e` is read-only in the image's view, so it can't take `invoke`"), "{e}");
+        assert!(check_src(&format!("{HEADER} mount /e e readonly  instance e : Echo  read /e")).is_ok());
+        let e = err(&format!("{HEADER} mount /c cons  mount /c/ cons"));
+        assert!(e.contains("`/c` is already mounted in the image's view"), "{e}");
+        let e = err(&format!("{HEADER} mount /g ghost"));
+        assert!(e.contains("unknown instance `ghost`"), "{e}");
     }
 
     #[test]
     fn bytes_fields_take_string_literals_as_utf8() {
-        let p = check_src(&format!("{HEADER} instance e : Echo {{ write / Blob {{ data: \"hé\" }} }}")).unwrap();
-        let body = p.instances[1].startup[0].body.as_ref().unwrap().message().unwrap();
+        let p = check_src(&format!("{HEADER} instance e : Echo mount /e e write /e Blob {{ data: \"hé\" }}")).unwrap();
+        let body = p.startup[0].body.as_ref().unwrap().message().unwrap();
         let data = body.fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
     }
@@ -713,24 +787,24 @@ mod tests {
     #[test]
     fn environment_objects_take_config_from_the_image() {
         let p = check_src(
-            r#"instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }
-            instance fs : Environment.Files { control / FilesRoot { path: "public" } }"#,
+            r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "127.0.0.1:0" }
+            instance fs : Environment.Files mount /fs fs control /fs FilesRoot { path: "public" }"#,
         )
         .unwrap();
         assert_eq!(p.instances[0].kind, Kind::Tcp);
         let config = p.instances[0].config.as_ref().unwrap().message().unwrap();
         assert_eq!(config.fields.get_str("address").unwrap(), "127.0.0.1:0");
         assert_eq!(p.instances[1].kind, Kind::Files);
-        assert!(p.instances[0].startup.is_empty(), "config isn't a request");
+        assert!(p.startup.is_empty(), "config isn't a request");
 
         let e = err("instance net : Environment.Tcp");
-        assert!(e.contains("needs exactly one config message, `control / Listen"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp { control / Listen { address: "a" } control / Listen { address: "b" } }"#);
+        assert!(e.contains("needs exactly one config message: mount it in the image's view and `control` its root with a Listen"), "{e}");
+        let e = err(r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "a" } control /net Listen { address: "b" }"#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(r#"instance c : Environment.Console { control / Listen { address: "a" } }"#);
+        let e = err(r#"instance c : Environment.Console mount /c c control /c Listen { address: "a" }"#);
         assert!(e.contains("takes no config"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp { control /x Listen { address: "a" } }"#);
-        assert!(e.contains("configured at its root"), "{e}");
+        let e = err(r#"instance net : Environment.Tcp mount /net net control /net/x Listen { address: "a" }"#);
+        assert!(e.contains("Environment.Tcp is configured at its root, and `/net/x` is `/x` in it"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
     }
@@ -752,7 +826,7 @@ mod tests {
         assert!(e.contains("`include` packs files into a Packed.Files instance, and `s` is a Site"), "{e}");
         let e = err(r#"instance f : Packed.Files { include "x" at /../y }"#);
         assert!(e.contains("not a clean absolute path"), "{e}");
-        let e = err(r#"instance f : Packed.Files { control / FilesRoot { path: "." } }"#);
+        let e = err(r#"instance f : Packed.Files mount /f f control /f FilesRoot { path: "." }"#);
         assert!(e.contains("takes no config"), "{e}");
         let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
         assert!(e.contains("only serves"), "{e}");
@@ -766,16 +840,16 @@ mod tests {
             r#"{HEADER}
             require listen : Listen
             require config : Config {{ name: "x", count: 3 }}
-            instance net : Environment.Tcp {{ control / listen }}
-            instance e : Echo {{ write /config config }}"#
+            instance net : Environment.Tcp mount /net net control /net listen
+            instance e : Echo mount /e e write /e/config config"#
         ))
         .unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
         assert_eq!(p.slots[1].defaults, bson::doc! { "name": "x", "count": 3 }, "defaults may be partial");
         assert_eq!(p.instances[1].config, Some(Arg::Slot(0)));
-        assert_eq!(p.instances[2].startup[0].body, Some(Arg::Slot(1)));
+        assert_eq!(p.startup[0].body, Some(Arg::Slot(1)));
 
-        let inst = |decls: &str, member: &str| format!("{HEADER} {decls} instance e : Echo {{ {member} }}");
+        let inst = |decls: &str, request: &str| format!("{HEADER} {decls} instance e : Echo mount /e e {request}");
         let e = err(&inst("require Greeting : Greeting", ""));
         assert!(e.contains("`Greeting` is a message type; a slot needs a name of its own"), "{e}");
         let e = err(&inst("require g : Greeting require g : Ping", ""));
@@ -786,10 +860,10 @@ mod tests {
         assert!(e.contains("`Greeting` has no field `nope`"), "{e}");
         let e = err(&inst("require g : Nope", ""));
         assert!(e.contains("unknown message type `Nope`"), "{e}");
-        let e = err(&inst("require g : Greeting", "write / g { text: \"x\" }"));
+        let e = err(&inst("require g : Greeting", "write /e g { text: \"x\" }"));
         assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
-        let e = err("require t : Text instance net : Environment.Tcp { control / t }");
-        assert!(e.contains("needs exactly one config message, `control / Listen"), "{e}");
+        let e = err("require t : Text instance net : Environment.Tcp mount /net net control /net t");
+        assert!(e.contains("needs exactly one config message"), "{e}");
     }
 
     #[test]
@@ -814,7 +888,7 @@ mod tests {
         let greeter = "message Greeting { prefix: string } object Greeter { serves { /greeting write Greeting } }";
         let p = check_with(
             r#"import { Greeting } from Greeter
-            instance g : Greeter { write /greeting Greeting { prefix: "hi" } }"#,
+            instance g : Greeter mount /g g write /g/greeting Greeting { prefix: "hi" }"#,
             &[("Greeter", greeter)],
         )
         .unwrap();
@@ -825,7 +899,7 @@ mod tests {
         // A module's types are in the program without being imported, but the image can't write them.
         let p = check_with("instance g : Greeter", &[("Greeter", greeter)]).unwrap();
         assert!(p.messages.contains_key("Greeting"));
-        let e = err_with(r#"instance g : Greeter { write /greeting Greeting { prefix: "hi" } }"#, &[("Greeter", greeter)]);
+        let e = err_with(r#"instance g : Greeter mount /g g write /g/greeting Greeting { prefix: "hi" }"#, &[("Greeter", greeter)]);
         assert!(e.contains("unknown message type `Greeting`; is it imported?"), "{e}");
 
         let e = err(r#"import { Line } from "othismo/env""#);
@@ -849,17 +923,17 @@ mod tests {
     #[test]
     fn startup_requests_must_be_served() {
         let greeter = "import { Text } from env object G { serves { /greeting write Text  /hosts/{name} control Text, control } }";
-        let ok = r#"instance g : G { write /greeting Text { text: "hi" }  control /hosts/* Text { text: "/www" }  control /hosts/a }"#;
+        let ok = r#"instance g : G mount /g g write /g/greeting Text { text: "hi" } control /g/hosts/* Text { text: "/www" } control /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
-        let e = err_with("instance g : G { write /nothing }", &[("G", greeter)]);
+        let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
-        let e = err_with("instance g : G { read /greeting }", &[("G", greeter)]);
+        let e = err_with("instance g : G mount /g g read /g/greeting", &[("G", greeter)]);
         assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Text`"), "{e}");
-        let e = err_with("instance g : G { write /greeting }", &[("G", greeter)]);
+        let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
-        let e = err_with(r#"instance g : G { write /greeting Line { text: "x" } }"#, &[("G", greeter)]);
+        let e = err_with(r#"instance g : G mount /g g write /g/greeting Line { text: "x" }"#, &[("G", greeter)]);
         assert!(e.contains("doesn't take `write Line` at `/greeting`"), "{e}");
-        let e = err(r#"instance net : Environment.Tcp { control / Listen { address: "a" } read /a/b }"#);
+        let e = err(r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "a" } read /net/a/b"#);
         assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
     }
 
@@ -873,7 +947,7 @@ mod tests {
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
         let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write Line` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
-        let files = r#"instance f : Environment.Files { control / FilesRoot { path: "." } }"#;
+        let files = r#"instance f : Environment.Files mount /f f control /f FilesRoot { path: "." }"#;
         let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
         assert!(e.contains("`e` needs `/ watch -> Line*` at `/dev/cons`, and `f` serves `/ control FilesRoot, read -> Data, stat -> Info, list -> Entry*`, `/** read -> Data, stat -> Info, list -> Entry*`"), "{e}");
     }
@@ -892,7 +966,7 @@ mod tests {
         let site = "import { Data, Info, Text } from env object Site { serves { /hits read -> Text  /** read -> Data, stat -> Info } }";
         let strict = "import { Data } from env object Strict { needs /** { /** read -> Data } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
-        let net = r#"instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }"#;
+        let net = r#"instance net : Environment.Tcp mount /net net control /net Listen { address: "127.0.0.1:0" }"#;
         let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
@@ -905,14 +979,15 @@ mod tests {
     fn describes_views_and_reach() {
         let p = check_src(
             r#"instance cons : Environment.Console
-            instance files : Environment.Files { control / FilesRoot { path: "." } }
+            instance files : Environment.Files mount /files files control /files FilesRoot { path: "." }
             instance site : Site { mount /files files readonly }
             instance http : Http { mount /www site  mount /dev/cons cons }"#,
         )
         .unwrap();
         assert_eq!(
             describe(&p, &|_| None),
-            "cons   sees nothing\n\
+            "the image sees /files → files\n\n\
+             cons   sees nothing\n\
              files  sees nothing\n\
              site   sees /files → files ro\n       can reach at most: files ro\n\
              http   sees /www → site, /dev/cons → cons\n       can reach at most: cons rw, files ro (via site), site rw\n"

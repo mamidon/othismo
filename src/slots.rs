@@ -122,8 +122,8 @@ pub fn bind(program: &mut Program, given: &[Given]) -> Result<()> {
     };
     for inst in &mut program.instances {
         inst.config.iter_mut().for_each(fill);
-        inst.startup.iter_mut().filter_map(|s| s.body.as_mut()).for_each(fill);
     }
+    program.startup.iter_mut().filter_map(|s| s.body.as_mut()).for_each(fill);
     Ok(())
 }
 
@@ -163,8 +163,13 @@ mod tests {
     const IMAGE: &str = r#"
         require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info { kind: "file" }
-        instance net : Environment.Tcp { control / listen }
-        instance a : A { write /info info  write /x Text { text: "literal" } }
+        instance net : Environment.Tcp
+        instance a : A
+        mount /net net
+        mount /a a
+        control /net listen
+        write /a/info info
+        write /a/x Text { text: "literal" }
     "#;
 
     fn given(origin: &str, slot: &str, field: &str, value: GivenValue) -> Given {
@@ -188,7 +193,7 @@ mod tests {
 
         let config = p.instances[0].config.as_ref().unwrap().message().unwrap();
         assert_eq!(config.fields, bson::doc! { "address": "0.0.0.0:8080" });
-        let info = p.instances[1].startup[0].body.as_ref().unwrap().message().unwrap();
+        let info = p.startup[0].body.as_ref().unwrap().message().unwrap();
         assert_eq!(info.fields, bson::doc! { "kind": "file", "size": 42i64, "mime": "text/plain" }, "in declared order");
         let origins = |i: usize| p.slots[i].origins.iter().map(|(f, o)| format!("{f}={o}")).collect::<Vec<_>>();
         assert_eq!(origins(0), ["address=--set"]);

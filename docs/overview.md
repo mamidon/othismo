@@ -118,18 +118,26 @@ instance http : HttpServer {
   mount /net/tcp net
   mount /www site
   mount /dev/cons cons
-  control /hosts/* Text { text: "/www" }
 }
 
 instance site : StaticSite {
   mount /files files readonly
 }
 
-# creates a socket, configured to listen to localhost on port 8080 by default
-instance net   : Environment.Tcp     { control / listen }
+# a socket
+instance net   : Environment.Tcp
 instance cons  : Environment.Console
 # brings the host's ./public folder into the image, at build time
-instance files : Packed.Files        { include "./public/" }
+instance files : Packed.Files { include "./public/" }
+
+# what the image itself can reach, to configure it
+mount /net  net
+mount /http http
+
+# configures the socket to listen to localhost on port 8080 by default
+control /net listen
+# tells http to serve every host from /www in its view
+control /http/hosts/* Text { text: "/www" }
 ```
 
 Because an object can only pass on what it can see, the most any object can
@@ -139,6 +147,8 @@ image touches on the host:
 
 ```text
 slot listen : Listen { address: "127.0.0.1:8080" (default) }
+
+the image sees /net → net, /http → http
 
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
        can reach at most: site rw, net rw, cons rw, files ro (via site)

@@ -28,6 +28,9 @@ http's view                         site's view
   /dev/cons → cons
 ```
 
+The image has a view of its own as well, which only its startup requests use
+(see [The image](#the-image)).
+
 Views are private. The same path can mean different things to different
 instances. Conventional names (`/dev/cons`, `/net/tcp`, `/files`) keep that
 manageable.
@@ -217,8 +220,9 @@ run(new Site())
 ## Environment objects
 
 Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. Their configuration is a `control /` from the
-image, and objects can't send `control`, so no object can open another port
+way to reach the outside world. Their configuration is a `control` of their
+root from the image (`control /net Listen { ... }`, with `net` mounted at
+`/net` in the image's view), and objects can't send `control`, so no object can open another port
 or move a files root. Changing it while the image runs isn't supported yet:
 they answer `control` with `not_supported`.
 
@@ -255,28 +259,39 @@ instance http : HttpServer {
   mount /net/tcp net
   mount /www site
   mount /dev/cons cons
-  control /hosts/localhost Text { text: "/www" }   # a startup request to http itself
 }
 
 instance site : StaticSite {           # scripts/StaticSite.wasm
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp { control / listen }
+instance net   : Environment.Tcp
 instance cons  : Environment.Console
-instance files : Packed.Files    { include "./public/" }
+instance files : Packed.Files { include "./public/" }
+
+mount /net  net                        # the image's own view
+mount /http http
+
+control /net listen                                     # net's config
+control /http/hosts/localhost Text { text: "/www" }     # a startup request to http
 ```
 
 - `mount <path> <instance> [readonly]` puts that instance's whole served tree
-  at `<path>` in this instance's view. Instances can be declared in any
-  order, so an image can start from the instance at the top of the
-  namespace and work down.
-- `<verb> <path> [Type { fields }]` is a request the image makes of this
-  instance at startup, with `<path>` in its served tree. The image ignores
-  replies, except that a failure is printed to stderr as a warning.
+  at `<path>` in a view. Inside an instance's block it builds that instance's
+  view. At the top level it builds the image's own view. Instances can be
+  declared in any order, so an image can start from the instance at the top
+  of the namespace and work down.
+- `<verb> <path> [Type { fields }]` is a request the image makes at startup,
+  resolved in the image's view like any other request: `/http/hosts/localhost`
+  reaches `/hosts/localhost` in `http`'s served tree because `http` is
+  mounted at `/http`. The image can only send requests to what it mounts, so
+  an image with no top-level mounts sends none. Requests can appear anywhere
+  in the image, and are made in the order they are written. The image
+  ignores replies, except that a failure is printed to stderr as a warning.
 - `control` is the operator's verb, and these startup requests are the only
-  place an image sends it. An environment object's config is a `control /`
-  with its config message; objects can't send `control` themselves.
+  place an image sends it. An environment object's config is a `control` of
+  its root, so to configure one the image mounts it and sends that:
+  `control /net listen`. Objects can't send `control` themselves.
 - The runtime's message types (`Line`, `Text`, `Data`, `Info`, `Entry`,
   `Accepted`, `Listen`, `FilesRoot`) are always in scope; importing them
   `from env` is allowed but not needed. Any other type the image writes is
@@ -297,6 +312,8 @@ Read-only flags carry through the closure. `othismo --check` prints it:
 ```text
 slot listen : Listen { address: "127.0.0.1:8080" (default) }
 
+the image sees /net → net, /http → http
+
 http   sees /net/tcp → net, /www → site, /dev/cons → cons
        can reach at most: site rw, net rw, cons rw, files ro (via site)
 site   sees /files → files ro
@@ -316,7 +333,7 @@ type; `--no-checks` turns that off.
 
 1. Every instance is created and every view is built from the image's mounts.
    Module top-level code runs. It may already make requests, which are queued.
-2. The image's startup requests are delivered, in start order.
+2. The image's startup requests are delivered, in the order they are written.
 3. `start()` runs on every Wasm instance, in start order.
 4. Environment objects start listening (stdin, sockets).
 

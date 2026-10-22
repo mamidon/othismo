@@ -25,7 +25,7 @@ fn fixture(name: &str) -> Fixture {
             "test.img",
             r#"import { Ping } from "./messages.iface"
             instance cons : Environment.Console
-            instance a : A { mount /dev/cons cons  invoke / Ping }
+            instance a : A { mount /dev/cons cons }  mount /a a  invoke /a Ping
             instance b : B { mount /a a readonly }
             instance a2 : A { mount /dev/cons cons }"#,
         );
@@ -81,7 +81,8 @@ fn corrupt_and_truncated_files_are_refused() {
     let mut old = sealed.clone();
     old[7] = 1;
     let e = err(&old);
-    assert!(e.contains("built by another version of othismo (format 1, and this one reads 3); rebuild it"), "{e}");
+    let want = format!("built by another version of othismo (format 1, and this one reads {}); rebuild it", pack::VERSION);
+    assert!(e.contains(&want), "{e}");
     assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
 }
 
@@ -245,8 +246,12 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require root : FilesRoot
-        instance net   : Environment.Tcp   { control / listen }
-        instance files : Environment.Files { control / root }
+        instance net   : Environment.Tcp
+        instance files : Environment.Files
+        mount /net net
+        mount /files files
+        control /net listen
+        control /files root
         instance cons  : Environment.Console"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
@@ -261,6 +266,8 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         "slot listen : Listen { address: \"127.0.0.1:8080\" (default) }\n\
          slot root : FilesRoot { path: \"www\" (--set) }\n\
          \n\
+         the image sees /net → net, /files → files\n\
+         \n\
          net    listens on 127.0.0.1:8080\n\
          files  reads host files under www\n\
          cons   reads stdin, writes stdout\n"
@@ -274,7 +281,9 @@ fn the_cli_layers_value_files_then_set() {
         "test.img",
         r#"require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info
-        instance net : Environment.Tcp { control / listen }"#,
+        instance net : Environment.Tcp
+        mount /net net
+        control /net listen"#,
     )
     .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");

@@ -302,11 +302,15 @@ impl<'p> Runtime<'p> {
     pub fn new(pack: &'p Pack, io: Io, options: Options) -> Result<Runtime<'p>> {
         let program = &pack.program;
         let n = program.instances.len();
-        let mut ns = Namespace::new(n);
+        // One view per instance, and the image's own after them.
+        let mut ns = Namespace::new(n + 1);
         for (i, inst) in program.instances.iter().enumerate() {
             for m in &inst.mounts {
                 ns.mount(i, &m.at, m.target, m.read_only);
             }
+        }
+        for m in &program.view {
+            ns.mount(n, &m.at, m.target, m.read_only);
         }
         let interfaces = program
             .instances
@@ -348,21 +352,23 @@ impl<'p> Runtime<'p> {
     }
 
     pub fn run(mut self) -> Result<()> {
-        // The image's startup requests, then every module's start(), each
-        // instance after everything it mounts.
+        // The image's startup requests, in the order it makes them, each
+        // resolved in the image's view.
+        let image_view = self.program.instances.len();
+        for s in &self.program.startup {
+            let what = format!("{} {}", s.verb.keyword(), s.path);
+            let body = s.body.as_ref().map(|b| b.message().cloned()).transpose()?;
+            let mut shared = self.shared.borrow_mut();
+            let to = shared.ns.resolve(image_view, &s.path).and_then(|r| {
+                if r.read_only && !s.verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
+            });
+            shared.request(Requester::Image(what), to, s.verb, body);
+        }
+        self.drain()?;
+        // Then every module's start(), each instance after everything it mounts.
         let mounts: Vec<Vec<usize>> =
             self.program.instances.iter().map(|i| i.mounts.iter().map(|m| m.target).collect()).collect();
         let order = ns::start_order(&mounts);
-        for &i in &order {
-            let inst = &self.program.instances[i];
-            for s in &inst.startup {
-                let what = format!("{} {} {}", s.verb.keyword(), inst.name, s.path);
-                let to = Ok(Resolved { inst: i, path: s.path.clone(), read_only: false });
-                let body = s.body.as_ref().map(|b| b.message().cloned()).transpose()?;
-                self.shared.borrow_mut().request(Requester::Image(what), to, s.verb, body);
-            }
-        }
-        self.drain()?;
         for &i in &order {
             if let Object::Wasm(obj) = &mut self.objects[i] {
                 obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;

@@ -23,6 +23,10 @@ pub struct Image {
     pub imports: Vec<Import>,
     pub requires: Vec<Require>,
     pub instances: Vec<Instance>,
+    /// Top-level mounts: the image's own view, which its requests resolve in.
+    pub mounts: Vec<Mount>,
+    /// `<verb> <path> [T { ... }]`: startup requests, in the order they are made.
+    pub requests: Vec<Request>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,8 +75,6 @@ pub struct Instance {
     /// e.g. `Environment.Console`.
     pub type_name: Ident,
     pub mounts: Vec<Mount>,
-    /// `<verb> <path> [T { ... }]`: startup requests to this instance.
-    pub requests: Vec<Request>,
     /// `include "<path>" [at <path>]`: files to pack into the image.
     pub includes: Vec<Include>,
 }
@@ -89,6 +91,7 @@ pub struct Mount {
 pub struct Request {
     pub verb: Verb,
     pub verb_pos: Pos,
+    /// A path in the image's view.
     pub path: Path,
     pub body: Option<Body>,
 }
@@ -299,12 +302,12 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
 // Parser
 
 /// Words that can never be names. Member keywords (`mount`, `include`,
-/// `readonly`, `at` and the verbs) only mean something inside an instance
-/// block.
+/// `readonly` and `at`) only mean something inside an instance block, and
+/// the verbs only where a request can start.
 pub(crate) const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
 
-/// Words that start a member of an instance block, besides the verbs.
-const MEMBERS: &[&str] = &["mount", "include"];
+/// Words that start a declaration at the top of an image, besides the verbs.
+const DECLS: &[&str] = &["import", "require", "instance", "mount"];
 
 pub(crate) struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -381,20 +384,45 @@ impl Parser {
     }
 
     fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], requires: vec![], instances: vec![] };
+        let mut image = Image { imports: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
         loop {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
                 Tok::Ident(kw) if kw == "require" => image.requires.push(self.require()?),
+                Tok::Ident(kw) if kw == "mount" => {
+                    self.next();
+                    image.mounts.push(self.mount()?);
+                }
+                Tok::Ident(kw) if Verb::from_keyword(&kw).is_some() => image.requests.push(self.startup_request()?),
                 Tok::Ident(kw) if kw == "protocol" => bail!(
                     "{}: protocols are gone; an instance's type names its module, and requests are addressed by path",
                     self.pos()
                 ),
-                other => bail!("{}: expected `import`, `require` or `instance`, found {other}", self.pos()),
+                other => {
+                    bail!("{}: expected `import`, `require`, `instance`, `mount` or a verb, found {other}", self.pos())
+                }
             }
         }
+    }
+
+    /// `<verb> <path> [T { ... }]`. A body-less request ends where the next
+    /// declaration or request starts.
+    fn startup_request(&mut self) -> Result<Request> {
+        let (tok, verb_pos) = self.next();
+        let verb = match tok {
+            Tok::Ident(w) => Verb::from_keyword(&w),
+            _ => None,
+        }
+        .ok_or_else(|| anyhow::anyhow!("{verb_pos}: expected a verb"))?;
+        let path = self.path()?;
+        let body = match self.peek() {
+            Tok::Ident(w) if !DECLS.contains(&w.as_str()) && Verb::from_keyword(w).is_none() => Some(self.body()?),
+            Tok::LBrace => Some(self.body()?),
+            _ => None,
+        };
+        Ok(Request { verb, verb_pos, path, body })
     }
 
     /// `import { A, B } from env`, `from Module` or `from "./file.iface"`.
@@ -425,7 +453,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let type_name = self.ident("instance type", true)?;
-        let mut inst = Instance { name, type_name, mounts: vec![], requests: vec![], includes: vec![] };
+        let mut inst = Instance { name, type_name, mounts: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
@@ -435,7 +463,7 @@ impl Parser {
             let word = match tok {
                 Tok::RBrace => return Ok(inst),
                 Tok::Ident(word) => word,
-                other => bail!("{pos}: expected `mount`, `include`, a verb or `}}`, found {other}"),
+                other => bail!("{pos}: expected `mount`, `include` or `}}`, found {other}"),
             };
             if word == "mount" {
                 inst.mounts.push(self.mount()?);
@@ -451,17 +479,18 @@ impl Parser {
                     None
                 };
                 inst.includes.push(Include { source, pos, at });
-            } else if let Some(verb) = Verb::from_keyword(&word) {
-                let path = self.path()?;
-                let body = match self.peek() {
-                    Tok::Ident(w) if !MEMBERS.contains(&w.as_str()) && Verb::from_keyword(w).is_none() => Some(self.body()?),
-                    Tok::LBrace => Some(self.body()?),
-                    _ => None,
+            } else if Verb::from_keyword(&word).is_some() {
+                let at = match self.peek() {
+                    Tok::Path(p) if p != "/" => p.clone(),
+                    _ => String::new(),
                 };
-                inst.requests.push(Request { verb, verb_pos: pos, path, body });
+                bail!(
+                    "{pos}: requests are made at the top level, in the image's view; mount `{}` there, e.g. \
+                     `mount /{0} {0}`, and then `{word} /{0}{at} ...`",
+                    inst.name.name
+                );
             } else {
-                let verbs: Vec<&str> = crate::ns::VERBS.iter().map(|v| v.keyword()).collect();
-                bail!("{pos}: expected `mount`, `include`, a verb ({}) or `}}`, found `{word}`", verbs.join(", "));
+                bail!("{pos}: expected `mount`, `include` or `}}`, found `{word}`");
             }
         }
     }
@@ -562,15 +591,16 @@ mod tests {
             import { Tick } from "./other"
 
             instance cons : Environment.Console
-            instance net : Environment.Tcp { control / Listen { address: "127.0.0.1:0" } }
+            instance net : Environment.Tcp
+            control /net Listen { address: "127.0.0.1:0" }
             instance echo : Echo {
               mount /dev/cons cons
               mount /net/tcp net readonly
-              write /greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
-              invoke / Ping
-              remove /old
-              watch /
             }
+            write /echo/greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
+            invoke /echo Ping
+            remove /echo/old
+            watch /echo
             "#,
         )
         .unwrap();
@@ -581,26 +611,32 @@ mod tests {
 
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].type_name.name, "Environment.Console");
-        let net = &img.instances[1];
-        assert_eq!((net.requests[0].verb, net.requests[0].path.path.as_str()), (Verb::Control, "/"));
-        assert_eq!(net.requests[0].body.as_ref().unwrap().type_name.name, "Listen");
-
         let echo = &img.instances[2];
         let mounts: Vec<_> = echo.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
         assert_eq!(mounts, [("cons", "/dev/cons", false), ("net", "/net/tcp", true)]);
 
-        let reqs = &echo.requests;
-        assert_eq!(reqs.iter().map(|r| r.verb).collect::<Vec<_>>(), [Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
-        assert_eq!(reqs[0].path.path, "/greeting");
-        let f = reqs[0].body.as_ref().unwrap().fields.as_ref().unwrap();
+        let reqs = &img.requests;
+        let verbs: Vec<_> = reqs.iter().map(|r| r.verb).collect();
+        assert_eq!(verbs, [Verb::Control, Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
+        assert_eq!(reqs[0].path.path, "/net");
+        assert_eq!(reqs[0].body.as_ref().unwrap().type_name.name, "Listen");
+        assert_eq!(reqs[1].path.path, "/echo/greeting");
+        let f = reqs[1].body.as_ref().unwrap().fields.as_ref().unwrap();
         assert_eq!(f[0].1, Value::Str("hi \"there\"".into()));
         assert_eq!(f[1].1, Value::Int(-3));
         assert_eq!(f[2].1, Value::Float(1.5));
         assert_eq!(f[3].1, Value::Bool(true));
-        assert_eq!(reqs[1].path.path, "/");
-        assert_eq!(reqs[1].body.as_ref().unwrap().fields, None);
-        assert_eq!(reqs[2].body, None, "a verb ends a body-less request");
-        assert_eq!(reqs[3].body, None);
+        assert_eq!(reqs[2].path.path, "/echo");
+        assert_eq!(reqs[2].body.as_ref().unwrap().fields, None);
+        assert_eq!(reqs[3].body, None, "a verb ends a body-less request");
+        assert_eq!(reqs[4].body, None);
+    }
+
+    #[test]
+    fn requests_can_come_anywhere() {
+        let img = parse("remove /a/x\ninstance a : A\nread /a\nrequire t : Text\nwatch /a").unwrap();
+        let paths: Vec<_> = img.requests.iter().map(|r| (r.path.path.as_str(), r.body.is_some())).collect();
+        assert_eq!(paths, [("/a/x", false), ("/a", false), ("/a", false)], "a declaration ends a body-less request");
     }
 
     #[test]
@@ -608,14 +644,15 @@ mod tests {
         let img = parse(
             r#"require listen : Listen { address: "127.0.0.1:8080" }
             require admin : Text
-            instance net : Environment.Tcp { control / listen }"#,
+            instance net : Environment.Tcp
+            control /net listen"#,
         )
         .unwrap();
         let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.body.type_name.name.as_str())).collect();
         assert_eq!(reqs, [("listen", "Listen"), ("admin", "Text")]);
         assert_eq!(img.requires[0].body.fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
         assert_eq!(img.requires[1].body.fields, None);
-        let body = img.instances[0].requests[0].body.as_ref().unwrap();
+        let body = img.requests[0].body.as_ref().unwrap();
         assert_eq!(body.type_name.name, "listen", "a slot is used like a unit message");
         assert!(parse("require : Text").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
@@ -636,7 +673,6 @@ mod tests {
         let img = parse(
             r#"instance files : Packed.Files {
               include "./public/"
-              read /
               include "robots.txt" at /robots.txt
             }"#,
         )
@@ -644,7 +680,6 @@ mod tests {
         let inst = &img.instances[0];
         let incs: Vec<_> = inst.includes.iter().map(|i| (i.source.as_str(), i.at.as_ref().map(|p| p.path.as_str()))).collect();
         assert_eq!(incs, [("./public/", None), ("robots.txt", Some("/robots.txt"))]);
-        assert_eq!(inst.requests[0].body, None, "`include` ends a body-less request");
         let e = parse("instance f : Packed.Files { include public/ }").unwrap_err().to_string();
         assert!(e.contains("expected a quoted file or directory"), "{e}");
     }
@@ -696,17 +731,25 @@ mod tests {
         assert!(e.contains("expected a path"), "{e}");
         let e = parse("instance a : A { mount b /b }").unwrap_err().to_string();
         assert!(e.contains("the mount point comes first: `mount /b b`"), "{e}");
-        let e = parse("instance a : A { write hosts }").unwrap_err().to_string();
+        let e = parse("mount cons /dev/cons").unwrap_err().to_string();
+        assert!(e.contains("the mount point comes first: `mount /dev/cons cons`"), "{e}");
+        let e = parse("write hosts").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
         let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
-        assert!(e.contains("a verb"), "{e}");
+        assert!(e.contains("expected `mount`, `include` or `}`"), "{e}");
+        let e = parse("instance http : H { control /hosts/* Text }").unwrap_err().to_string();
+        assert!(e.contains("requests are made at the top level, in the image's view; mount `http` there, e.g. `mount /http http`, and then `control /http/hosts/* ...`"), "{e}");
+        let e = parse("instance net : T { control / listen }").unwrap_err().to_string();
+        assert!(e.contains("`control /net ...`"), "{e}");
+        let e = parse("frobnicate /x").unwrap_err().to_string();
+        assert!(e.contains("or a verb"), "{e}");
         let e = parse("protocol P { in A }").unwrap_err().to_string();
         assert!(e.contains("protocols are gone"), "{e}");
     }
 
     #[test]
     fn rejects_anonymous_messages() {
-        let err = parse("instance a : P { write /a { x: 1 } }").unwrap_err();
+        let err = parse("write /a { x: 1 }").unwrap_err();
         assert!(err.to_string().contains("anonymous"), "{err}");
     }
 
@@ -720,6 +763,6 @@ mod tests {
     fn keywords_are_not_names() {
         assert!(parse("instance instance : P").is_err());
         assert!(parse("instance a.b : P").is_err());
-        assert!(parse("instance write : P").is_ok(), "verbs are only keywords inside blocks");
+        assert!(parse("instance write : P").is_ok(), "verbs only start a request where a declaration could");
     }
 }

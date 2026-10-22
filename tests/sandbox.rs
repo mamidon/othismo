@@ -279,7 +279,7 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
 }
 
 /// An image with a Console called `cons`, the given Wasm instances
-/// (`name`, script, members) and any extra declarations. Each scripted
+/// (`name`, script, members) and any extra declarations and requests. Each scripted
 /// module gets a header from [`header`].
 fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixture {
     fixture_with(name, objects, extra, &[])
@@ -318,7 +318,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount /out cons  invoke / Ping  invoke /again Ping")], "");
+    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  invoke /a Ping  invoke /a/again Ping");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -360,7 +360,7 @@ fn only_the_image_controls() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("control", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons  control /y Ping")], "");
+    let f = fixture("control", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")], "mount /b b  control /b/y Ping");
     assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's control, never a's");
 }
 
@@ -499,7 +499,7 @@ const FILES_OUTPUT: &str = "not_supported\n\
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Environment.Files { control / FilesRoot { path: \"public\" } }";
+    let files = "instance files : Environment.Files  mount /files files  control /files FilesRoot { path: \"public\" }";
     let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
@@ -524,7 +524,7 @@ fn packed_files_answer_like_files() {
 #[test]
 fn unknown_request_ids_stop_the_run() {
     let a = Script { serve: Some(Steps::Each(vec![Act::ReplyTo(7)])), ..Default::default() };
-    let f = fixture("badreq", &[("a", &a, "invoke / Ping")], "");
+    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  invoke /a Ping");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
 }

@@ -10,8 +10,6 @@ instance http : HttpServer {
   mount /net/tcp net
   mount /www site
   mount /dev/cons cons
-  control /hosts/* Text { text: "/www" }
-  control /hosts/files.localhost Text { text: "/www/static" }
 }
 
 # The site can read the files and nothing else.
@@ -19,6 +17,14 @@ instance site : StaticSite {
   mount /files files readonly
 }
 
-instance net   : Environment.Tcp     { control / listen }
+instance net   : Environment.Tcp
 instance cons  : Environment.Console
-instance files : Packed.Files        { include "./public/" }
+instance files : Packed.Files { include "./public/" }
+
+# What the image itself can reach, to configure it.
+mount /net  net
+mount /http http
+
+control /net listen
+control /http/hosts/* Text { text: "/www" }
+control /http/hosts/files.localhost Text { text: "/www/static" }

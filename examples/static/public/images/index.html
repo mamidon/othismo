@@ -88,7 +88,9 @@ for live edits during development, use <code>Environment.Files</code>.</p>
 It is the build-time counterpart of <code>Environment.Files</code>, which reads the host
 at run time:</p>
 <pre><code class="language-text"># The host&#39;s files, live:
-instance files : Environment.Files { control / FilesRoot { path: &quot;/var/www&quot; } }
+instance files : Environment.Files
+mount /files files
+control /files FilesRoot { path: &quot;/var/www&quot; }
 
 # A snapshot, taken when the image is built:
 instance files : Packed.Files {
@@ -133,18 +135,23 @@ values; the image supplies the types and, optionally, defaults:</p>
 }
 require admin : Text            # no defaults: the host must give it
 
-instance net  : Environment.Tcp { control / listen }
-instance http : HttpServer {
-  control /admin admin
-}
+instance net  : Environment.Tcp
+instance http : HttpServer
+
+mount /net  net
+mount /http http
+
+control /net listen
+control /http/admin admin
 </code></pre>
 <ul>
 <li><code>require &lt;name&gt; : &lt;Type&gt;</code> declares a slot. Fields written in the block are
 defaults, checked like any message literal. Fields left out must come from
 the host. No block, or an empty one, means every field must.</li>
 <li>A slot&#39;s name can stand wherever a message can: as a startup request&#39;s
-body, including an environment object&#39;s <code>control /</code>. It can&#39;t change mounts or instance types, so a built image&#39;s
-views are fixed when it is built and <code>--check</code> stays a true upper bound.</li>
+body, including an environment object&#39;s config. It can&#39;t change mounts or
+instance types, so a built image&#39;s views are fixed when it is built and
+<code>--check</code> stays a true upper bound.</li>
 <li>A slot can&#39;t share its name with a message type or another slot.</li>
 </ul>
 <p>The host gives values in layers, and a later layer wins field by field:</p>
@@ -179,7 +186,7 @@ files  serves 11 built-in files, 105.6 KB
 <p>A relative <code>FilesRoot</code> path resolves against the directory holding the image,
 <code>.img</code> or <code>.rti</code>.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x03        magic and format version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x04        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

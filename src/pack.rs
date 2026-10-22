@@ -22,7 +22,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x03";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x04";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.

@@ -7,11 +7,12 @@ image mounts where its hosts point.
 ## Hosts
 
 Each host name it answers for has a root, a path in its view, which only
-the image sets, with `control`:
+the image sets, with `control`. With `http` mounted at `/http` in the
+image's view:
 
 ```text
-control /hosts/* Text { text: "/www" }
-control /hosts/files.localhost Text { text: "/www/static" }
+control /http/hosts/* Text { text: "/www" }
+control /http/hosts/files.localhost Text { text: "/www/static" }
 ```
 
 `*` stands for any host not listed. A `control` with no body stops serving

@@ -6,7 +6,6 @@ import { Greeting } from Greeter
 instance greeter : Greeter {
   mount /dev/cons cons
   mount /shouter shouter
-  write /greeting Greeting { prefix: "Hello, ", excited: true }
 }
 
 instance shouter : Shouter {
@@ -14,3 +13,6 @@ instance shouter : Shouter {
 }
 
 instance cons : Environment.Console
+
+mount /greeter greeter
+write /greeter/greeting Greeting { prefix: "Hello, ", excited: true }

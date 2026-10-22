@@ -272,9 +272,8 @@ bytes.</p>
 module&#39;s top-level code runs, and may already make requests, which wait in
 the queue.</li>
 <li>The image&#39;s startup requests are delivered: <code>control</code> requests and any
-others. Each object gets its requests after everything it mounts has had
-its own.</li>
-<li>Each object&#39;s <code>start</code> runs, again after everything it mounts.</li>
+others, in the order the image writes them.</li>
+<li>Each object&#39;s <code>start</code> runs, after everything it mounts.</li>
 <li>The environment starts: stdin is read and sockets accept connections.</li>
 </ol>
 <p>The run ends when the queue is empty and nothing outside can add to it.</p>

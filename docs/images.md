@@ -48,7 +48,9 @@ at run time:
 
 ```text
 # The host's files, live:
-instance files : Environment.Files { control / FilesRoot { path: "/var/www" } }
+instance files : Environment.Files
+mount /files files
+control /files FilesRoot { path: "/var/www" }
 
 # A snapshot, taken when the image is built:
 instance files : Packed.Files {
@@ -102,18 +104,23 @@ require listen : Listen {
 }
 require admin : Text            # no defaults: the host must give it
 
-instance net  : Environment.Tcp { control / listen }
-instance http : HttpServer {
-  control /admin admin
-}
+instance net  : Environment.Tcp
+instance http : HttpServer
+
+mount /net  net
+mount /http http
+
+control /net listen
+control /http/admin admin
 ```
 
 - `require <name> : <Type>` declares a slot. Fields written in the block are
   defaults, checked like any message literal. Fields left out must come from
   the host. No block, or an empty one, means every field must.
 - A slot's name can stand wherever a message can: as a startup request's
-  body, including an environment object's `control /`. It can't change mounts or instance types, so a built image's
-  views are fixed when it is built and `--check` stays a true upper bound.
+  body, including an environment object's config. It can't change mounts or
+  instance types, so a built image's views are fixed when it is built and
+  `--check` stays a true upper bound.
 - A slot can't share its name with a message type or another slot.
 
 The host gives values in layers, and a later layer wins field by field:
@@ -158,7 +165,7 @@ A relative `FilesRoot` path resolves against the directory holding the image,
 ## The file format
 
 ```text
-"RTIMAGE" 0x03        magic and format version
+"RTIMAGE" 0x04        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back
