@@ -7,7 +7,7 @@
 //
 // Each page takes its title from the document's `# heading` and its lede
 // from the first paragraph, and gets a contents list of its `##` sections.
-// Run with `make site`; the output is committed so the example needs no build.
+// Run with `task build:docs`; the output is committed so the example needs no build.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -113,7 +113,7 @@ function page(p, doc) {
     `<a class="nav-link" href="${href}"${href === p.nav ? ' aria-current="page"' : ""}>${label}</a>`
   const toc = doc.toc.map((h) => `          <li><a href="#${h.id}">${h.html}</a></li>`).join("\n")
   return `<!doctype html>
-<!-- Generated from ${p.source} by examples/static/site.mjs (make site). Edit the source, not this file. -->
+<!-- Generated from ${p.source} by examples/static/site.mjs (task build:docs). Edit the source, not this file. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
