@@ -48,7 +48,6 @@ The header is what you review; the runtime holds the code to it.</p>
           <li><a href="#building-a-module">Building a module</a></li>
           <li><a href="#assemblyscript">AssemblyScript</a></li>
           <li><a href="#failure">Failure</a></li>
-          <li><a href="#open-questions">Open questions</a></li>
           <li><a href="#where-it-stands">Where it stands</a></li>
         </ol>
       </nav>
@@ -110,6 +109,14 @@ name together with its exact fields. Two headers may both declare <code>Greeting
 if they agree on its fields; if they disagree, an image can&#39;t use both.</p>
 <p>A header can import types from other headers, and from <code>env</code>, which holds the
 runtime&#39;s own types.</p>
+<p><code>Opaque</code> is reserved and means any message. Console prints whatever it is
+sent, so it serves <code>/ write Opaque</code>; a logging proxy that passes on whatever
+comes back answers <code>-&gt; Opaque*</code>. In matching, <code>Opaque</code> goes both ways: a server
+that takes <code>write Opaque</code> satisfies a need to <code>write Line</code>, and a need for
+<code>read -&gt; Opaque</code> is satisfied by a server that answers any type. The reverse
+doesn&#39;t hold: a need to send <code>Opaque</code> is met only by a server that takes
+<code>Opaque</code>, and a need for <code>-&gt; Line</code> isn&#39;t met by a server that promises only
+<code>-&gt; Opaque</code>.</p>
 <h3 id="serves-and-needs">Serves and needs</h3>
 <p><code>serves</code> lists the paths an object answers for. <code>needs</code> lists, for each mount
 point in its view, what it expects to find there. They use one grammar: a
@@ -129,12 +136,30 @@ such as <code>remove</code>, is answered with a status alone.</p>
 trailing <code>/</code> counts, as it does everywhere else.</li>
 <li><code>{name}</code> matches exactly one segment. The name is for the documentation; it
 captures nothing, since the object gets the whole path anyway.</li>
-<li><code>**</code> matches the rest of the path, however many segments, and only comes
-last.</li>
+<li><code>**</code> matches the rest of the path, zero or more segments, and only comes
+last. <code>/www/**</code> matches <code>/www</code> itself as well as everything below it, and
+<code>/**</code> matches every path, <code>/</code> included.</li>
 </ul>
 <p>Where several patterns match, the most specific wins, whatever their order: a
 literal over <code>{name}</code>, <code>{name}</code> over <code>**</code>, and longer over shorter. It is the
 same rule that picks a mount point.</p>
+<p>A <code>needs</code> block&#39;s own path is a pattern too, for objects that are told at run
+time which mount points to use. <code>needs /sites/{name}</code> covers every mount point
+directly under <code>/sites/</code>, and <code>needs /sites/**</code> <code>/sites</code> and any mount point
+below it.
+HttpServer is configured with a mount point for each host, which can be
+anywhere, so it needs every mount it isn&#39;t given a more specific need for:</p>
+<pre><code class="language-text">needs /net/tcp { ... }
+needs /dev/cons { / write Opaque }
+
+## The sites, at whichever mount points the hosts are configured with.
+needs /** {
+  /**     read -&gt; Data, stat -&gt; Info, list -&gt; Entry*
+}
+</code></pre>
+<p>Every mount the pattern matches must provide what the block lists. Where
+several blocks match a mount point, the most specific applies, so <code>/net/tcp</code>
+is held to its own block and not to <code>/**</code>.</p>
 <h3 id="shapes-not-behaviour">Shapes, not behaviour</h3>
 <p>A header describes shapes: which paths exist, which verbs they take, and which
 types go in and come out. It can&#39;t describe behaviour, such as whether a
@@ -171,7 +196,7 @@ answering object&#39;s fault.</p>
 <p>The <code>needs</code> side is the stronger promise. Mounts say what an object has been
 given; its <code>needs</code> say the most it can ask of each. An object given the
 console to write a log can&#39;t watch it for input unless its header says so.</p>
-<p>Enforcement is on by default and can be turned off.</p>
+<p>Enforcement is on by default; <code>--no-checks</code> turns it off.</p>
 <h3 id="documentation">Documentation</h3>
 <p>Headers carry their documentation, so it travels with the module and can be
 read or generated from it.</p>
@@ -248,9 +273,11 @@ classes for its message types, with their encoders and decoders.</li>
 <li>The source is compiled to <code>.wasm</code>.</li>
 <li>The header is appended to the module as a custom section.</li>
 </ol>
-<p>The generated bindings are ordinary files, so editors and compilers see them
-like any other source. Generating them means a type is written once and its
-encoding can&#39;t drift from its declaration.</p>
+<p>The generated bindings are ordinary files, committed next to the source, so
+editors and compilers see them like any other source without a build first.
+Generating them means a type is written once and its encoding can&#39;t drift
+from its declaration; a build regenerates them, so a stale binding shows up as
+a diff.</p>
 <p>Because the header is inside the module, a compiled object describes itself.
 It can be published as one file, and an image can import a type straight
 from it:</p>
@@ -285,13 +312,6 @@ object. Whether a failing object should be contained, so that only its
 callers notice, is open.</p>
 <p>Calls never time out. A request whose server never answers waits for as long
 as the image runs.</p>
-<h2 id="open-questions">Open questions</h2>
-<ul>
-<li>Some objects accept any message: Console prints whatever it is sent. A header
-needs a way to say so.</li>
-<li>HttpServer sends requests to paths chosen at run time, by <code>control</code>. Its
-<code>needs</code> can&#39;t name those mount points in advance.</li>
-</ul>
 <h2 id="where-it-stands">Where it stands</h2>
 <p>The interface is a design; the runtime doesn&#39;t implement it yet. Today
 message types are AssemblyScript classes, written by hand with their encoders

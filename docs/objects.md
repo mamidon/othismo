@@ -76,6 +76,15 @@ if they agree on its fields; if they disagree, an image can't use both.
 A header can import types from other headers, and from `env`, which holds the
 runtime's own types.
 
+`Opaque` is reserved and means any message. Console prints whatever it is
+sent, so it serves `/ write Opaque`; a logging proxy that passes on whatever
+comes back answers `-> Opaque*`. In matching, `Opaque` goes both ways: a server
+that takes `write Opaque` satisfies a need to `write Line`, and a need for
+`read -> Opaque` is satisfied by a server that answers any type. The reverse
+doesn't hold: a need to send `Opaque` is met only by a server that takes
+`Opaque`, and a need for `-> Line` isn't met by a server that promises only
+`-> Opaque`.
+
 ### Serves and needs
 
 `serves` lists the paths an object answers for. `needs` lists, for each mount
@@ -100,12 +109,34 @@ Paths are patterns:
   trailing `/` counts, as it does everywhere else.
 - `{name}` matches exactly one segment. The name is for the documentation; it
   captures nothing, since the object gets the whole path anyway.
-- `**` matches the rest of the path, however many segments, and only comes
-  last.
+- `**` matches the rest of the path, zero or more segments, and only comes
+  last. `/www/**` matches `/www` itself as well as everything below it, and
+  `/**` matches every path, `/` included.
 
 Where several patterns match, the most specific wins, whatever their order: a
 literal over `{name}`, `{name}` over `**`, and longer over shorter. It is the
 same rule that picks a mount point.
+
+A `needs` block's own path is a pattern too, for objects that are told at run
+time which mount points to use. `needs /sites/{name}` covers every mount point
+directly under `/sites/`, and `needs /sites/**` `/sites` and any mount point
+below it.
+HttpServer is configured with a mount point for each host, which can be
+anywhere, so it needs every mount it isn't given a more specific need for:
+
+```text
+needs /net/tcp { ... }
+needs /dev/cons { / write Opaque }
+
+## The sites, at whichever mount points the hosts are configured with.
+needs /** {
+  /**     read -> Data, stat -> Info, list -> Entry*
+}
+```
+
+Every mount the pattern matches must provide what the block lists. Where
+several blocks match a mount point, the most specific applies, so `/net/tcp`
+is held to its own block and not to `/**`.
 
 ### Shapes, not behaviour
 
@@ -152,7 +183,7 @@ The `needs` side is the stronger promise. Mounts say what an object has been
 given; its `needs` say the most it can ask of each. An object given the
 console to write a log can't watch it for input unless its header says so.
 
-Enforcement is on by default and can be turned off.
+Enforcement is on by default; `--no-checks` turns it off.
 
 ### Documentation
 
@@ -249,9 +280,11 @@ A module is built from its header and its source:
 2. The source is compiled to `.wasm`.
 3. The header is appended to the module as a custom section.
 
-The generated bindings are ordinary files, so editors and compilers see them
-like any other source. Generating them means a type is written once and its
-encoding can't drift from its declaration.
+The generated bindings are ordinary files, committed next to the source, so
+editors and compilers see them like any other source without a build first.
+Generating them means a type is written once and its encoding can't drift
+from its declaration; a build regenerates them, so a stale binding shows up as
+a diff.
 
 Because the header is inside the module, a compiled object describes itself.
 It can be published as one file, and an image can import a type straight
@@ -296,13 +329,6 @@ callers notice, is open.
 
 Calls never time out. A request whose server never answers waits for as long
 as the image runs.
-
-## Open questions
-
-- Some objects accept any message: Console prints whatever it is sent. A header
-  needs a way to say so.
-- HttpServer sends requests to paths chosen at run time, by `control`. Its
-  `needs` can't name those mount points in advance.
 
 ## Where it stands
 
