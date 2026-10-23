@@ -23,9 +23,10 @@ impl Server {
     /// With `built`, the image is first built into a .rti in a temp dir of
     /// its own, and that is run instead.
     fn start_with(name: &str, built: bool) -> Server {
-        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/static");
-        for m in ["HttpServer", "StaticSite"] {
-            assert!(example.join(format!("scripts/{m}.wasm")).exists(), "run `make wasm` first");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let example = root.join("examples/static");
+        for m in ["http/HttpServer", "site/StaticSite"] {
+            assert!(root.join(format!("sdk/objects/{m}.wasm")).exists(), "run `task test` first");
         }
         let dir = std::env::temp_dir().join(format!("othismo_http_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

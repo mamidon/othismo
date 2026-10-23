@@ -22,16 +22,18 @@ fn example(rel: &str) -> PathBuf {
     path
 }
 
-/// Every example header's and schema file's bindings are generated and
-/// committed; this fails if one is stale, or missing. `task bindings`
-/// regenerates them.
+/// The bindings of every header and schema file, the SDK's objects' and
+/// each example's, are generated and committed; this fails if one is
+/// stale, or missing. `task bindings` regenerates them.
 #[test]
 fn bindings_are_up_to_date() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let in_dirs = |dir: &str, sub: &str| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(root.join(dir)).unwrap().flatten().map(|d| d.path().join(sub)).filter(|p| p.is_dir()).collect()
+    };
     let mut seen = 0;
-    for dir in std::fs::read_dir(&examples).unwrap().flatten() {
-        let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
-        for source in scripts.flatten().map(|e| e.path()) {
+    for dir in [in_dirs("sdk/objects", ""), in_dirs("examples", "scripts")].concat() {
+        for source in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
             let name = source.file_name().unwrap().to_string_lossy().into_owned();
             let want = match source.extension().and_then(|e| e.to_str()) {
                 Some("messages") => {

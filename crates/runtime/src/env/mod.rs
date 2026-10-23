@@ -1,7 +1,7 @@
 //! Environmental objects: the only things in an image that touch the outside
 //! world. Each is a server the runtime implements, configured by the image
 //! alone, serving requests made of its tree. Their interfaces are the
-//! runtime's own header, `env`, one file per object in `as/env/`, and their
+//! runtime's own header, `env`, one file per object in `sdk/env/`, and their
 //! implementations are here, one module per object.
 //!
 //! Objects that wait on the outside world (stdin, sockets) do the waiting on

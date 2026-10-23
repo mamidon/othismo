@@ -3,7 +3,7 @@
 # The Dockerfile next to this lays out a build directory around it:
 #
 #   docs.oth            this file
-#   scripts/*.wasm      HttpServer and StaticSite, compiled from examples/static/scripts
+#   scripts/*.wasm      HttpServer and StaticSite, compiled from sdk/objects
 #   public/             the site, with docs/*.md freshly rendered to HTML
 #
 # and seals it into docs.rti. Fly's proxy terminates TLS and forwards plain

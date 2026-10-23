@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn the_runtimes_bindings_are_up_to_date() {
-        assert!(env("./index") == include_str!("../../../as/env.ts"), "as/env.ts is stale; run `task bindings`");
+        assert!(env("./index") == include_str!("../../../sdk/assemblyscript/env.ts"), "sdk/assemblyscript/env.ts is stale; run `task bindings`");
     }
 
     #[test]

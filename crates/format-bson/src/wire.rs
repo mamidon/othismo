@@ -2,7 +2,7 @@
 //!
 //! A message is one BSON document. Its first key is `$type`, holding the
 //! message type's name; the remaining keys are its fields. Field types map
-//! to BSON as follows (mirrored in `as/index.ts`):
+//! to BSON as follows (mirrored in `sdk/assemblyscript/bson.ts`):
 //!
 //! | Header                      | BSON    |
 //! |-----------------------------|---------|

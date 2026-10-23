@@ -11,7 +11,7 @@ A **module** is a compiled `.wasm` file. An **object** is one running
 instance of a module, declared in an image:
 
 ```text
-import { StaticSite } from "./scripts/StaticSite.oth"
+import { StaticSite } from "../../sdk/objects/site/StaticSite.oth"
 
 instance pages : StaticSite {
   mount /files files readonly
@@ -28,10 +28,10 @@ functions, not the language it was written in.
 
 ## The interface
 
-Each module has a header next to its source, `scripts/StaticSite.oth`,
+Each module has a header next to its source, `StaticSite.oth`,
 written in the same language as images. It declares the module's object: what
 it serves, what it needs, and its documentation. The module itself is the
-`.wasm` with the same name beside it, `scripts/StaticSite.wasm`.
+`.wasm` with the same name beside it, `StaticSite.wasm`.
 
 ```text
 import { FileTree } from env

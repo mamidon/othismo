@@ -27,15 +27,15 @@ use std::sync::OnceLock;
 /// share, then each trait it implements with its stand-in in memory,
 /// PackedFiles, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
-    ("bodies.oth", include_str!("../../../as/env/bodies.oth")),
-    ("Console.oth", include_str!("../../../as/env/Console.oth")),
-    ("Listener.oth", include_str!("../../../as/env/Listener.oth")),
-    ("Files.oth", include_str!("../../../as/env/Files.oth")),
-    ("PackedFiles.oth", include_str!("../../../as/env/PackedFiles.oth")),
-    ("TestSuite.oth", include_str!("../../../as/env/TestSuite.oth")),
+    ("bodies.oth", include_str!("../../../sdk/env/bodies.oth")),
+    ("Console.oth", include_str!("../../../sdk/env/Console.oth")),
+    ("Listener.oth", include_str!("../../../sdk/env/Listener.oth")),
+    ("Files.oth", include_str!("../../../sdk/env/Files.oth")),
+    ("PackedFiles.oth", include_str!("../../../sdk/env/PackedFiles.oth")),
+    ("TestSuite.oth", include_str!("../../../sdk/env/TestSuite.oth")),
 ];
 
-/// The runtime's header, `env`: every file in `as/env/`, joined.
+/// The runtime's header, `env`: every file in `sdk/env/`, joined.
 pub fn env() -> &'static Header {
     static ENV: OnceLock<Header> = OnceLock::new();
     ENV.get_or_init(|| {

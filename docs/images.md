@@ -58,7 +58,7 @@ instance web   : Site { bind /net/tcp /net/tcp }
 An instance's type is one of:
 
 - an **object** imported from a module's header. `StaticSite`, declared in
-  `scripts/StaticSite.oth`, runs `scripts/StaticSite.wasm`;
+  `sdk/objects/site/StaticSite.oth`, runs `StaticSite.wasm` beside it;
 - one of the **runtime's objects** that touch nothing outside the image,
   imported from `env`: `PackedFiles`, `MemoryConsole`, `MemoryListener`;
 - an **image**, imported by its default name.
@@ -102,8 +102,8 @@ can itself be served as a tree:
 
 ```text
 # site.oth: the static site, which touches nothing of its own
-import { HttpServer } from "./scripts/HttpServer.oth"
-import { StaticSite } from "./scripts/StaticSite.oth"
+import { HttpServer } from "../../sdk/objects/http/HttpServer.oth"
+import { StaticSite } from "../../sdk/objects/site/StaticSite.oth"
 import { Listener, Console, PackedFiles } from env
 
 needs /net/tcp  Listener

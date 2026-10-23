@@ -61,7 +61,7 @@ const PAGES = [
     description: "The .oth language: imports and exports, images as objects, slots, packed files, testing, and sealing an image into one file.",
   },
   {
-    source: "as/env/",
+    source: "sdk/env/",
     doc: "env",
     out: "reference/index.html",
     nav: "/reference/",

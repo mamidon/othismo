@@ -615,6 +615,10 @@ them:</p>
 <td>generated from <code>Greeter.messages</code> by BSON&#39;s generator</td>
 </tr>
 </tbody></table></div>
+<p>The SDK is in <code>sdk/</code>: the library in <code>sdk/assemblyscript/</code>, the runtime&#39;s
+header in <code>sdk/env/</code>, and reusable objects in <code>sdk/objects/</code>, such as
+<code>HttpServer</code> and <code>StaticSite</code>, which an image imports by path:
+<code>import { HttpServer } from &quot;../../sdk/objects/http/HttpServer.oth&quot;</code>.</p>
 <p>A <code>Payload</code> is a content type and an <code>ArrayBuffer</code>. One whose type the
 module doesn&#39;t understand can be passed on unchanged.</p>
 <p><strong>Generated from the header</strong>, a server base class has a method for each

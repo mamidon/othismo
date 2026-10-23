@@ -1,15 +1,19 @@
 version: '3'
 
-# Every examples/<name>/<name>.oth is an example; its objects are the
-# scripts/*.ts next to it, compiled to scripts/*.wasm. Each object's header
-# is its scripts/<Type>.oth, and its message types, if it has any, are in
-# scripts/<Type>.messages; both are embedded in the .wasm once it is
+# Every examples/<name>/<name>.oth is an example. Objects are modules: the
+# reusable ones in sdk/objects/<name>/, and an example's own in its
+# scripts/. Each <Type>.ts is compiled to <Type>.wasm beside it. Each
+# object's header is its <Type>.oth, and its message types, if it has any,
+# are in <Type>.messages; both are embedded in the .wasm once it is
 # compiled. The bindings generated from them are committed next to them, as
 # <Type>.oth.ts and <Type>.messages.ts.
 vars:
   # Each example is a directory holding an image named after it.
   EXAMPLES:
     sh: for dir in examples/*/; do name=$(basename "$dir"); [ -f "$dir$name.oth" ] && echo "$name"; done; true
+  # Each directory of modules: the SDK's objects, then each example's own.
+  MODULE_DIRS:
+    sh: for dir in sdk/objects/*/ examples/*/scripts/; do [ -d "$dir" ] && echo "${dir%/}"; done; true
   BIN: target/debug/othismo
 
 tasks:
@@ -41,11 +45,11 @@ tasks:
         cmd: '{{.BIN}} test {{.ITEM}}'
 
   build:docs:
-    desc: Re-render docs/*.md, and the reference from as/env/, into the static example's site
+    desc: Re-render docs/*.md, and the reference from sdk/env/, into the static example's site
     deps: [npm, build]
     sources:
       - docs/*.md
-      - as/env/*.oth
+      - sdk/env/*.oth
       - crates/**/*.rs
       - examples/static/site.mjs
     cmds:
@@ -87,14 +91,14 @@ tasks:
     desc: Regenerate the AssemblyScript bindings from every header and schema file
     cmds:
       - task: bindings:env
-      - for: { var: EXAMPLES }
+      - for: { var: MODULE_DIRS }
         task: bindings:one
-        vars: { NAME: '{{.ITEM}}' }
+        vars: { DIR: '{{.ITEM}}' }
 
   clean:
     desc: Remove compiled objects and sealed images
     cmds:
-      - rm -f examples/*/scripts/*.wasm examples/*/*.rti
+      - rm -f sdk/objects/*/*.wasm examples/*/scripts/*.wasm examples/*/*.rti
 
   # Internal tasks.
 
@@ -103,7 +107,7 @@ tasks:
     sources:
       - package.json
       - package-lock.json
-      - as/package.json
+      - sdk/assemblyscript/package.json
     status:
       - test -d node_modules
     cmds:
@@ -112,58 +116,58 @@ tasks:
   wasm:
     internal: true
     cmds:
-      - for: { var: EXAMPLES }
+      - for: { var: MODULE_DIRS }
         task: wasm:one
-        vars: { NAME: '{{.ITEM}}' }
+        vars: { DIR: '{{.ITEM}}' }
 
   # The runtime's clients and server bases, which modules import as "othismo/env".
   bindings:env:
     internal: true
     deps: [build]
     sources:
-      - as/env/*.oth
+      - sdk/env/*.oth
       - crates/**/*.rs
     generates:
-      - as/env.ts
+      - sdk/assemblyscript/env.ts
     cmds:
-      - '{{.BIN}} bindings --library ./index env -o as/env.ts'
+      - '{{.BIN}} bindings --library ./index env -o sdk/assemblyscript/env.ts'
 
   bindings:one:
     internal: true
-    label: bindings:{{.NAME}}
+    label: bindings:{{.DIR}}
     deps: [build]
     cmds:
       - for: { var: HEADERS }
         cmd: '{{.BIN}} bindings {{.ITEM}}'
     vars:
       HEADERS:
-        sh: find examples/{{.NAME}}/scripts -name '*.messages' -o -name '*.oth'
+        sh: find {{.DIR}} -maxdepth 1 -name '*.messages' -o -maxdepth 1 -name '*.oth'
 
   wasm:one:
     internal: true
-    label: wasm:{{.NAME}}
+    label: wasm:{{.DIR}}
     deps: [npm, bindings:env]
     sources:
-      - as/*.ts
+      - sdk/assemblyscript/*.ts
       # What embed writes into each module: the header format and env's types.
-      - as/env/*.oth
+      - sdk/env/*.oth
       - crates/**/*.rs
-      - examples/{{.NAME}}/scripts/*.oth
-      - examples/{{.NAME}}/scripts/*.messages
-      - examples/{{.NAME}}/scripts/*.md
-      - examples/{{.NAME}}/scripts/*.ts
-      - exclude: examples/{{.NAME}}/scripts/*.messages.ts
-      - exclude: examples/{{.NAME}}/scripts/*.oth.ts
+      - '{{.DIR}}/*.oth'
+      - '{{.DIR}}/*.messages'
+      - '{{.DIR}}/*.md'
+      - '{{.DIR}}/*.ts'
+      - exclude: '{{.DIR}}/*.messages.ts'
+      - exclude: '{{.DIR}}/*.oth.ts'
     generates:
-      - examples/{{.NAME}}/scripts/*.wasm
+      - '{{.DIR}}/*.wasm'
     cmds:
       - task: bindings:one
-        vars: { NAME: '{{.NAME}}' }
+        vars: { DIR: '{{.DIR}}' }
       - for: { var: SCRIPTS }
         cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.oth {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
-        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v -e '\.messages\.ts$' -e '\.oth\.ts$'
+        sh: ls {{.DIR}}/*.ts | grep -v -e '\.messages\.ts$' -e '\.oth\.ts$'
 
   # Seals examples/<NAME>/<NAME>.oth into a .rti with the othismo that
   # `build` just made, so the two always match.
@@ -174,6 +178,6 @@ tasks:
       - sh: test -f examples/{{.NAME}}/{{.NAME}}.oth
         msg: 'no example named "{{.NAME}}"; examples are: {{.EXAMPLES | splitLines | join ", "}}'
     cmds:
-      - task: wasm:one
-        vars: { NAME: '{{.NAME}}' }
+      # An example may use any of the SDK's objects, so every module is compiled.
+      - task: wasm
       - '{{.BIN}} build examples/{{.NAME}}/{{.NAME}}.oth -o examples/{{.NAME}}/{{.NAME}}.rti'

@@ -15,7 +15,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 # The compiler embeds the runtime's header from here (crates/compiler/src/iface.rs).
-COPY as/env/ as/env/
+COPY sdk/env/ sdk/env/
 RUN cargo build --release --locked --bin othismo
 
 # 2. Node: compile the site's objects to Wasm and embed their headers, render
@@ -23,19 +23,19 @@ RUN cargo build --release --locked --bin othismo
 FROM node:20-bookworm-slim AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
-COPY as/ as/
+COPY sdk/ sdk/
 RUN npm ci
 COPY --from=build /src/target/release/othismo /usr/local/bin/othismo
 COPY docs/ docs/
 COPY examples/static/ examples/static/
-RUN for m in HttpServer StaticSite; do \
-      npx asc examples/static/scripts/$m.ts -o examples/static/scripts/$m.wasm --optimize \
-      && othismo embed examples/static/scripts/$m.oth examples/static/scripts/$m.wasm || exit 1; \
+RUN for m in http/HttpServer site/StaticSite; do \
+      npx asc sdk/objects/$m.ts -o sdk/objects/$m.wasm --optimize \
+      && othismo embed sdk/objects/$m.oth sdk/objects/$m.wasm || exit 1; \
     done \
  && node examples/static/site.mjs
 COPY _fly_io/docs.oth /ship/docs.oth
 RUN mkdir -p /ship/scripts \
- && cp examples/static/scripts/HttpServer.wasm examples/static/scripts/StaticSite.wasm /ship/scripts/ \
+ && cp sdk/objects/http/HttpServer.wasm sdk/objects/site/StaticSite.wasm /ship/scripts/ \
  && cp -r examples/static/public /ship/public \
  && othismo build /ship/docs.oth -o /ship/docs.rti \
  && othismo --check /ship/docs.rti
