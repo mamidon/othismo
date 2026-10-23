@@ -1,5 +1,4 @@
-import { Data } from "othismo/env"
-import { Flag, Request, Server, Status, Verb, isSafe, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
+import { Flag, Payload, Request, Server, Status, Verb, isSafe, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -21,7 +20,7 @@ class StaticSite extends Server {
 
   serve(req: Request): void {
     if (req.path == "/hits") {
-      if (req.verb == Verb.Read) req.reply(new Data("text/plain; charset=utf-8", String.UTF8.encode(this.hits.toString() + "\n")))
+      if (req.verb == Verb.Read) req.reply(Payload.text(this.hits.toString() + "\n", "text/plain; charset=utf-8"))
       else req.fail(Status.NotSupported)
       return
     }

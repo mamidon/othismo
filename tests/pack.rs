@@ -7,7 +7,7 @@ use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-const A: &str = "object A { needs /dev/cons { / write Opaque }  serves { / invoke Opaque } }";
+const A: &str = "object A { needs /dev/cons { / write */* }  serves { / invoke */* } }";
 
 /// Modules aren't run here, so they needn't do anything; they only need headers.
 fn a() -> Vec<u8> {
@@ -279,12 +279,14 @@ fn the_cli_layers_value_files_then_set() {
     let f = Fixture::new("pack_cli_values");
     f.file(
         "test.img",
-        r#"require listen : Listen { address: "127.0.0.1:8080" }
+        r#"import { Info } from "./info.iface"
+        require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info
         instance net : Listener
         mount /net net
         control /net listen"#,
     )
+    .file("info.iface", "message Info { kind: string, size: i64, mime: string }")
     .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");
     let check = |extra: &[&str]| {

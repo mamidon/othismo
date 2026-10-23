@@ -15,8 +15,7 @@ An image is a .img source, which is built in memory, or a built .rti file.
 
   --check         validate the image, print each instance's view and what
                   it can reach at most, and exit without running it
-  --no-checks     don't hold objects to their interfaces while they run, or
-                  messages to their types
+  --no-checks     don't hold objects to their interfaces while they run
   --with          give slots values from a file: `listen { address: \"0.0.0.0:80\" }`
   --set           give one slot field a value, after any files; raw text for
                   a string, a literal otherwise
@@ -29,7 +28,8 @@ outside started. What the image prints is shown for the tests that fail.
 
 `bindings` writes AssemblyScript classes for a header's message types, to
 <header.iface>.ts unless -o says otherwise; a header that declares none
-gets no file. They import the library from \"othismo\", or from --library.
+gets no file. They import the BSON library from \"othismo/bson\", or from
+--library.
 For `env`, the header is the runtime's own.
 
 `embed` puts a module's header into the module, replacing any already there.
@@ -112,7 +112,7 @@ fn build(args: &[String]) -> Result<Result<()>, Usage> {
 }
 
 fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
-    let (mut header, mut out, mut library) = (None, None, "othismo".to_string());
+    let (mut header, mut out, mut library) = (None, None, "othismo/bson".to_string());
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -156,7 +156,7 @@ fn document(target: &str) -> Result<String> {
     }
     let env = iface::env();
     if let Some(o) = env.object(target).cloned().or_else(|| env.traits.get(target).map(|t| t.as_object())) {
-        return Ok(doc::object(&o, env, &doc::types_used(&o)));
+        return Ok(doc::object(&o, env, &[]));
     }
     let header = match ext {
         Some("wasm") => {

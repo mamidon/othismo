@@ -1,5 +1,6 @@
-import { Data, Entry, Outcome } from "othismo/env"
-import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
+import { OCTETS, Payload, Request, Response, Server, Stat, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { bson } from "othismo/bson"
+import { Outcome } from "othismo/env"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -25,7 +26,7 @@ const CASES: Case[] = [
 class SiteTests extends Server {
   serve(req: Request): void {
     if (req.path == "/tests" && req.verb == Verb.List) {
-      for (let i = 0; i < CASES.length; i++) req.stream(new Entry(CASES[i].name, "file"))
+      for (let i = 0; i < CASES.length; i++) req.stream(Stat.file(CASES[i].name).payload())
       req.end()
       return
     }
@@ -35,7 +36,7 @@ class SiteTests extends Server {
         const c = CASES[i]
         if (c.name != name) continue
         const request = c.line + "\r\nHost: " + c.host + "\r\n\r\n"
-        ns.create("/net/dial", new Data("", String.UTF8.encode(request)), new Check(req, c))
+        ns.create("/net/dial", new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
         return
       }
       req.fail(Status.NotFound)
@@ -55,12 +56,12 @@ class Check extends Then {
 
   answer(res: Response): void {
     const body = res.body
-    if (body instanceof Data) this.got += String.UTF8.decode((body as Data).data)
+    if (body !== null) this.got += body.asText()
     if (!res.done) return
     const line = this.got.split("\r\n")[0]
-    if (!res.ok) this.req.reply(new Outcome(false, "dialing failed with status " + res.status.toString()))
-    else if (line.startsWith(this.c.want)) this.req.reply(new Outcome(true, ""))
-    else this.req.reply(new Outcome(false, "expected `" + this.c.want + "...`, got `" + line + "`"))
+    if (!res.ok) this.req.reply(bson.payload(new Outcome(false, "dialing failed with status " + res.status.toString())))
+    else if (line.startsWith(this.c.want)) this.req.reply(bson.payload(new Outcome(true, "")))
+    else this.req.reply(bson.payload(new Outcome(false, "expected `" + this.c.want + "...`, got `" + line + "`")))
   }
 }
 

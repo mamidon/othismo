@@ -5,6 +5,7 @@ use crate::image::{self, Ident, Image, Source, Value};
 use crate::messages::{FieldType, MessageType};
 use crate::ns::{self, Namespace, Status, Verb};
 use crate::pattern::Pattern;
+use crate::payload;
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, anyhow, bail};
 use bson::{Bson, Document};
@@ -28,6 +29,10 @@ pub const PACKED: &str = "Packed.Files";
 /// as: in memory, with a trait of its own that the importing image can use
 /// to drive it from the other side.
 const MEMORY: &[(&str, Option<&str>)] = &[(CONSOLE, Some("Terminal")), (LISTENER, Some("Dialer")), (FILES, None)];
+
+/// The message each of the runtime's objects is configured with, by a
+/// `control` of its root.
+const CONFIG: &[(&str, &str)] = &[(LISTENER, "Listen"), (FILES, "FilesRoot")];
 
 /// What the runtime's objects were called when images named them directly.
 const RENAMED: &[(&str, &str)] =
@@ -330,7 +335,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                 if let Some((c, path)) = controls.iter().find(|(_, path)| *path != "/") {
                     bail!("{}: {name} is configured at its root, and `{}` is `{path}` in it", c.path.pos, c.path.path);
                 }
-                let config_type = config_type(&builtin);
+                let config_type = config_type(&ty.name);
                 let needs = || {
                     let t = config_type.unwrap();
                     err_at(
@@ -423,8 +428,9 @@ fn check_requests(
 ) -> Result<()> {
     let name = &inst.name.name;
     for &(r, path) in requests {
-        let body = r.body.as_ref().map(|b| body_arg(scope, slots, b)).transpose()?;
-        let body_type = body.as_ref().map(|b| arg_type(slots, b));
+        // A message literal or a slot is a BSON payload.
+        body_arg_check(scope, slots, r.body.as_ref())?;
+        let body_type = r.body.as_ref().map(|_| payload::BSON);
         let Some(entry) = obj.serving(path) else {
             bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
         };
@@ -579,11 +585,15 @@ fn run_as(inst: &image::Instance) -> String {
     }
 }
 
-/// The config message a built-in object takes: whatever its header says its
-/// root takes with `control`, if anything.
-fn config_type(builtin: &Object) -> Option<&str> {
-    let root = builtin.serves.iter().find(|e| e.path.as_str() == "/")?;
-    root.requests.iter().find(|r| r.verb == Verb::Control).and_then(|r| r.body.as_deref())
+/// The config message the runtime's object `name` takes, if any, whether
+/// it runs on the host or in memory.
+fn config_type(name: &str) -> Option<&'static str> {
+    CONFIG.iter().find(|(n, _)| *n == name).map(|(_, ty)| *ty)
+}
+
+/// Checks a startup request's message literal, if it has one.
+fn body_arg_check(scope: &BTreeMap<String, MessageType>, slots: &[Slot], body: Option<&image::Body>) -> Result<()> {
+    body.map(|b| body_arg(scope, slots, b)).transpose().map(|_| ())
 }
 
 /// How the runtime implements the built-in type `name`. A `Packed.Files`
@@ -786,10 +796,22 @@ mod tests {
         iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap()
     }
 
+    /// Every request there is, of every verb, with a payload of any type or
+    /// none, answered with anything: what a permissive module serves.
+    pub(crate) fn anything() -> String {
+        let reqs: Vec<String> = ns::VERBS
+            .iter()
+            .flat_map(|v| match v {
+                Verb::Stat | Verb::List => vec![v.to_string()],
+                _ => vec![format!("{v} -> */**"), format!("{v} */* -> */**")],
+            })
+            .collect();
+        reqs.join(", ")
+    }
+
     /// A module that needs nothing and serves anything, anywhere.
     fn permissive(name: &str) -> Header {
-        let reqs: Vec<String> = ns::VERBS.iter().flat_map(|v| [format!("{v} -> Opaque*"), format!("{v} Opaque -> Opaque*")]).collect();
-        header(&format!("object {name} {{ serves {{ /** {} }} }}", reqs.join(", ")))
+        header(&format!("object {name} {{ serves {{ /** {} }} }}", anything()))
     }
 
     /// Checks `img` next to MESSAGES, in messages.iface. Modules have the
@@ -834,7 +856,7 @@ mod tests {
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
         assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
-        assert!(p.messages.contains_key("Line"), "runtime types are always in scope");
+        assert!(p.messages.contains_key("Text"), "runtime types are always in scope");
         assert!(p.messages.contains_key("Greeting"));
     }
 
@@ -896,7 +918,7 @@ mod tests {
 
     #[test]
     fn requests_resolve_in_the_images_view() {
-        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out Line {{ text: \"hi\" }}")).unwrap();
+        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out Text {{ text: \"hi\" }}")).unwrap();
         let view = [MountDecl { at: "/".into(), target: 1, read_only: false }, MountDecl { at: "/e/out".into(), target: 0, read_only: false }];
         assert_eq!(p.view, view);
         let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
@@ -950,7 +972,7 @@ mod tests {
 
     #[test]
     fn config_types_come_from_the_runtimes_header() {
-        let config = |name: &str| config_type(&builtin(name, false).unwrap()).map(str::to_string);
+        let config = |name: &str| config_type(name).map(str::to_string);
         assert_eq!(config(LISTENER).as_deref(), Some("Listen"));
         assert_eq!(config(FILES).as_deref(), Some("FilesRoot"));
         assert_eq!(config(CONSOLE), None);
@@ -1037,7 +1059,7 @@ mod tests {
 
     #[test]
     fn types_are_imported_from_headers() {
-        let greeter = "message Greeting { prefix: string } object Greeter { serves { /greeting write Greeting } }";
+        let greeter = "message Greeting { prefix: string } object Greeter { serves { /greeting write application/bson } }";
         let p = check_with(
             r#"import { Greeting } from Greeter
             instance g : Greeter mount /g g write /g/greeting Greeting { prefix: "hi" }"#,
@@ -1074,57 +1096,58 @@ mod tests {
 
     #[test]
     fn startup_requests_must_be_served() {
-        let greeter = "import { Text } from env object G { serves { /greeting write Text  /hosts/{name} control Text, control } }";
+        let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} control application/bson, control } }";
         let ok = r#"instance g : G mount /g g write /g/greeting Text { text: "hi" } control /g/hosts/* Text { text: "/www" } control /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
         let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
         let e = err_with("instance g : G mount /g g read /g/greeting", &[("G", greeter)]);
-        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Text`"), "{e}");
+        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write application/bson`"), "{e}");
         let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
-        let e = err_with(r#"instance g : G mount /g g write /g/greeting Line { text: "x" }"#, &[("G", greeter)]);
-        assert!(e.contains("doesn't take `write Line` at `/greeting`"), "{e}");
+        let only_text = "object G { serves { /greeting write text/plain } }";
+        let e = err_with(r#"instance g : G mount /g g write /g/greeting Text { text: "x" }"#, &[("G", only_text)]);
+        assert!(e.contains("doesn't take `write application/bson` at `/greeting`"), "{e}");
         let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } read /net/a/b"#);
         assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
     }
 
     #[test]
     fn mounts_must_provide_what_is_needed_there() {
-        let echo = "import { Line } from env object Echo { needs /dev/cons { / watch -> Line*, write Line } }";
+        let echo = "object Echo { needs /dev/cons { / watch -> text/plain*, write text/plain } }";
         let modules = [("Echo", echo)];
         assert!(check_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons }}"), &modules).is_ok());
 
         let e = err_with(&format!("{HEADER} instance e : Echo"), &modules);
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
         let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
-        assert!(e.contains("`e` needs `/ write Line` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
+        assert!(e.contains("`e` needs `/ write text/plain` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
         let files = r#"instance f : Files mount /f f control /f FilesRoot { path: "." }"#;
         let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
-        assert!(e.contains("`e` needs `/ watch -> Line*` at `/dev/cons`, and `f` serves `/ control FilesRoot, read -> Data, stat -> Info, list -> Entry*`, `/** read -> Data, stat -> Info, list -> Entry*`"), "{e}");
+        assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `f` serves `/ control application/bson, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
     }
 
     #[test]
     fn needs_under_a_pattern_cover_every_mount_there() {
-        let http = "import { Accepted, Data, Info, Text } from env
-            object Http {
+        let http = "object Http {
               needs /net/tcp {
-                /address  read -> Text
-                /accept   watch -> Accepted*
-                /{conn}   watch -> Data*, write Data, remove
+                /address        read -> text/plain
+                /accept         watch -> text/plain*
+                /{conn}/data    watch -> application/octet-stream*, write application/octet-stream
+                /{conn}         remove
               }
-              needs /** { /** read -> Opaque, stat -> Info }
+              needs /** { /** read -> */*, stat }
             }";
-        let site = "import { Data, Info, Text } from env object Site { serves { /hits read -> Text  /** read -> Data, stat -> Info } }";
-        let strict = "import { Data } from env object Strict { needs /** { /** read -> Data } }";
+        let site = "object Site { serves { /hits read -> text/plain  /** read -> text/html, stat } }";
+        let strict = "object Strict { needs /** { /** read -> text/html } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
         let net = r#"instance net : Listener mount /net net control /net Listen { address: "127.0.0.1:0" }"#;
         let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
-        // /hits answers a read with Text, where Strict needs Data everywhere.
+        // /hits answers a read with text/plain, where Strict needs text/html everywhere.
         let e = err_with("instance site : Site instance s : Strict { mount /www site }", &modules);
-        assert!(e.contains("`s` needs `/** read -> Data` at `/www`, and `site` serves `/hits read -> Text`"), "{e}");
+        assert!(e.contains("`s` needs `/** read -> text/html` at `/www`, and `site` serves `/hits read -> text/plain`"), "{e}");
     }
 
     #[test]

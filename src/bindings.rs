@@ -125,14 +125,14 @@ mod tests {
 
     #[test]
     fn the_runtimes_bindings_are_up_to_date() {
-        let out = assemblyscript(iface::env(), "env", "./index");
+        let out = assemblyscript(iface::env(), "env", "./bson");
         assert!(out == include_str!("../as/env.ts"), "as/env.ts is stale; run `task bindings`");
     }
 
     #[test]
     fn generates_a_class_per_declared_message() {
         let src = r#"
-            import { Line } from env
+            import { Text } from env
             ## Configures a Greeter.
             message Greeting {
               ## Put before each name.
@@ -148,9 +148,9 @@ mod tests {
         let file = iface::parse(src).unwrap();
         let mut env = |_: &crate::image::Source| Ok(iface::env().clone());
         let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
-        let out = assemblyscript(&header, "G.iface", "othismo");
+        let out = assemblyscript(&header, "G.iface", "othismo/bson");
         assert!(out.starts_with("// Generated from G.iface by `othismo bindings`."), "{out}");
-        assert!(!out.contains("class Line"), "imported types have their own bindings");
+        assert!(!out.contains("class Text"), "imported types have their own bindings");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */

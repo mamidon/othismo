@@ -1,10 +1,9 @@
 //! `Files`, run as read-only access to one directory on the host.
 
-use super::{Reply, msg};
+use super::Reply;
 use crate::ns::{Status, Verb};
-use crate::wire;
+use crate::payload::{Payload, Stat};
 use anyhow::{Context, Result, bail};
-use bson::doc;
 use std::path::{Component, Path, PathBuf};
 
 pub struct Files {
@@ -34,31 +33,22 @@ impl Files {
         match verb {
             Verb::Read if real.is_dir() => vec![Reply::fail(req, Status::IsDirectory)],
             Verb::Read => match std::fs::read(&real) {
-                Ok(data) => vec![Reply::ok(req, msg("Data", doc! { "mime": mime(&real), "data": wire::bytes(data) }))],
+                Ok(data) => vec![Reply::ok(req, Payload::new(mime(&real), data))],
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
-            Verb::Stat => match real.metadata() {
-                Ok(md) => {
-                    let (kind, mime) = if md.is_dir() { ("dir", "") } else { ("file", mime(&real)) };
-                    vec![Reply::ok(req, msg("Info", doc! { "kind": kind, "size": md.len() as i64, "mime": mime }))]
-                }
+            Verb::Stat => match stat(&real, &name(path)) {
+                Ok(s) => vec![Reply::ok(req, s.encode())],
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
             Verb::List if !real.is_dir() => vec![Reply::fail(req, Status::NotDirectory)],
             Verb::List => match std::fs::read_dir(&real) {
                 Ok(entries) => {
-                    let mut names: Vec<(String, &str)> = entries
+                    let mut stats: Vec<Stat> = entries
                         .flatten()
-                        .map(|e| {
-                            let kind = if e.path().is_dir() { "dir" } else { "file" };
-                            (e.file_name().to_string_lossy().into_owned(), kind)
-                        })
+                        .filter_map(|e| stat(&e.path(), &e.file_name().to_string_lossy()).ok())
                         .collect();
-                    names.sort();
-                    let mut replies: Vec<Reply> = names
-                        .into_iter()
-                        .map(|(name, kind)| Reply::more(req, msg("Entry", doc! { "name": name, "kind": kind })))
-                        .collect();
+                    stats.sort_by(|a, b| a.name.cmp(&b.name));
+                    let mut replies: Vec<Reply> = stats.into_iter().map(|s| Reply::more(req, s.encode())).collect();
                     replies.push(Reply::end(req));
                     replies
                 }
@@ -94,6 +84,17 @@ fn resolve(root: &Path, path: &str) -> std::result::Result<PathBuf, Status> {
         }
     }
     Ok(out)
+}
+
+/// What `stat` says of `path` on disk, which a listing calls `name`.
+fn stat(path: &Path, name: &str) -> std::io::Result<Stat> {
+    let md = std::fs::metadata(path)?;
+    Ok(if md.is_dir() { Stat::dir(name) } else { Stat::file(name, md.len(), mime(path)) })
+}
+
+/// The last segment of a path in the served tree; empty for the root.
+pub(super) fn name(path: &str) -> String {
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string()
 }
 
 /// A MIME type from the file extension.
@@ -137,8 +138,7 @@ mod tests {
         let f = Files { root: base.join("root").canonicalize().unwrap() };
         let read = |p: &str| f.serve(1, Verb::Read, p);
         let a = read("/a.txt").remove(0).body.unwrap();
-        assert_eq!(a.fields.get_binary_generic("data").unwrap(), b"A");
-        assert_eq!(a.fields.get_str("mime").unwrap(), "text/plain; charset=utf-8");
+        assert_eq!(a, Payload::new("text/plain; charset=utf-8", "A"));
         assert_eq!(status(read("sub/./b.css")), [Status::Ok]);
         assert_eq!(status(read("/sub")), [Status::IsDirectory]);
         assert_eq!(status(read("/missing")), [Status::NotFound]);
@@ -148,12 +148,13 @@ mod tests {
         assert_eq!(status(read("/link.txt")), [Status::NotFound], "symlinks out of the root don't exist");
         assert_eq!(status(f.serve(1, Verb::Write, "/a.txt")), [Status::ReadOnly]);
 
-        let info = f.serve(1, Verb::Stat, "/sub/b.css").remove(0).body.unwrap();
-        assert_eq!(info.fields, doc! { "kind": "file", "size": 1i64, "mime": "text/css; charset=utf-8" });
+        let info = Stat::decode(&f.serve(1, Verb::Stat, "/sub/b.css").remove(0).body.unwrap()).unwrap();
+        assert_eq!(info, Stat::file("b.css", 1, "text/css; charset=utf-8"));
+        assert!(Stat::decode(&f.serve(1, Verb::Stat, "/sub/").remove(0).body.unwrap()).unwrap().dir);
         let list: Vec<(String, bool)> = f
             .serve(1, Verb::List, "/")
             .into_iter()
-            .map(|r| (r.body.map(|b| b.fields.get_str("name").unwrap().to_string()).unwrap_or_default(), r.done))
+            .map(|r| (r.body.map(|b| Stat::decode(&b).unwrap().name).unwrap_or_default(), r.done))
             .collect();
         let mut want = vec![("a.txt".to_string(), false), ("link.txt".into(), false), ("sub".into(), false), ("".into(), true)];
         if cfg!(not(unix)) {

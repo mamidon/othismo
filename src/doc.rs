@@ -64,20 +64,6 @@ pub fn env() -> String {
     out
 }
 
-/// The message types an object's requests name, in order of first use.
-pub fn types_used(o: &Object) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    let entries = o.serves.iter().chain(o.needs.iter().flat_map(|n| &n.entries));
-    for r in entries.flat_map(|e| &e.requests) {
-        for ty in [r.body.as_deref(), r.answer.as_ref().map(|a| a.ty.as_str())].into_iter().flatten() {
-            if ty != iface::OPAQUE && !out.iter().any(|t| t == ty) {
-                out.push(ty.to_string());
-            }
-        }
-    }
-    out
-}
-
 fn reference(out: &mut String, o: &Object, h: &str) {
     if !o.traits.is_empty() {
         let traits: Vec<String> = o.traits.iter().map(|t| format!("`{t}`")).collect();
@@ -146,7 +132,6 @@ mod tests {
     }
 
     const SITE: &str = r#"
-        import { Data, Info } from env
         ## A count.
         message Hits {
           ## So far; never | less.
@@ -157,12 +142,12 @@ mod tests {
         ## From its files.
         object Site {
           ## The files.
-          needs /files { /** read -> Data, stat -> Info }
+          needs /files { /** read -> */*, stat }
           serves {
             ## How many,
             ## so far.
-            /hits  read -> Hits
-            /**    read -> Data
+            /hits  read -> application/bson
+            /**    read -> */*
           }
         }
     "#;
@@ -172,10 +157,9 @@ mod tests {
         let h = header(SITE);
         let out = object(&h.objects[0], &h, &h.declared);
         assert!(out.starts_with("# Site\n\nServes a site.\n\nFrom its files.\n\n## Reference\n\n### Serves\n\n"), "{out}");
-        assert!(out.contains("| `/hits` | `read -> Hits` | How many, so far. |\n| `/**` | `read -> Data` |  |\n"), "{out}");
+        assert!(out.contains("| `/hits` | `read -> application/bson` | How many, so far. |\n| `/**` | `read -> */*` |  |\n"), "{out}");
         assert!(out.contains("### Needs\n\n#### `/files`\n\nThe files.\n\n| Path | Requests | |"), "{out}");
         assert!(out.contains("### Messages\n\n#### `Hits`\n\nA count.\n\n| Field | Type | |\n|---|---|---|\n| `n` | u64 | So far; never \\| less. |"), "{out}");
-        assert!(!out.contains("`Data`\n"), "imported types are documented where they are declared");
     }
 
     #[test]
@@ -188,11 +172,9 @@ mod tests {
     fn documents_the_built_in_objects() {
         let out = env();
         assert!(out.starts_with("# Built-in objects\n\n"), "{out}");
-        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Accepted`"] {
+        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Listen`"] {
             assert!(out.contains(&format!("{o}\n")), "{o}: {out}");
         }
-        assert!(out.contains("| `Connection` | `watch -> Data*`, `write Data`, `remove` |"), "{out}");
-        let console = iface::env().traits["Console"].as_object();
-        assert_eq!(types_used(&console), ["Line"]);
+        assert!(out.contains("| `Connection` | `watch -> application/octet-stream*`, `write application/octet-stream` |"), "{out}");
     }
 }

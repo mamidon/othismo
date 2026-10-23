@@ -1,4 +1,4 @@
-import { Data, FileTree } from env
+import { FileTree } from env
 
 ## Serves a static site from a files tree it is given read-only.
 ##
@@ -11,6 +11,6 @@ object StaticSite : FileTree {
 
   serves {
     ## How many requests it has forwarded, as decimal text.
-    /hits   read -> Data
+    /hits   read -> text/plain
   }
 }

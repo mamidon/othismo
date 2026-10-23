@@ -1,4 +1,4 @@
-import { Entry, Info, Line, Listener, Text } from env
+import { Listener } from env
 
 ## Serves HTTP/1.1 on `/net/tcp`, turning each request into a request of its
 ## view.
@@ -14,20 +14,20 @@ object HttpServer {
   needs /net/tcp Listener
   ## The access log.
   needs /dev/cons {
-    /  write Line
+    /  write text/plain
   }
   ## The sites, at whichever mount points the hosts are configured with.
   needs /** {
-    /**  read -> Opaque, stat -> Info
+    /**  read -> */*, stat
   }
 
   serves {
     ## The hosts it serves.
-    /hosts          list -> Entry*
-    /hosts/         list -> Entry*
+    /hosts          list
+    /hosts/         list
     ## Control with a `Text` holding a path in its view to serve the host
-    ## from there, or with no body to stop serving it. `*` stands for any
-    ## host not listed.
-    /hosts/{name}   control Text, control, read -> Text
+    ## from there, or with no payload to stop serving it. `*` stands for
+    ## any host not listed.
+    /hosts/{name}   control application/bson, control, read -> text/plain
   }
 }

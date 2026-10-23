@@ -10,10 +10,10 @@
 //!
 //! Unless checks are off, every object is held to its interface on the way:
 //! what it asks must be in its `needs`, what reaches it must be in its
-//! `serves`, its answers must be of the type its entry promises, and every
-//! body must be a declared type with exactly its fields. A request that
-//! doesn't fit is answered with a status and never arrives; an answer that
-//! doesn't fit, or a malformed body, is its sender's fault and stops the run.
+//! `serves`, and only a stream may be answered more than once. A request
+//! that doesn't fit is answered with a status and never arrives; an answer
+//! that doesn't fit is its sender's fault and stops the run. Payloads are
+//! carried as they are: the runtime never looks inside one.
 //!
 //! Wasm objects get a [`Store`] each and an import set of exactly `env.abort`
 //! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
@@ -22,13 +22,12 @@
 use crate::check::{Kind, Program};
 use crate::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
-use crate::iface::{self, Answer};
-use crate::messages::MessageType;
+use crate::iface;
 use crate::ns::{self, Namespace, Resolved, Status, Verb};
-use crate::wire::Message;
+use crate::payload::{self, Payload};
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -49,7 +48,7 @@ impl Io {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Options {
-    /// Don't hold objects to their interfaces, or bodies to their types.
+    /// Don't hold objects to their interfaces.
     pub no_checks: bool,
 }
 
@@ -69,7 +68,7 @@ pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answered {
     pub status: Status,
-    pub body: Option<Message>,
+    pub body: Option<Payload>,
     /// The last reply.
     pub done: bool,
 }
@@ -90,7 +89,7 @@ struct Pending {
     caller: Requester,
     verb: Verb,
     /// Kept so the request can be forwarded.
-    body: Option<Message>,
+    body: Option<Payload>,
     /// The caller gave up; replies are dropped.
     cancelled: bool,
     /// What the server's interface promises to answer, unless checks are off.
@@ -100,12 +99,13 @@ struct Pending {
 struct Promise {
     /// The request, for errors: `read /hits`.
     what: String,
-    answer: Option<Answer>,
+    /// Whether it may be answered more than once.
+    stream: bool,
 }
 
 enum Delivery {
-    Serve { to: usize, req: u32, verb: Verb, path: String, body: Option<Message> },
-    Answer { to: usize, ticket: u32, status: Status, body: Option<Message>, done: bool },
+    Serve { to: usize, req: u32, verb: Verb, path: String, body: Option<Payload> },
+    Answer { to: usize, ticket: u32, status: Status, body: Option<Payload>, done: bool },
     Cancel { to: usize, req: u32 },
 }
 
@@ -114,7 +114,6 @@ enum Delivery {
 struct Shared {
     names: Vec<String>,
     ns: Namespace,
-    messages: BTreeMap<String, MessageType>,
     /// Each instance's interface.
     interfaces: Vec<iface::Object>,
     checks: bool,
@@ -133,7 +132,7 @@ impl Shared {
     /// Where `path` in `inst`'s view leads, for a request `inst` makes:
     /// nowhere if a read-only mount is in the way of an unsafe verb, or if
     /// the request isn't one of `inst`'s needs.
-    fn resolve(&self, inst: usize, path: &str, verb: Verb, body: Option<&Message>) -> Result<Resolved, Status> {
+    fn resolve(&self, inst: usize, path: &str, verb: Verb) -> Result<Resolved, Status> {
         let r = self.ns.resolve(inst, path)?;
         if r.read_only && !verb.is_safe() {
             return Err(Status::ReadOnly);
@@ -141,23 +140,22 @@ impl Shared {
         if self.checks {
             let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NotFound)?;
             let need = self.interfaces[inst].need(&at).ok_or(Status::NotFound)?;
-            let entry = need.entry(&rest).ok_or(Status::NotFound)?;
-            entry.takes(verb, body.map(|b| b.type_name.as_str()))?;
+            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb)?;
         }
         Ok(r)
     }
 
     /// Makes a request of wherever `to` resolved; failures to resolve, and
     /// requests the server's interface doesn't take, are answered straight away.
-    fn request(&mut self, caller: Requester, to: Result<Resolved, Status>, verb: Verb, body: Option<Message>) {
+    fn request(&mut self, caller: Requester, to: Result<Resolved, Status>, verb: Verb, body: Option<Payload>) {
         let r = match to {
             Ok(r) => r,
             Err(status) => return self.answer(&caller, status, None, true),
         };
         let promise = if self.checks {
             let entry = self.interfaces[r.inst].serving(&r.path).ok_or(Status::NotFound);
-            match entry.and_then(|e| e.takes(verb, body.as_ref().map(|b| b.type_name.as_str()))) {
-                Ok(served) => Some(Promise { what: format!("{verb} {}", r.path), answer: served.answer.clone() }),
+            match entry.and_then(|e| e.takes_verb(verb).map(|_| e.streams(verb))) {
+                Ok(stream) => Some(Promise { what: format!("{verb} {}", r.path), stream }),
                 Err(status) => return self.answer(&caller, status, None, true),
             }
         } else {
@@ -174,7 +172,7 @@ impl Shared {
         self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, path: r.path, body });
     }
 
-    fn answer(&mut self, caller: &Requester, status: Status, body: Option<Message>, done: bool) {
+    fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, done: bool) {
         match *caller {
             Requester::Image(ref what) => {
                 if status != Status::Ok {
@@ -193,15 +191,16 @@ impl Shared {
     }
 
     /// `server` replies to its request `req`.
-    fn reply(&mut self, server: usize, req: u32, status: Status, body: Option<Message>, done: bool) -> Result<()> {
-        if let Some(b) = &body {
-            self.check_shape(server, b)?;
-        }
+    fn reply(&mut self, server: usize, req: u32, status: Status, body: Option<Payload>, done: bool) -> Result<()> {
         let Some(p) = self.requests.get(&(server, req)) else {
             bail!("instance `{}` replied to unknown request {req}", self.names[server]);
         };
-        if let Some(promise) = &p.promise {
-            keeps(&self.names[server], promise, body.as_ref(), done)?;
+        if let Some(promise) = &p.promise
+            && !done
+            && !promise.stream
+        {
+            let what = &promise.what;
+            bail!("instance `{}` answered `{what}` more than once, but its interface promises one answer", self.names[server]);
         }
         let (caller, cancelled) = (p.caller.clone(), p.cancelled);
         if done {
@@ -221,7 +220,7 @@ impl Shared {
         if p.cancelled {
             return Ok(());
         }
-        let to = self.resolve(server, path, p.verb, p.body.as_ref());
+        let to = self.resolve(server, path, p.verb);
         self.request(p.caller, to, p.verb, p.body);
         Ok(())
     }
@@ -234,35 +233,6 @@ impl Shared {
             self.queue.push_back(Delivery::Cancel { to: server, req });
         }
     }
-
-    fn check_shape(&self, from: usize, msg: &Message) -> Result<()> {
-        if !self.checks {
-            return Ok(());
-        }
-        let name = &self.names[from];
-        let ty = self.messages.get(&msg.type_name).ok_or_else(|| {
-            anyhow!("instance `{name}` sent `{}`, which no header in the image declares", msg.type_name)
-        })?;
-        msg.check_shape(ty).with_context(|| format!("instance `{name}` sent a malformed `{}`", msg.type_name))
-    }
-}
-
-/// Whether an answer from `server` keeps what its interface promised.
-fn keeps(server: &str, promise: &Promise, body: Option<&Message>, done: bool) -> Result<()> {
-    let what = &promise.what;
-    match (&promise.answer, body) {
-        (None, Some(b)) => {
-            bail!("instance `{server}` answered `{what}` with a `{}`, but its interface promises a status alone", b.type_name)
-        }
-        (Some(a), Some(b)) if a.ty != iface::OPAQUE && a.ty != b.type_name => {
-            bail!("instance `{server}` answered `{what}` with a `{}`, but its interface promises `{}`", b.type_name, a.ty)
-        }
-        _ => {}
-    }
-    if !done && !promise.answer.as_ref().is_some_and(|a| a.stream) {
-        bail!("instance `{server}` answered `{what}` more than once, but its interface promises one answer");
-    }
-    Ok(())
 }
 
 struct HostState {
@@ -274,8 +244,8 @@ struct WasmObject {
     store: Store<HostState>,
     memory: Memory,
     inbox: TypedFunc<i32, i32>,
-    serve: TypedFunc<(i32, i32, i32, i32), ()>,
-    answer: TypedFunc<(i32, i32, i32, i32), ()>,
+    serve: TypedFunc<(i32, i32, i32, i32, i32), ()>,
+    answer: TypedFunc<(i32, i32, i32, i32, i32), ()>,
     start: TypedFunc<(), ()>,
     /// Optional: a module that never streams needn't hear about cancels.
     /// Without it, a cancelled request's replies are dropped until it ends.
@@ -334,7 +304,6 @@ impl<'p> Runtime<'p> {
         let shared = Rc::new(RefCell::new(Shared {
             names: program.instances.iter().map(|i| i.name.clone()).collect(),
             ns,
-            messages: program.messages.clone(),
             interfaces,
             checks: !options.no_checks,
             queue: VecDeque::new(),
@@ -381,7 +350,7 @@ impl<'p> Runtime<'p> {
         let image_view = self.program.instances.len();
         for s in &self.program.startup {
             let what = format!("{} {}", s.verb.keyword(), s.path);
-            let body = s.body.as_ref().map(|b| b.message().cloned()).transpose()?;
+            let body = s.body.as_ref().map(|b| b.message().map(|m| Payload::new(payload::BSON, m.encode()))).transpose()?;
             let mut shared = self.shared.borrow_mut();
             let to = shared.ns.resolve(image_view, &s.path).and_then(|r| {
                 if r.read_only && !s.verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
@@ -404,7 +373,7 @@ impl<'p> Runtime<'p> {
     /// As the operator, makes `verb <path>` of instance `inst`'s served tree,
     /// delivers everything that follows from it, and returns the replies it
     /// has had: none at all if nothing answered.
-    pub fn ask(&mut self, inst: usize, verb: Verb, path: &str, body: Option<Message>) -> Result<Vec<Answered>> {
+    pub fn ask(&mut self, inst: usize, verb: Verb, path: &str, body: Option<Payload>) -> Result<Vec<Answered>> {
         let to = Ok(Resolved { inst, path: path.to_string(), read_only: false });
         self.shared.borrow_mut().request(Requester::Asked, to, verb, body);
         self.drain()?;
@@ -459,17 +428,16 @@ impl<'p> Runtime<'p> {
                 let doing = format!("serving `{} {path}`", verb.keyword());
                 match &mut self.objects[to] {
                     Object::Env(e) => {
-                        let messages = &self.program.messages;
-                        let replies = e
-                            .serve(req, verb, &path, body.as_ref(), &mut self.output, messages)
-                            .map_err(|e| self.failed(to, &doing, e))?;
+                        let replies =
+                            e.serve(req, verb, &path, body.as_ref(), &mut self.output).map_err(|e| self.failed(to, &doing, e))?;
                         self.send_replies(to, replies)?;
                     }
                     Object::Wasm(obj) => {
+                        let (ty, body) = body.map(|b| (b.ty, b.bytes)).unwrap_or_default();
                         let mut bytes = path.as_bytes().to_vec();
-                        let body = body.map(|b| b.encode()).unwrap_or_default();
+                        bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
-                        let args = (req as i32, verb as i32, path.len() as i32, body.len() as i32);
+                        let args = (req as i32, verb as i32, path.len() as i32, ty.len() as i32, body.len() as i32);
                         let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.serve.call(&mut obj.store, args)?));
                         res.map_err(|e| self.failed(to, &doing, e))?;
                     }
@@ -477,9 +445,11 @@ impl<'p> Runtime<'p> {
             }
             Delivery::Answer { to, ticket, status, body, done } => {
                 let Object::Wasm(obj) = &mut self.objects[to] else { unreachable!("only Wasm objects make calls") };
-                let body = body.map(|b| b.encode()).unwrap_or_default();
-                let args = (ticket as i32, status as i32, body.len() as i32, done as i32);
-                let res = obj.fill_inbox(&body).and_then(|_| Ok(obj.answer.call(&mut obj.store, args)?));
+                let (ty, body) = body.map(|b| (b.ty, b.bytes)).unwrap_or_default();
+                let mut bytes = ty.as_bytes().to_vec();
+                bytes.extend_from_slice(&body);
+                let args = (ticket as i32, status as i32, ty.len() as i32, body.len() as i32, done as i32);
+                let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.answer.call(&mut obj.store, args)?));
                 res.map_err(|e| self.failed(to, "handling an answer", e))?;
             }
             Delivery::Cancel { to, req } => match &mut self.objects[to] {
@@ -539,8 +509,8 @@ fn instantiate(
             .ok_or_else(|| anyhow!("instance `{name}`: module must export {func}{sig}"))
     };
     let inbox = export("rt_inbox", "(i32) -> i32")?;
-    let serve = export("rt_serve", "(i32, i32, i32, i32)")?;
-    let answer = export("rt_answer", "(i32, i32, i32, i32)")?;
+    let serve = export("rt_serve", "(i32, i32, i32, i32, i32)")?;
+    let answer = export("rt_answer", "(i32, i32, i32, i32, i32)")?;
     let start = export("rt_start", "()")?;
     let typed = |e: wasmtime::Error, func: &str| anyhow!("instance `{name}`: {func} has the wrong signature: {e}");
     Ok(WasmObject {
@@ -568,20 +538,20 @@ fn read_path(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> HostResu
     Ok(String::from_utf8(read_bytes(caller, ptr, len)?).ok())
 }
 
-/// An optional body from module memory: length 0 means none.
-fn read_body(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> HostResult<Option<Message>> {
-    if len == 0 {
+/// An optional payload from module memory: a content type and bytes, both
+/// of length 0 for none. It is copied as it is, never looked inside.
+fn read_body(caller: &mut Caller<'_, HostState>, ty: i32, ty_len: i32, body: i32, body_len: i32) -> HostResult<Option<Payload>> {
+    if ty_len == 0 && body_len == 0 {
         return Ok(None);
     }
     let me = caller.data().me;
-    let bytes = read_bytes(caller, ptr, len)?;
-    let shared = caller.data().shared.clone();
-    let shared = shared.borrow();
-    let msg = Message::decode(&bytes)
-        .with_context(|| format!("instance `{}` sent an undecodable message", shared.names[me]))
-        .map_err(host_err)?;
-    shared.check_shape(me, &msg).map_err(host_err)?;
-    Ok(Some(msg))
+    let ty = String::from_utf8(read_bytes(caller, ty, ty_len)?);
+    let bytes = read_bytes(caller, body, body_len)?;
+    let name = caller.data().shared.borrow().names[me].clone();
+    match ty {
+        Ok(ty) if !ty.is_empty() => Ok(Some(Payload::new(ty, bytes))),
+        _ => Err(wasmtime::format_err!("instance `{name}` sent a payload without a content type")),
+    }
 }
 
 fn status_code(r: Result<(), Status>) -> i32 {
@@ -596,10 +566,18 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "othismo",
         "call",
-        |mut caller: Caller<'_, HostState>, verb: i32, path: i32, path_len: i32, body: i32, body_len: i32, expect: i32| {
+        |mut caller: Caller<'_, HostState>,
+         verb: i32,
+         path: i32,
+         path_len: i32,
+         ty: i32,
+         ty_len: i32,
+         body: i32,
+         body_len: i32,
+         expect: i32| {
             let me = caller.data().me;
             let path = read_path(&mut caller, path, path_len)?;
-            let body = read_body(&mut caller, body, body_len)?;
+            let body = read_body(&mut caller, ty, ty_len, body, body_len)?;
             let mut shared = caller.data().shared.borrow_mut();
             let verb = Verb::from_i32(verb).ok_or_else(|| wasmtime::format_err!("call with unknown verb {verb}"))?;
             let ticket = if expect != 0 {
@@ -612,7 +590,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let to = match path {
                 _ if verb == Verb::Control => Err(Status::Forbidden),
                 None => Err(Status::Invalid),
-                Some(p) => shared.resolve(me, &p, verb, body.as_ref()),
+                Some(p) => shared.resolve(me, &p, verb),
             };
             shared.request(Requester::Wasm { inst: me, ticket }, to, verb, body);
             HostResult::Ok(ticket as i32)
@@ -621,9 +599,17 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "othismo",
         "reply",
-        |mut caller: Caller<'_, HostState>, req: i32, status: i32, body: i32, body_len: i32, done: i32| -> HostResult<()> {
+        |mut caller: Caller<'_, HostState>,
+         req: i32,
+         status: i32,
+         ty: i32,
+         ty_len: i32,
+         body: i32,
+         body_len: i32,
+         done: i32|
+         -> HostResult<()> {
             let me = caller.data().me;
-            let body = read_body(&mut caller, body, body_len)?;
+            let body = read_body(&mut caller, ty, ty_len, body, body_len)?;
             let status = Status::from_i32(status).ok_or_else(|| wasmtime::format_err!("reply with unknown status {status}"))?;
             let mut shared = caller.data().shared.borrow_mut();
             shared.reply(me, req as u32, status, body, done != 0).map_err(host_err)

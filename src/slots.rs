@@ -151,7 +151,8 @@ mod tests {
 
     /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it.
     fn program(src: &str) -> Program {
-        let a = "import { Info, Text } from env object A { serves { /info write Info  /x write Text } }";
+        let a = "message Info { kind: string, size: i64, mime: string }
+            object A { serves { /info write application/bson  /x write application/bson } }";
         let header = crate::iface::resolve(&crate::iface::parse(a).unwrap(), &mut |_| Ok(crate::iface::env().clone()), &|_| {
             unreachable!()
         })
@@ -161,6 +162,7 @@ mod tests {
     }
 
     const IMAGE: &str = r#"
+        import { Info } from A
         require listen : Listen { address: "127.0.0.1:8080" }
         require info : Info { kind: "file" }
         instance net : Listener

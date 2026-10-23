@@ -1,36 +1,23 @@
-//! How the console turns a message into a line of text.
+//! How the console turns a payload into a line of text, and how `--check`
+//! shows a slot's values.
 
-use crate::messages::MessageType;
-use crate::wire::Message;
+use crate::payload::{Payload, Stat};
 use bson::Bson;
-use std::collections::BTreeMap;
 use std::fmt::Write;
 
-/// A message whose only field is `text: string` prints as that text, so
-/// `Line`/`Echoed` echo verbatim. Anything else prints JSON-ish:
-/// `Point {"x": 1, "y": 2.5}`, with fields in declaration order.
-pub fn render(msg: &Message, messages: &BTreeMap<String, MessageType>) -> String {
-    if msg.fields.len() == 1
-        && let Some(Bson::String(s)) = msg.fields.get("text")
-    {
-        return s.clone();
+/// Text prints as it is. A stat record prints as its fields, since the
+/// protocol defines it; anything else as its content type and length, since
+/// only its format knows what it means.
+pub fn line(p: &Payload) -> String {
+    if p.is_text() {
+        return String::from_utf8_lossy(&p.bytes).into_owned();
     }
-    // Declared order when known, then anything undeclared.
-    let mut keys: Vec<&str> = messages
-        .get(&msg.type_name)
-        .map(|t| t.fields.iter().map(|(n, _)| n.as_str()).filter(|n| msg.fields.contains_key(n)).collect())
-        .unwrap_or_default();
-    keys.extend(msg.fields.keys().map(String::as_str).filter(|k| !keys.contains(k)).collect::<Vec<_>>());
-
-    let mut out = format!("{} {{", msg.type_name);
-    for (i, k) in keys.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        write!(out, "{}: {}", json_string(k), json_value(&msg.fields[*k])).unwrap();
+    if let Some(s) = Stat::decode(p) {
+        let kind = if s.dir { "dir" } else { "file" };
+        return format!("stat {} {kind} {} {} {}", json_string(&s.name), s.length, json_string(&s.ty), s.version);
     }
-    out.push('}');
-    out
+    let n = p.bytes.len();
+    format!("{} ({n} byte{})", p.ty, if n == 1 { "" } else { "s" })
 }
 
 pub fn json_value(v: &Bson) -> String {
@@ -70,25 +57,13 @@ fn json_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::FieldType;
-    use bson::doc;
 
     #[test]
-    fn text_only_messages_print_verbatim() {
-        let msg = Message { type_name: "Echoed".into(), fields: doc! { "text": "hi \"x\"" } };
-        assert_eq!(render(&msg, &BTreeMap::new()), "hi \"x\"");
-    }
-
-    #[test]
-    fn other_messages_print_json_ish_in_declared_order() {
-        let ty = MessageType::new(
-            "P",
-            vec![("y".into(), FieldType::F64), ("x".into(), FieldType::I32), ("s".into(), FieldType::String)],
-        );
-        let messages = BTreeMap::from([("P".to_string(), ty)]);
-        let msg = Message { type_name: "P".into(), fields: doc! { "x": 1, "s": "a\nb", "y": 2.0 } };
-        assert_eq!(render(&msg, &messages), r#"P {"y": 2.0, "x": 1, "s": "a\nb"}"#);
-        let unit = Message { type_name: "Ping".into(), fields: doc! {} };
-        assert_eq!(render(&unit, &messages), "Ping {}");
+    fn text_prints_as_it_is_and_the_rest_by_its_type() {
+        assert_eq!(line(&Payload::text("hi \"x\"")), "hi \"x\"");
+        assert_eq!(line(&Payload::new("text/html; charset=utf-8", "<p>")), "<p>");
+        assert_eq!(line(&Payload::new("application/bson", vec![5, 0, 0, 0, 0])), "application/bson (5 bytes)");
+        assert_eq!(line(&Payload::new("image/png", vec![1])), "image/png (1 byte)");
+        assert_eq!(line(&Stat::file("a.txt", 2, "text/plain").encode()), "stat \"a.txt\" file 2 \"text/plain\" 0");
     }
 }

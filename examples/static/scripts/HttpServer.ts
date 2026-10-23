@@ -1,5 +1,6 @@
-import { Accepted, Data, Entry, Info, Line, Text } from "othismo/env"
-import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
+import { OCTETS, Payload, Request, Response, Server, Stat, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { bson } from "othismo/bson"
+import { Text } from "othismo/env"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -16,7 +17,7 @@ const MAX_BODY: i32 = 1024 * 1024
  *
  * Its own tree is /hosts/<name>, which only the operator sets: control it
  * with a Text holding a path in our view to serve that host from there, or
- * with no body to stop serving it. `*` is used for any host not listed. Every
+ * with no payload to stop serving it. `*` is used for any host not listed. Every
  * response is logged to /dev/cons. One request per connection; every
  * response closes it.
  */
@@ -38,25 +39,28 @@ class HttpServer extends Server {
       }
       const names = this.hosts.keys()
       names.sort()
-      for (let i = 0; i < names.length; i++) req.stream(new Entry(names[i], "file"))
+      for (let i = 0; i < names.length; i++) req.stream(Stat.file(names[i]).payload())
       req.end()
       return
     }
     const name = req.path.startsWith("/hosts/") ? req.path.substring(7).toLowerCase() : ""
     if (name.length == 0 || name.includes("/")) {
       req.fail(Status.NotFound)
-    } else if (req.verb == Verb.Control && body instanceof Text) {
-      this.hosts.set(name, (body as Text).text)
-      req.end()
     } else if (req.verb == Verb.Control && body === null) {
       this.hosts.delete(name)
       req.end()
     } else if (req.verb == Verb.Control) {
-      req.fail(Status.Invalid)
+      const msg = bson.decode(body)
+      if (!(msg instanceof Text)) {
+        req.fail(Status.Invalid)
+        return
+      }
+      this.hosts.set(name, (msg as Text).text)
+      req.end()
     } else if (!this.hosts.has(name)) {
       req.fail(Status.NotFound)
     } else if (req.verb == Verb.Read) {
-      req.reply(new Text(this.hosts.get(name)))
+      req.reply(Payload.text(this.hosts.get(name)))
     } else {
       req.fail(Status.NotSupported)
     }
@@ -75,16 +79,16 @@ const server = new HttpServer()
 class OnAddress extends Then {
   answer(res: Response): void {
     const body = res.body
-    if (body instanceof Text) ns.write("/dev/cons", new Line("listening on http://" + (body as Text).text + "/"))
+    if (body !== null) ns.write("/dev/cons", Payload.text("listening on http://" + body.asText() + "/"))
   }
 }
 
 class OnAccept extends Then {
   answer(res: Response): void {
     const body = res.body
-    if (!(body instanceof Accepted)) return
-    const conn = (body as Accepted).conn
-    ns.watch("/net/tcp/" + conn, new Connection(conn))
+    if (body === null) return
+    const conn = body.asText()
+    ns.watch("/net/tcp/" + conn + "/data", new Connection(conn))
   }
 }
 
@@ -100,8 +104,8 @@ class Connection extends Then {
 
   answer(res: Response): void {
     const body = res.body
-    if (this.answering || !(body instanceof Data)) return // done, or the peer went away
-    this.buf = concat(this.buf, (body as Data).data)
+    if (this.answering || body === null) return // done, or the peer went away
+    this.buf = concat(this.buf, body.bytes)
     this.parse()
   }
 
@@ -201,8 +205,9 @@ class Respond extends Then {
   answer(res: Response): void {
     if (this.sent) return
     const body = res.body
+    const stat = Stat.decode(body)
     const plain = "Content-Type: text/plain\r\n"
-    const directory = res.status == Status.IsDirectory || (body instanceof Info && (body as Info).kind == "dir")
+    const directory = res.status == Status.IsDirectory || (stat !== null && stat.dir)
     if (directory && !this.path.endsWith("/")) {
       const location = this.path + "/"
       this.send(301, "Moved Permanently", "Location: " + encodeURI(location) + "\r\n" + plain, text("301 -> " + location + "\n"))
@@ -216,19 +221,13 @@ class Respond extends Then {
       this.send(400, "Bad Request", plain, text("400 Bad Request\n"))
     } else if (res.status != Status.Ok) {
       this.send(500, "Internal Server Error", plain, text("500 Internal Server Error\n"))
-    } else if (body instanceof Data) {
-      const d = body as Data
-      this.send(200, "OK", "Content-Type: " + (d.mime.length > 0 ? d.mime : "application/octet-stream") + "\r\n", d.data)
-    } else if (body instanceof Info) {
+    } else if (stat !== null) {
       // HEAD: the size without the bytes.
-      const info = body as Info
-      this.send(200, "OK", "Content-Type: " + info.mime + "\r\n", new ArrayBuffer(0), info.size)
-    } else if (body instanceof Text) {
-      this.send(200, "OK", "Content-Type: text/plain; charset=utf-8\r\n", text((body as Text).text))
-    } else if (body == null) {
-      this.send(204, "No Content", "", new ArrayBuffer(0))
+      this.send(200, "OK", "Content-Type: " + (stat.type.length > 0 ? stat.type : OCTETS) + "\r\n", new ArrayBuffer(0), <i64>stat.length)
+    } else if (body !== null) {
+      this.send(200, "OK", "Content-Type: " + (body.type.length > 0 ? body.type : OCTETS) + "\r\n", body.bytes)
     } else {
-      this.send(500, "Internal Server Error", plain, text("500 unexpected " + body.typeName() + "\n"))
+      this.send(204, "No Content", "", new ArrayBuffer(0))
     }
   }
 
@@ -246,9 +245,9 @@ class Respond extends Then {
       "Connection: close\r\n\r\n",
     )
     const conn = "/net/tcp/" + this.conn
-    ns.write(conn, new Data("", headLength >= 0 ? bytes : concat(bytes, body)))
+    ns.write(conn + "/data", new Payload(OCTETS, headLength >= 0 ? bytes : concat(bytes, body)))
     ns.remove(conn)
-    ns.write("/dev/cons", new Line(this.method + " " + this.path + " " + status.toString()))
+    ns.write("/dev/cons", Payload.text(this.method + " " + this.path + " " + status.toString()))
   }
 }
 

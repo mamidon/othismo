@@ -1,6 +1,6 @@
 // Generated from Greeter.iface by `othismo bindings`. Edit the header, not this file.
 
-import { Message, Reader, Writer, registerMessage } from "othismo"
+import { Message, Reader, Writer, registerMessage } from "othismo/bson"
 
 /** Configures a Greeter; sent once at startup by the image. */
 export class Greeting extends Message {
@@ -22,25 +22,3 @@ export class Greeting extends Message {
   }
 }
 registerMessage("Greeting", (r: Reader): Message => new Greeting(r.string("prefix"), r.bool("excited")))
-
-/** Running totals a Greeter reports after every line. */
-export class Stats extends Message {
-  lines: i32
-  chars: i64
-  average: f64
-
-  constructor(lines: i32, chars: i64, average: f64) {
-    super()
-    this.lines = lines
-    this.chars = chars
-    this.average = average
-  }
-
-  typeName(): string { return "Stats" }
-  encode(w: Writer): void {
-    w.i32("lines", this.lines)
-    w.i64("chars", this.chars)
-    w.f64("average", this.average)
-  }
-}
-registerMessage("Stats", (r: Reader): Message => new Stats(r.i32("lines"), r.i64("chars"), r.f64("average")))

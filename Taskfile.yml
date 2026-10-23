@@ -115,7 +115,7 @@ tasks:
         task: wasm:one
         vars: { NAME: '{{.ITEM}}' }
 
-  # The runtime's own bindings, which the library imports as "othismo/env".
+  # The runtime's own bindings, which modules import as "othismo/env".
   bindings:env:
     internal: true
     deps: [build]
@@ -125,7 +125,7 @@ tasks:
     generates:
       - as/env.ts
     cmds:
-      - '{{.BIN}} bindings --library ./index env -o as/env.ts'
+      - '{{.BIN}} bindings --library ./bson env -o as/env.ts'
 
   bindings:one:
     internal: true

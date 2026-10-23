@@ -1,48 +1,22 @@
-# The runtime's own header, `env`, is this directory: the conventional
-# bodies for the verbs, here, and one file for each trait the runtime
-# implements, with the types it adds. An image declares one of those objects
-# by its trait, `instance net : Listener`, and the runtime picks how to run
-# it. The runtime embeds every file and joins them into `env`.
+# The runtime's own header, `env`, is this directory: the shapes every tree
+# of files shares, here, and one file for each trait the runtime implements,
+# with anything it adds. An image declares one of those objects by its
+# trait, `instance net : Listener`, and the runtime picks how to run it. The
+# runtime embeds every file and joins them into `env`.
 #
-# Its types are always in scope in an image. A header imports them with
-# `import { ... } from env`, and AssemblyScript with
-# `import { ... } from "othismo/env"`, whose bindings are generated from
-# `env`.
+# Payloads are named by their content types. `stat` and `list` answer stat
+# records, which the protocol defines, so they are written bare.
 
 ## A string value: a setting, an address, a name.
 message Text {
   text: string
 }
 
-## The contents of something, as `read` answers.
-message Data {
-  ## Its MIME type, or "" if it isn't known.
-  mime: string
-  data: bytes
-}
-
-## What `stat` answers.
-message Info {
-  ## "file" or "dir".
-  kind: string
-  ## In bytes; 0 for a directory.
-  size: i64
-  ## Its MIME type, or "" if it isn't known.
-  mime: string
-}
-
-## One name in a `list` stream, or what `create` made.
-message Entry {
-  name: string
-  ## "file" or "dir".
-  kind: string
-}
-
 ## Something read whole.
-protocol File { read -> Data, stat -> Info }
+protocol File { read -> */*, stat }
 
 ## Something listed.
-protocol Dir { list -> Entry*, stat -> Info }
+protocol Dir { list, stat }
 
 ## A tree of files, read-only.
 trait FileTree {

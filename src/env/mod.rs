@@ -19,13 +19,11 @@ pub use packed::Packed;
 pub use tcp::{MemoryListener, Tcp};
 
 use crate::check::{Instance, IncludeDecl, Kind};
-use crate::messages::MessageType;
 use crate::ns::{Status, Verb};
 use crate::pack::{self, Pack};
+use crate::payload::Payload;
 use crate::tree::Tree;
-use crate::wire::Message;
 use anyhow::{Context, Result};
-use bson::Document;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
@@ -50,17 +48,17 @@ pub enum What {
 pub struct Reply {
     pub req: u32,
     pub status: Status,
-    pub body: Option<Message>,
+    pub body: Option<Payload>,
     /// The last reply to `req`.
     pub done: bool,
 }
 
 impl Reply {
-    fn ok(req: u32, body: Message) -> Reply {
+    fn ok(req: u32, body: Payload) -> Reply {
         Reply { req, status: Status::Ok, body: Some(body), done: true }
     }
 
-    fn more(req: u32, body: Message) -> Reply {
+    fn more(req: u32, body: Payload) -> Reply {
         Reply { req, status: Status::Ok, body: Some(body), done: false }
     }
 
@@ -82,10 +80,6 @@ pub enum EnvObject {
     MemoryConsole(MemoryConsole),
     /// A Listener in an imported image.
     MemoryListener(MemoryListener),
-}
-
-fn msg(type_name: &str, fields: Document) -> Message {
-    Message { type_name: type_name.into(), fields }
 }
 
 impl EnvObject {
@@ -125,23 +119,15 @@ impl EnvObject {
         }
     }
 
-    /// Serves request `req`. `out` and `messages` are for printing.
-    pub fn serve(
-        &mut self,
-        req: u32,
-        verb: Verb,
-        path: &str,
-        body: Option<&Message>,
-        out: &mut dyn Write,
-        messages: &BTreeMap<String, MessageType>,
-    ) -> Result<Vec<Reply>> {
+    /// Serves request `req`. `out` is for printing.
+    pub fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
         // Their config is taken from the image's `control /` before they are
         // made; changing it while they run isn't supported yet.
         if verb == Verb::Control {
             return Ok(vec![Reply::fail(req, Status::NotSupported)]);
         }
         Ok(match self {
-            EnvObject::Console(c) => c.serve(req, verb, path, body, out, messages)?,
+            EnvObject::Console(c) => c.serve(req, verb, path, body, out)?,
             EnvObject::Tcp(t) => t.serve(req, verb, path, body),
             EnvObject::Files(f) => f.serve(req, verb, path),
             EnvObject::Packed(p) => p.serve(req, verb, path),

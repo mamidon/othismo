@@ -1,12 +1,14 @@
 //! Running an image's tests, for `othismo test`. A test suite is any
 //! instance whose type declares the `TestSuite` trait: it lists its tests at
-//! `/tests`, and runs one when `/tests/<name>` is invoked, answering with an
-//! `Outcome`. Each test gets a fresh run of the image, started but with
+//! `/tests`, a stat record each, and runs one when `/tests/<name>` is
+//! invoked, answering with an `Outcome`. Each test gets a fresh run of the image, started but with
 //! nothing outside: no stdin, no sockets.
 
 use crate::ns::{Status, Verb};
 use crate::pack::Pack;
+use crate::payload::{self, Stat};
 use crate::runtime::{Answered, Io, Options, Runtime};
+use crate::wire::Message;
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
 use std::io::Write;
@@ -53,8 +55,8 @@ pub fn run(pack: &Pack, options: Options) -> Result<Vec<Report>> {
             _ => bail!("`{name}` never finished listing its tests"),
         }
         for body in answers.into_iter().filter_map(|a| a.body) {
-            let test = body.fields.get_str("name").with_context(|| format!("`{name}` listed a test without a name"))?;
-            tests.push((i, test.to_string()));
+            let test = Stat::decode(&body).with_context(|| format!("`{name}` listed a test without a stat record"))?;
+            tests.push((i, test.name));
         }
     }
     drop(rt);
@@ -87,7 +89,8 @@ fn outcome(answer: Option<Answered>) -> (bool, String) {
     if a.status != Status::Ok {
         return (false, format!("it answered {}", a.status));
     }
-    let Some(body) = a.body.filter(|b| b.type_name == "Outcome") else {
+    let body = a.body.filter(|b| b.ty == payload::BSON).and_then(|b| Message::decode(&b.bytes).ok());
+    let Some(body) = body.filter(|b| b.type_name == "Outcome") else {
         return (false, "it answered without an Outcome".into());
     };
     match (body.fields.get_bool("passed"), body.fields.get_str("detail")) {
@@ -128,11 +131,11 @@ impl Write for Captured {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::Message;
+    use crate::payload::Payload;
     use bson::doc;
 
     fn answered(status: Status, body: Option<Message>) -> Option<Answered> {
-        Some(Answered { status, body, done: true })
+        Some(Answered { status, body: body.map(|m| Payload::new(payload::BSON, m.encode())), done: true })
     }
 
     #[test]

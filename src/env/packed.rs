@@ -1,13 +1,12 @@
 //! `Packed.Files`: files packed into the image when it was built, which it
 //! answers for as `Files` does.
 
-use super::files::mime;
-use super::{Reply, msg};
+use super::Reply;
+use super::files::{mime, name};
 use crate::ns::{self, Status, Verb};
 use crate::pack::Hash;
+use crate::payload::{Payload, Stat};
 use crate::tree::{Node, Tree};
-use crate::wire;
-use bson::doc;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -32,31 +31,32 @@ impl Packed {
         // As on disk, `file/` names nothing.
         let node = self.tree.get(&path).filter(|n| !as_dir || **n == Node::Dir);
         let Some(node) = node else { return vec![Reply::fail(req, Status::NotFound)] };
-        let mime = || mime(Path::new(&path));
         match (verb, node) {
             (Verb::Read, Node::Dir) => vec![Reply::fail(req, Status::IsDirectory)],
             (Verb::Read, Node::File { hash, .. }) => {
-                let data = wire::bytes(self.blobs[hash].to_vec());
-                vec![Reply::ok(req, msg("Data", doc! { "mime": mime(), "data": data }))]
+                vec![Reply::ok(req, Payload::new(mime(Path::new(&path)), self.blobs[hash].to_vec()))]
             }
-            (Verb::Stat, Node::Dir) => vec![Reply::ok(req, msg("Info", doc! { "kind": "dir", "size": 0i64, "mime": "" }))],
-            (Verb::Stat, Node::File { size, .. }) => {
-                vec![Reply::ok(req, msg("Info", doc! { "kind": "file", "size": *size as i64, "mime": mime() }))]
-            }
+            (Verb::Stat, node) => vec![Reply::ok(req, stat(&name(&path), node).encode())],
             (Verb::List, Node::File { .. }) => vec![Reply::fail(req, Status::NotDirectory)],
             (Verb::List, Node::Dir) => {
-                let mut replies: Vec<Reply> = self
-                    .tree
-                    .children(&path)
-                    .map(|(name, node)| {
-                        let kind = if *node == Node::Dir { "dir" } else { "file" };
-                        Reply::more(req, msg("Entry", doc! { "name": name, "kind": kind }))
-                    })
-                    .collect();
+                let mut replies: Vec<Reply> =
+                    self.tree.children(&path).map(|(name, node)| Reply::more(req, stat(name, node).encode())).collect();
                 replies.push(Reply::end(req));
                 replies
             }
             _ => vec![Reply::fail(req, Status::NotSupported)],
+        }
+    }
+}
+
+/// A packed file's stat record. Its version comes from its contents' hash,
+/// so it changes exactly when they do.
+fn stat(name: &str, node: &Node) -> Stat {
+    match node {
+        Node::Dir => Stat::dir(name),
+        Node::File { hash, size } => {
+            let version = hash.get(..16).and_then(|h| u64::from_str_radix(h, 16).ok()).unwrap_or(0);
+            Stat { version, ..Stat::file(name, *size, mime(Path::new(name))) }
         }
     }
 }
@@ -84,5 +84,7 @@ mod tests {
         assert_eq!(status(p.serve(1, Verb::List, "/sub/")), [Status::Ok]);
         assert_eq!(status(p.serve(1, Verb::Watch, "/")), [Status::NotSupported]);
         assert_eq!(status(p.serve(1, Verb::Create, "/b")), [Status::ReadOnly]);
+        let stat = Stat::decode(&p.serve(1, Verb::Stat, "/a.txt").remove(0).body.unwrap()).unwrap();
+        assert_eq!((stat.name.as_str(), stat.length, stat.ty.as_str()), ("a.txt", 1, "text/plain; charset=utf-8"));
     }
 }

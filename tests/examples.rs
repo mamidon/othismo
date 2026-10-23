@@ -34,7 +34,7 @@ fn bindings_are_up_to_date() {
             let resolved = othismo::iface::load(&header).unwrap();
             let committed = std::fs::read_to_string(format!("{}.ts", header.display())).ok();
             let name = header.file_name().unwrap().to_string_lossy().into_owned();
-            let want = (!resolved.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&resolved, &name, "othismo"));
+            let want = (!resolved.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&resolved, &name, "othismo/bson"));
             assert!(committed == want, "{}.ts is stale; run `task bindings`", header.display());
         }
     }
@@ -68,10 +68,10 @@ fn greeter_uses_a_startup_request_and_a_second_object() {
     assert_eq!(
         out,
         "Hello, world!\n\
-         Stats {\"lines\": 1, \"chars\": 5, \"average\": 5.0}\n\
+         1 lines, 5 characters, 5.0 on average\n\
          HELLO, WORLD!\n\
          Hello, Ada!\n\
-         Stats {\"lines\": 2, \"chars\": 8, \"average\": 4.0}\n\
+         2 lines, 8 characters, 4.0 on average\n\
          HELLO, ADA!\n"
     );
 }

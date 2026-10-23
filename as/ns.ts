@@ -1,7 +1,7 @@
 // The namespace SDK: how an object serves its tree and talks to its view.
 //
-// An object module extends `Server`, calls `run(new MyServer())` at top
-// level, and re-exports the host's entry points:
+// It is part of "othismo". An object module extends `Server`, calls
+// `run(new MyServer())` at top level, and re-exports the host's entry points:
 //
 //   export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 //
@@ -9,18 +9,18 @@
 // objects; requests made of us arrive at `Server.serve`. See
 // docs/namespace.md for the model.
 
-import { Message, encodeMessage, decodeMessage } from "./index"
+import { Payload } from "./payload"
 
 // ---------------------------------------------------------------------------
 // Host interface
 
 // @ts-ignore: decorator
 @external("othismo", "call")
-declare function host_call(verb: i32, path: usize, pathLen: i32, body: usize, bodyLen: i32, expect: i32): u32;
+declare function host_call(verb: i32, path: usize, pathLen: i32, type: usize, typeLen: i32, body: usize, bodyLen: i32, expect: i32): u32;
 
 // @ts-ignore: decorator
 @external("othismo", "reply")
-declare function host_reply(req: u32, status: i32, body: usize, bodyLen: i32, done: i32): void;
+declare function host_reply(req: u32, status: i32, type: usize, typeLen: i32, body: usize, bodyLen: i32, done: i32): void;
 
 // @ts-ignore: decorator
 @external("othismo", "forward")
@@ -74,14 +74,14 @@ export class Request {
     public verb: Verb,
     /** Relative to our root, e.g. "/index.html". */
     public path: string,
-    public body: Message | null,
+    public body: Payload | null,
   ) {}
 
   /** Ok, and the last reply. */
-  reply(body: Message | null): void { this.send(Status.Ok, body, true); }
+  reply(body: Payload | null): void { this.send(Status.Ok, body, true); }
 
   /** Ok, with more to come. */
-  stream(body: Message): void { this.send(Status.Ok, body, false); }
+  stream(body: Payload): void { this.send(Status.Ok, body, false); }
 
   /** Ok, no body, and the last reply. */
   end(): void { this.send(Status.Ok, null, true); }
@@ -96,12 +96,12 @@ export class Request {
     host_forward(this.id, changetype<usize>(p), p.byteLength);
   }
 
-  private send(status: Status, body: Message | null, done: bool): void {
+  private send(status: Status, body: Payload | null, done: bool): void {
     if (done) this.finish();
     else if (this.finished) abort("request for " + this.path + " was already answered");
-    let b = new ArrayBuffer(0);
-    if (body !== null) b = encodeMessage(body);
-    host_reply(this.id, status, changetype<usize>(b), b.byteLength, done ? 1 : 0);
+    const t = typeOf(body);
+    const b = bytesOf(body);
+    host_reply(this.id, status, changetype<usize>(t), t.byteLength, changetype<usize>(b), b.byteLength, done ? 1 : 0);
   }
 
   private finish(): void {
@@ -143,7 +143,7 @@ function bound(): Server {
 export class Response {
   constructor(
     public status: Status,
-    public body: Message | null,
+    public body: Payload | null,
     /** False while a stream is still open. */
     public done: bool,
   ) {}
@@ -176,11 +176,14 @@ export class Call {
 
 export namespace ns {
   /** Makes a request of `path` in our view. With `then` null, answers are dropped. */
-  export function call(verb: Verb, path: string, body: Message | null, then: Then | null): Call {
+  export function call(verb: Verb, path: string, body: Payload | null, then: Then | null): Call {
     const p = String.UTF8.encode(path);
-    let b = new ArrayBuffer(0);
-    if (body !== null) b = encodeMessage(body);
-    const ticket = host_call(verb, changetype<usize>(p), p.byteLength, changetype<usize>(b), b.byteLength, then !== null ? 1 : 0);
+    const t = typeOf(body);
+    const b = bytesOf(body);
+    const ticket = host_call(
+      verb, changetype<usize>(p), p.byteLength, changetype<usize>(t), t.byteLength,
+      changetype<usize>(b), b.byteLength, then !== null ? 1 : 0,
+    );
     if (then !== null) calls.set(ticket, then);
     return new Call(ticket);
   }
@@ -189,10 +192,10 @@ export namespace ns {
   export function stat(path: string, then: Then): Call { return call(Verb.Stat, path, null, then); }
   export function list(path: string, then: Then): Call { return call(Verb.List, path, null, then); }
   export function watch(path: string, then: Then): Call { return call(Verb.Watch, path, null, then); }
-  export function write(path: string, body: Message, then: Then | null = null): Call { return call(Verb.Write, path, body, then); }
-  export function create(path: string, body: Message, then: Then | null = null): Call { return call(Verb.Create, path, body, then); }
+  export function write(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Write, path, body, then); }
+  export function create(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Create, path, body, then); }
   export function remove(path: string, then: Then | null = null): Call { return call(Verb.Remove, path, null, then); }
-  export function invoke(path: string, body: Message, then: Then | null = null): Call { return call(Verb.Invoke, path, body, then); }
+  export function invoke(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Invoke, path, body, then); }
 
   /** Makes what `source` names in our view also appear at `at`. */
   export function bind(source: string, at: string, flags: Flag = Flag.None): Status {
@@ -225,36 +228,47 @@ export namespace ns {
   }
 }
 
+function typeOf(body: Payload | null): ArrayBuffer {
+  return body === null ? new ArrayBuffer(0) : String.UTF8.encode(body.type);
+}
+
+function bytesOf(body: Payload | null): ArrayBuffer {
+  return body === null ? new ArrayBuffer(0) : body.bytes;
+}
+
+/** The payload at `at` in the inbox: its type, then its bytes. */
+function inboxPayload(at: i32, typeLen: i32, bodyLen: i32): Payload | null {
+  if (typeLen == 0 && bodyLen == 0) return null;
+  const type = String.UTF8.decodeUnsafe(changetype<usize>(inbox) + <usize>at, <usize>typeLen);
+  return new Payload(type, inbox.slice(at + typeLen, at + typeLen + bodyLen));
+}
+
 // ---------------------------------------------------------------------------
 // Host entry points. Object modules re-export these:
 //   export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
 let inbox = new ArrayBuffer(0);
 
-/** Allocates a buffer the host writes the next path and body into. */
+/** Allocates a buffer the host writes the next path and payload into. */
 export function rt_inbox(len: i32): usize {
   inbox = new ArrayBuffer(len);
   return changetype<usize>(inbox);
 }
 
-/** A request for us: the inbox holds the path, then the body. */
-export function rt_serve(id: u32, verb: i32, pathLen: i32, bodyLen: i32): void {
+/** A request for us: the inbox holds the path, the payload's type, then its bytes. */
+export function rt_serve(id: u32, verb: i32, pathLen: i32, typeLen: i32, bodyLen: i32): void {
   const path = String.UTF8.decodeUnsafe(changetype<usize>(inbox), <usize>pathLen);
-  let body: Message | null = null;
-  if (bodyLen > 0) body = decodeMessage(inbox.slice(pathLen, pathLen + bodyLen));
-  const req = new Request(id, <Verb>verb, path, body);
+  const req = new Request(id, <Verb>verb, path, inboxPayload(pathLen, typeLen, bodyLen));
   open.set(id, req);
   bound().serve(req);
 }
 
-/** An answer to one of our calls: the inbox holds the body. */
-export function rt_answer(ticket: u32, status: i32, bodyLen: i32, done: i32): void {
+/** An answer to one of our calls: the inbox holds the payload's type, then its bytes. */
+export function rt_answer(ticket: u32, status: i32, typeLen: i32, bodyLen: i32, done: i32): void {
   if (!calls.has(ticket)) return;
   const then = calls.get(ticket);
   if (done != 0) calls.delete(ticket);
-  let body: Message | null = null;
-  if (bodyLen > 0) body = decodeMessage(inbox);
-  then.answer(new Response(<Status>status, body, done != 0));
+  then.answer(new Response(<Status>status, inboxPayload(0, typeLen, bodyLen), done != 0));
 }
 
 export function rt_start(): void {

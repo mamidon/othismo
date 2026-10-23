@@ -1,14 +1,7 @@
-import { Line } from env
-
-## A line, as Echo writes it back.
-message Echoed {
-  text: string
-}
-
 ## Echoes every line typed on the console back to it.
 object Echo {
   ## The console: the lines to echo, and where they go.
   needs /dev/cons {
-    /  watch -> Line*, write Echoed
+    /  watch -> text/plain*, write text/plain
   }
 }

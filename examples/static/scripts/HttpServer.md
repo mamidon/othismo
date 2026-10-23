@@ -15,9 +15,9 @@ control /http/hosts/* Text { text: "/www" }
 control /http/hosts/files.localhost Text { text: "/www/static" }
 ```
 
-`*` stands for any host not listed. A `control` with no body stops serving
-that host. `list /hosts` lists them, and `read /hosts/<name>` answers its
-root.
+`*` stands for any host not listed. A `control` with no payload stops
+serving that host. `list /hosts` lists them, and `read /hosts/<name>`
+answers its root.
 
 ## Requests
 
@@ -36,11 +36,10 @@ URL's path, percent-decoded, is added to it. A host it doesn't serve gets a
 
 | Answer | Response |
 |---|---|
-| `Data` | 200, with its MIME type, or `application/octet-stream` |
-| `Info` | 200, with its MIME type and size and no body, for HEAD |
-| `Text` | 200, as `text/plain; charset=utf-8` |
-| no body | 204 |
-| a directory: `is_directory`, or an `Info` of kind `dir` | 301 to the path with a `/` added, or 404 if it already has one |
+| a payload | 200, with its content type, or `application/octet-stream` if it has none |
+| a stat record | 200, with its content type and length and no body, for HEAD |
+| no payload | 204 |
+| a directory: `is_directory`, or a stat record of one | 301 to the path with a `/` added, or 404 if it already has one |
 | `not_found` | 404 |
 | `read_only`, `not_supported` | 405 |
 | `forbidden` | 403 |

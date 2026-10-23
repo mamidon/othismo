@@ -1,6 +1,4 @@
-import { Line } from "othismo/env"
-import { Response, Server, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
-import { Echoed } from "./Echo.iface"
+import { Response, Server, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 
 // The host's entry points into this module.
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
@@ -14,8 +12,8 @@ class Echo extends Server {
 
 class OnLine extends Then {
   answer(res: Response): void {
-    const body = res.body
-    if (body instanceof Line) ns.write("/dev/cons", new Echoed((body as Line).text))
+    const line = res.body
+    if (line !== null) ns.write("/dev/cons", line)
   }
 }
 

@@ -1,34 +1,28 @@
-import { Data, Text } from "./bodies.iface"
-
 ## Configures a Tcp listener.
 message Listen {
   ## The address to listen on, e.g. "127.0.0.1:8080".
   address: string
 }
 
-## A new connection.
-message Accepted {
-  ## Its name under the listener: watch, write or remove `/<conn>`.
-  conn: string
-  ## The remote address.
-  peer: string
-}
-
 ## A stream of bytes each way.
-protocol Connection { watch -> Data*, write Data, remove }
+protocol Connection { watch -> application/octet-stream*, write application/octet-stream }
 
 ## A listener, and the connections it accepts. The runtime runs it as a TCP
 ## listener on the address the image configures it with.
 trait Listener {
-  ## Configured by the image only, with where to listen.
-  /           control Listen
+  ## Configured by the image only, with a `Listen`.
+  /                control application/bson
   ## The bound address, e.g. "127.0.0.1:8080".
-  /address    read -> Text
-  ## Every connection accepted, as it is.
-  /accept     watch -> Accepted*
-  ## A connection: watch for the bytes received, until the peer closes;
-  ## write to send; remove to close our side once everything is sent.
-  /{conn}     Connection
+  /address         read -> text/plain
+  ## The name of every connection accepted, as it is.
+  /accept          watch -> text/plain*
+  ## A connection's bytes: watch for those received, until the peer
+  ## closes; write to send.
+  /{conn}/data     Connection
+  ## The peer's address.
+  /{conn}/remote   read -> text/plain
+  ## Close our side, once everything written is sent.
+  /{conn}          remove
 }
 
 ## The other side of a listener run in memory, which an image that imports
@@ -36,5 +30,5 @@ trait Listener {
 trait Dialer {
   ## Connect, sending the request's bytes, and get back everything the
   ## server writes, until it closes the connection.
-  /dial   create Data -> Data*
+  /dial   create application/octet-stream -> application/octet-stream*
 }

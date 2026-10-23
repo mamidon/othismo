@@ -1,5 +1,3 @@
-import { Entry } from "./bodies.iface"
-
 ## How a test went.
 message Outcome {
   passed: bool
@@ -11,7 +9,7 @@ message Outcome {
 ## runs, each in a fresh run of the image.
 trait TestSuite {
   ## The tests, by name.
-  /tests          list -> Entry*
-  ## Runs a test, and answers how it went.
-  /tests/{name}   invoke -> Outcome
+  /tests          list
+  ## Runs a test, and answers how it went, as an `Outcome`.
+  /tests/{name}   invoke -> application/bson
 }
