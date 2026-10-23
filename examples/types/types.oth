@@ -1,0 +1,12 @@
+# Holds a record of each of the BSON format's field types; types.test.oth
+# tests them.
+
+import { Record, Store } from "./scripts/Store.oth"
+
+instance store : Store
+
+mount /store store
+write /store/record Record {
+  name: "start",
+  count: 7,
+}

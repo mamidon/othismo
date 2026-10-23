@@ -131,6 +131,12 @@ export class Writer {
     this.raw(changetype<usize>(v), v.byteLength);
   }
 
+  /** An element of any BSON type, its value's bytes as BSON lays them out. */
+  element(tag: u8, name: string, value: ArrayBuffer): void {
+    this.key(tag, name);
+    this.raw(changetype<usize>(value), value.byteLength);
+  }
+
   finish(): ArrayBuffer {
     this.u8(0);
     const out = this.buf.slice(0, this.len);
@@ -175,6 +181,36 @@ export class Writer {
   }
 }
 
+/**
+ * The size of the value of an element of type `tag` at `p`, so that one of
+ * a type no message field has can be stepped over: a newer sender may add
+ * such fields. Only a type whose size can't be known aborts.
+ */
+function size(tag: u8, p: usize, end: usize, name: string): usize {
+  switch (tag) {
+    case 0x06: case 0x0A: case 0x7F: case 0xFF: return 0; // undefined, null, max key, min key
+    case BSON_BOOL: return 1;
+    case BSON_INT32: return 4;
+    case BSON_DOUBLE: case 0x09: case 0x11: case BSON_INT64: return 8; // and datetime, timestamp
+    case 0x07: return 12; // object id
+    case 0x13: return 16; // decimal128
+    case BSON_STRING: case 0x0D: case 0x0E: return 4 + <usize>load<u32>(p); // and code, symbol
+    case BSON_BINARY: return 5 + <usize>load<u32>(p);
+    case 0x03: case 0x04: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
+    case 0x0C: return 4 + <usize>load<u32>(p) + 12; // db pointer
+    case 0x0B: { // regex: two cstrings
+      let q = p;
+      for (let n = 0; n < 2; n++) {
+        while (q < end && load<u8>(q) != 0) q++;
+        q++;
+      }
+      return q - p;
+    }
+  }
+  abort("unknown BSON element type in field " + name);
+  return 0;
+}
+
 class Field {
   constructor(
     public tag: u8,
@@ -182,7 +218,10 @@ class Field {
   ) {}
 }
 
-/** Reads fields out of one BSON document. Missing or mistyped fields abort. */
+/**
+ * Reads fields out of one BSON document. Missing or mistyped fields abort;
+ * fields no one asks for are skipped, whatever their type.
+ */
 export class Reader {
   private fields: Map<string, Field> = new Map<string, Field>();
 
@@ -199,12 +238,7 @@ export class Reader {
       const name = String.UTF8.decodeUnsafe(p, q - p);
       p = q + 1;
       this.fields.set(name, new Field(tag, p));
-      if (tag == BSON_DOUBLE || tag == BSON_INT64) p += 8;
-      else if (tag == BSON_INT32) p += 4;
-      else if (tag == BSON_BOOL) p += 1;
-      else if (tag == BSON_STRING) p += 4 + <usize>load<u32>(p);
-      else if (tag == BSON_BINARY) p += 5 + <usize>load<u32>(p);
-      else abort("unsupported BSON element type in field " + name);
+      p += size(tag, p, end, name);
     }
   }
 

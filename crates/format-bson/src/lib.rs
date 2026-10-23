@@ -11,7 +11,7 @@ pub mod wire;
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
 use format::{Bindings, Format, Schemas};
-use messages::{FieldType, MessageType};
+use messages::{Field, FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -87,9 +87,9 @@ impl Bson {
                     if out.types.contains_key(&name.name) {
                         bail!("{}: message `{}` is declared twice", name.pos, name.name);
                     }
-                    let mut fields: Vec<(String, FieldType)> = vec![];
+                    let mut fields: Vec<Field> = vec![];
                     for f in &m.fields {
-                        if fields.iter().any(|(n, _)| *n == f.name.name) {
+                        if fields.iter().any(|g| g.name == f.name.name) {
                             bail!("{}: `{}` has two fields called `{}`", f.name.pos, name.name, f.name.name);
                         }
                         let Some(ty) = FieldType::from_name(&f.ty.name) else {
@@ -99,7 +99,7 @@ impl Bson {
                                 f.ty.name
                             );
                         };
-                        fields.push((f.name.name.clone(), ty));
+                        fields.push(Field::new(f.name.name.clone(), ty));
                     }
                     let field_docs = m.fields.iter().map(|f| f.doc.clone()).collect();
                     let ty = MessageType { name: name.name.clone(), fields, doc: m.doc.clone(), field_docs };
@@ -132,8 +132,8 @@ impl Bson {
     pub fn encode_message(schemas: &Messages, type_name: &str, value: &Value) -> Result<Vec<u8>, String> {
         let fields = fields(schemas, type_name, value)?;
         let ty = &schemas.types[type_name];
-        if let Some((missing, _)) = ty.fields.iter().find(|(n, _)| !fields.contains_key(n)) {
-            return Err(format!("`{type_name}` is missing field `{missing}`"));
+        if let Some(missing) = ty.fields.iter().find(|f| !fields.contains_key(&f.name)) {
+            return Err(format!("`{type_name}` is missing field `{}`", missing.name));
         }
         Ok(Message { type_name: type_name.to_string(), fields }.encode())
     }
@@ -155,9 +155,9 @@ impl Bson {
                 continue;
             }
             out.push_str("| Field | Type | |\n|---|---|---|\n");
-            for ((name, fty), doc) in ty.fields.iter().zip(&ty.field_docs) {
+            for (f, doc) in ty.fields.iter().zip(&ty.field_docs) {
                 let doc = doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|");
-                writeln!(out, "| `{name}` | {fty} | {doc} |").unwrap();
+                writeln!(out, "| `{}` | {} | {doc} |", f.name, f.ty).unwrap();
             }
             out.push('\n');
         }
@@ -204,14 +204,14 @@ impl Format for Bson {
 
     fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String> {
         let messages = Bson::messages(schemas);
-        Ok(message_type(&messages, ty)?.fields.iter().map(|(n, _)| n.clone()).collect())
+        Ok(message_type(&messages, ty)?.fields.iter().map(|f| f.name.clone()).collect())
     }
 
     fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String> {
         let messages = Bson::messages(schemas);
         let ty = message_type(&messages, ty)?;
         match ty.field(field) {
-            Some(t) => literal(t, raw),
+            Some(f) => literal(&f.ty, raw),
             None => Err(format!("`{}` has no field `{field}`", ty.name)),
         }
     }
@@ -240,7 +240,7 @@ fn message_type<'a>(schemas: &'a Messages, name: &str) -> Result<&'a MessageType
 }
 
 /// Reads `text` as a literal for a field of type `t`.
-fn literal(t: FieldType, text: &str) -> std::result::Result<Value, String> {
+fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
     let bad = || format!("`{text}` is not a valid {t}");
     Ok(match t {
         FieldType::String | FieldType::Bytes => Value::Str(text.to_string()),
@@ -289,9 +289,9 @@ pub fn fields(schemas: &Messages, type_name: &str, value: &Value) -> Result<Docu
     }
     // In declared order, as the module's own encoder writes them.
     let mut ordered = Document::new();
-    for (n, _) in &ty.fields {
-        if let Some(v) = fields.get(n) {
-            ordered.insert(n.clone(), v.clone());
+    for f in &ty.fields {
+        if let Some(v) = fields.get(&f.name) {
+            ordered.insert(f.name.clone(), v.clone());
         }
     }
     Ok(ordered)
@@ -299,7 +299,7 @@ pub fn fields(schemas: &Messages, type_name: &str, value: &Value) -> Result<Docu
 
 /// The BSON for `value` as field `field` of `ty`, if it fits the field's type.
 pub fn field_bson(ty: &MessageType, field: &str, value: &Value) -> std::result::Result<B, String> {
-    let Some(fty) = ty.field(field) else {
+    let Some(Field { ty: fty, .. }) = ty.field(field) else {
         return Err(format!("`{}` has no field `{field}`", ty.name));
     };
     Ok(match (fty, value) {

@@ -55,7 +55,7 @@ pub fn bytes(data: Vec<u8>) -> Bson {
 }
 
 /// The BSON value an integer of type `ty` is carried as.
-pub fn int_to_bson(ty: FieldType, v: i128) -> Bson {
+pub fn int_to_bson(ty: &FieldType, v: i128) -> Bson {
     match ty {
         FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::U8 | FieldType::U16 => Bson::Int32(v as i32),
         // Two's-complement bit pattern, so u64 values above i64::MAX round-trip.

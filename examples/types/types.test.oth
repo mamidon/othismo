@@ -1,0 +1,18 @@
+# Tests the BSON format's field types: the store starts with a record the
+# image writes, and TypesTests reads it back, and round-trips its own. Run
+# them with `othismo test types.test.oth`.
+
+import { Record, Store } from "./scripts/Store.oth"
+import { TypesTests } from "./scripts/TypesTests.oth"
+
+instance store : Store
+
+instance tests : TypesTests {
+  mount /store store
+}
+
+mount /store store
+write /store/record Record {
+  name: "start",
+  count: 7,
+}

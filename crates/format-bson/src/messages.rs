@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Bool,
@@ -43,7 +43,7 @@ impl FieldType {
     }
 
     /// Inclusive range of values an integer type can hold.
-    pub fn int_range(self) -> Option<(i128, i128)> {
+    pub fn int_range(&self) -> Option<(i128, i128)> {
         Some(match self {
             FieldType::I8 => (i8::MIN as i128, i8::MAX as i128),
             FieldType::I16 => (i16::MIN as i128, i16::MAX as i128),
@@ -79,11 +79,24 @@ impl fmt::Display for FieldType {
     }
 }
 
+/// One of a message type's fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Field {
+    pub name: String,
+    pub ty: FieldType,
+}
+
+impl Field {
+    pub fn new(name: impl Into<String>, ty: FieldType) -> Field {
+        Field { name: name.into(), ty }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageType {
     pub name: String,
     /// Fields in declaration order.
-    pub fields: Vec<(String, FieldType)>,
+    pub fields: Vec<Field>,
     /// The type's `##` documentation, Markdown; empty if it has none.
     #[serde(default)]
     pub doc: String,
@@ -94,12 +107,12 @@ pub struct MessageType {
 
 impl MessageType {
     /// An undocumented type.
-    pub fn new(name: impl Into<String>, fields: Vec<(String, FieldType)>) -> MessageType {
+    pub fn new(name: impl Into<String>, fields: Vec<Field>) -> MessageType {
         let field_docs = vec![String::new(); fields.len()];
         MessageType { name: name.into(), fields, doc: String::new(), field_docs }
     }
 
-    pub fn field(&self, name: &str) -> Option<FieldType> {
-        self.fields.iter().find(|(n, _)| n == name).map(|(_, t)| *t)
+    pub fn field(&self, name: &str) -> Option<&Field> {
+        self.fields.iter().find(|f| f.name == name)
     }
 }

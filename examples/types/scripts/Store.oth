@@ -1,0 +1,16 @@
+## Keeps the last `Record` written to it, to read back: a payload of each of
+## the BSON format's field types, sent and received.
+export object Store {
+  serves {
+    ## The last record written.
+    /record  write Record, read -> Record
+  }
+}
+
+export schemas application/bson {
+  ## A field of each type.
+  message Record {
+    name: string
+    count: i32
+  }
+}

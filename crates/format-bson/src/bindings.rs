@@ -28,15 +28,15 @@ fn class(out: &mut String, ty: &MessageType) {
     let name = &ty.name;
     doc(out, "", &ty.doc);
     writeln!(out, "export class {name} extends Message {{").unwrap();
-    for ((field, fty), fdoc) in ty.fields.iter().zip(&ty.field_docs) {
+    for (f, fdoc) in ty.fields.iter().zip(&ty.field_docs) {
         doc(out, "  ", fdoc);
-        writeln!(out, "  {field}: {}", as_type(*fty)).unwrap();
+        writeln!(out, "  {}: {}", f.name, as_type(&f.ty)).unwrap();
     }
     if !ty.fields.is_empty() {
-        let params: Vec<String> = ty.fields.iter().map(|(f, t)| format!("{f}: {}", as_type(*t))).collect();
+        let params: Vec<String> = ty.fields.iter().map(|f| format!("{}: {}", f.name, as_type(&f.ty))).collect();
         writeln!(out, "\n  constructor({}) {{\n    super()", params.join(", ")).unwrap();
-        for (field, _) in &ty.fields {
-            writeln!(out, "    this.{field} = {field}").unwrap();
+        for f in &ty.fields {
+            writeln!(out, "    this.{0} = {0}", f.name).unwrap();
         }
         out.push_str("  }\n");
     }
@@ -46,7 +46,7 @@ fn class(out: &mut String, ty: &MessageType) {
     writeln!(out, "    const m = bson.decode(p)\n    return m instanceof {name} ? changetype<{name}>(m) : null\n  }}").unwrap();
     writeln!(out, "  toPayload(): Payload {{ return bson.payload(this) }}\n").unwrap();
     writeln!(out, "  typeName(): string {{ return \"{name}\" }}").unwrap();
-    let writes: Vec<String> = ty.fields.iter().map(|(f, t)| write_call(f, *t)).collect();
+    let writes: Vec<String> = ty.fields.iter().map(|f| write_call(&f.name, &f.ty)).collect();
     match writes.as_slice() {
         [] => out.push_str("  encode(w: Writer): void {}\n"),
         [one] => writeln!(out, "  encode(w: Writer): void {{ {one} }}").unwrap(),
@@ -59,7 +59,7 @@ fn class(out: &mut String, ty: &MessageType) {
         }
     }
     out.push_str("}\n");
-    let reads: Vec<String> = ty.fields.iter().map(|(f, t)| read_call(f, *t)).collect();
+    let reads: Vec<String> = ty.fields.iter().map(|f| read_call(&f.name, &f.ty)).collect();
     writeln!(out, "registerMessage(\"{name}\", (r: Reader): Message => new {name}({}))", reads.join(", ")).unwrap();
 }
 
@@ -80,7 +80,7 @@ fn doc(out: &mut String, indent: &str, text: &str) {
     }
 }
 
-fn as_type(t: FieldType) -> &'static str {
+fn as_type(t: &FieldType) -> &'static str {
     match t {
         FieldType::Bytes => "ArrayBuffer",
         FieldType::String => "string",
@@ -99,7 +99,7 @@ fn as_type(t: FieldType) -> &'static str {
 }
 
 /// The `Writer` call for one field, following `wire.rs`'s mapping.
-fn write_call(f: &str, t: FieldType) -> String {
+fn write_call(f: &str, t: &FieldType) -> String {
     match t {
         FieldType::String => format!("w.string(\"{f}\", this.{f})"),
         FieldType::Bool => format!("w.bool(\"{f}\", this.{f})"),
@@ -113,7 +113,7 @@ fn write_call(f: &str, t: FieldType) -> String {
     }
 }
 
-fn read_call(f: &str, t: FieldType) -> String {
+fn read_call(f: &str, t: &FieldType) -> String {
     match t {
         FieldType::String => format!("r.string(\"{f}\")"),
         FieldType::Bool => format!("r.bool(\"{f}\")"),

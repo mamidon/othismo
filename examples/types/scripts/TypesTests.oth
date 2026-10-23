@@ -1,0 +1,12 @@
+import { TestSuite } from env
+import { Record } from "./Store.oth"
+
+## Tests the BSON format's field types in AssemblyScript: each test encodes
+## and decodes in the module itself, or round-trips a record through the
+## store, which the image wrote one to at startup.
+export object TypesTests : TestSuite {
+  ## The store to write records to and read them back from.
+  needs /store {
+    /record  write Record, read -> Record
+  }
+}
