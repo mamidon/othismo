@@ -14,6 +14,10 @@ export schemas application/bson {
     count: i32
     ## Another message.
     owner: Person
+    ## Lists, of anything a field can be.
+    tags: [string]
+    grid: [[i32]]
+    team: [Person]
   }
 
   ## Someone.

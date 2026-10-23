@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use syntax::image_definition::{Parser, Pos, Source, Tok};
 
 /// The field types a field can be written with, besides a type's name.
-const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64 or bytes";
+const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bytes, a message type, or a list of one of those, `[T]`";
 
 pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
     let mut p = Parser::new(src, true)?;
@@ -103,15 +103,21 @@ pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> 
     }
     for (name, pos) in refs {
         if !out.types.contains_key(&name) {
-            bail!("{pos}: `{name}` is not a field type, nor a message type declared or imported here; fields are {FIELD_TYPES}, or a message type");
+            bail!("{pos}: `{name}` is not a field type, nor a message type declared or imported here; fields are {FIELD_TYPES}");
         }
     }
     Ok(out)
 }
 
-/// A field's type. A name that is not a field type's is a message type's,
+/// A field's type: `[T]`, or a name. A name that is not a field type's is a message type's,
 /// which is noted in `refs` to look up later.
 fn field_type(p: &mut Parser, refs: &mut Vec<(String, Pos)>) -> Result<FieldType> {
+    if *p.peek() == Tok::LBracket {
+        p.next();
+        let t = field_type(p, refs)?;
+        p.expect(Tok::RBracket)?;
+        return Ok(FieldType::List(Box::new(t)));
+    }
     let name = p.ident("a field type", false)?;
     Ok(match FieldType::from_name(&name.name) {
         Some(t) => t,

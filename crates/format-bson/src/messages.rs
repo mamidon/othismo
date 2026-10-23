@@ -22,6 +22,8 @@ pub enum FieldType {
     /// Another message type, by name, carried as an embedded document
     /// without a `$type`: the field's type says what it is.
     Named(String),
+    /// `[T]`, a list of `T`: an array. `Array<T>` in AssemblyScript.
+    List(Box<FieldType>),
 }
 
 impl FieldType {
@@ -49,6 +51,7 @@ impl FieldType {
     pub fn names(&self) -> Vec<&str> {
         match self {
             FieldType::Named(n) => vec![n],
+            FieldType::List(t) => t.names(),
             _ => vec![],
         }
     }
@@ -73,6 +76,7 @@ impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
             FieldType::Named(n) => return f.write_str(n),
+            FieldType::List(t) => return write!(f, "[{t}]"),
             FieldType::String => "string",
             FieldType::Bool => "bool",
             FieldType::I8 => "i8",

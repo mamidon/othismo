@@ -10,12 +10,19 @@ export class Record extends Message {
   count: i32
   /** Another message. */
   owner: Person
+  /** Lists, of anything a field can be. */
+  tags: Array<string>
+  grid: Array<Array<i32>>
+  team: Array<Person>
 
-  constructor(name: string, count: i32, owner: Person) {
+  constructor(name: string, count: i32, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>) {
     super()
     this.name = name
     this.count = count
     this.owner = owner
+    this.tags = tags
+    this.grid = grid
+    this.team = team
   }
 
   /** The `Record` in `p`, or null if it holds none. */
@@ -30,8 +37,11 @@ export class Record extends Message {
     w.string("name", this.name)
     w.i32("count", this.count)
     w.doc("owner", this.owner)
+    w.array("tags", __write_list_string(this.tags))
+    w.array("grid", __write_list_list_i32(this.grid))
+    w.array("team", __write_list_Person(this.team))
   }
-  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner"))) }
+  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team"))) }
 }
 registerMessage("Record", (r: Reader): Message => Record.decode(r))
 
@@ -61,6 +71,58 @@ export class Person extends Message {
   static decode(r: Reader): Person { return new Person(r.string("name"), <u8>r.i64("age")) }
 }
 registerMessage("Person", (r: Reader): Message => Person.decode(r))
+
+function __read_list_Person(r: Reader): Array<Person> {
+  const keys = r.keys()
+  const out = new Array<Person>()
+  for (let i = 0; i < keys.length; i++) out.push(Person.decode(r.doc(keys[i])))
+  return out
+}
+
+function __read_list_i32(r: Reader): Array<i32> {
+  const keys = r.keys()
+  const out = new Array<i32>()
+  for (let i = 0; i < keys.length; i++) out.push(r.i32(keys[i]))
+  return out
+}
+
+function __read_list_list_i32(r: Reader): Array<Array<i32>> {
+  const keys = r.keys()
+  const out = new Array<Array<i32>>()
+  for (let i = 0; i < keys.length; i++) out.push(__read_list_i32(r.array(keys[i])))
+  return out
+}
+
+function __read_list_string(r: Reader): Array<string> {
+  const keys = r.keys()
+  const out = new Array<string>()
+  for (let i = 0; i < keys.length; i++) out.push(r.string(keys[i]))
+  return out
+}
+
+function __write_list_Person(v: Array<Person>): Writer {
+  const w = new Writer()
+  for (let i = 0; i < v.length; i++) w.doc(i.toString(), v[i])
+  return w
+}
+
+function __write_list_i32(v: Array<i32>): Writer {
+  const w = new Writer()
+  for (let i = 0; i < v.length; i++) w.i32(i.toString(), v[i])
+  return w
+}
+
+function __write_list_list_i32(v: Array<Array<i32>>): Writer {
+  const w = new Writer()
+  for (let i = 0; i < v.length; i++) w.array(i.toString(), __write_list_i32(v[i]))
+  return w
+}
+
+function __write_list_string(v: Array<string>): Writer {
+  const w = new Writer()
+  for (let i = 0; i < v.length; i++) w.string(i.toString(), v[i])
+  return w
+}
 
 /**
  * Keeps the last `Record` written to it, to read back: a payload of each of

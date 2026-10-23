@@ -16,4 +16,7 @@ write /store/record Record {
   name: "start",
   count: 7,
   owner: { name: "Ada", age: 36 },
+  tags: ["a", "b"],
+  grid: [[1, 2], [], [-3]],
+  team: [{ name: "Bo", age: 1 }],
 }

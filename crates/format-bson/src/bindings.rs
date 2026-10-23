@@ -4,6 +4,7 @@
 use crate::Messages;
 use crate::messages::{FieldType, MessageType};
 use format::Bindings;
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 /// The classes for `types`, each of which `schemas` has, in that order.
@@ -25,15 +26,25 @@ pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bi
         }
     }
     let mut code = String::new();
+    let mut helpers = Helpers::default();
     for name in &all {
         let ty = &schemas.types[name];
         code.push('\n');
-        class(&mut code, ty);
+        class(&mut code, ty, &mut helpers);
+    }
+    for helper in helpers.0.values() {
+        code.push('\n');
+        code.push_str(helper);
     }
     Bindings { imports, code }
 }
 
-fn class(out: &mut String, ty: &MessageType) {
+/// Functions that write and read lists, by name: AssemblyScript has no
+/// closures, so each element type gets its own.
+#[derive(Default)]
+struct Helpers(BTreeMap<String, String>);
+
+fn class(out: &mut String, ty: &MessageType, helpers: &mut Helpers) {
     let name = &ty.name;
     doc(out, "", &ty.doc);
     writeln!(out, "export class {name} extends Message {{").unwrap();
@@ -55,7 +66,7 @@ fn class(out: &mut String, ty: &MessageType) {
     writeln!(out, "    const m = bson.decode(p)\n    return m instanceof {name} ? changetype<{name}>(m) : null\n  }}").unwrap();
     writeln!(out, "  toPayload(): Payload {{ return bson.payload(this) }}\n").unwrap();
     writeln!(out, "  typeName(): string {{ return \"{name}\" }}").unwrap();
-    let writes: Vec<String> = ty.fields.iter().map(|f| write_call(&f.name, &f.ty)).collect();
+    let writes: Vec<String> = ty.fields.iter().map(|f| helpers.write(&format!("\"{}\"", f.name), &format!("this.{}", f.name), &f.ty)).collect();
     match writes.as_slice() {
         [] => out.push_str("  encode(w: Writer): void {}\n"),
         [one] => writeln!(out, "  encode(w: Writer): void {{ {one} }}").unwrap(),
@@ -67,7 +78,7 @@ fn class(out: &mut String, ty: &MessageType) {
             out.push_str("  }\n");
         }
     }
-    let reads: Vec<String> = ty.fields.iter().map(|f| read_call(&f.name, &f.ty)).collect();
+    let reads: Vec<String> = ty.fields.iter().map(|f| helpers.read(&format!("\"{}\"", f.name), &f.ty)).collect();
     writeln!(out, "  static decode(r: Reader): {name} {{ return new {name}({}) }}", reads.join(", ")).unwrap();
     out.push_str("}\n");
     writeln!(out, "registerMessage(\"{name}\", (r: Reader): Message => {name}.decode(r))").unwrap();
@@ -93,13 +104,13 @@ fn doc(out: &mut String, indent: &str, text: &str) {
 fn as_type(t: &FieldType) -> String {
     match t {
         FieldType::Named(n) => n.clone(),
+        FieldType::List(e) => format!("Array<{}>", as_type(e)),
         _ => scalar(t).to_string(),
     }
 }
 
 fn scalar(t: &FieldType) -> &'static str {
     match t {
-        FieldType::Named(_) => unreachable!("not a scalar"),
         FieldType::Bytes => "ArrayBuffer",
         FieldType::String => "string",
         FieldType::Bool => "bool",
@@ -113,36 +124,78 @@ fn scalar(t: &FieldType) -> &'static str {
         FieldType::U64 => "u64",
         FieldType::F32 => "f32",
         FieldType::F64 => "f64",
+        FieldType::Named(_) | FieldType::List(_) => unreachable!("not a scalar"),
     }
 }
 
-/// The `Writer` call for one field, following `wire.rs`'s mapping.
-fn write_call(f: &str, t: &FieldType) -> String {
+/// A name for `t` that can go in an identifier.
+fn mangle(t: &FieldType) -> String {
     match t {
-        FieldType::String => format!("w.string(\"{f}\", this.{f})"),
-        FieldType::Bool => format!("w.bool(\"{f}\", this.{f})"),
-        FieldType::Bytes => format!("w.bytes(\"{f}\", this.{f})"),
-        FieldType::I32 => format!("w.i32(\"{f}\", this.{f})"),
-        FieldType::I8 | FieldType::I16 | FieldType::U8 | FieldType::U16 => format!("w.i32(\"{f}\", <i32>this.{f})"),
-        FieldType::I64 => format!("w.i64(\"{f}\", this.{f})"),
-        FieldType::U32 | FieldType::U64 => format!("w.i64(\"{f}\", <i64>this.{f})"),
-        FieldType::F64 => format!("w.f64(\"{f}\", this.{f})"),
-        FieldType::F32 => format!("w.f64(\"{f}\", <f64>this.{f})"),
-        FieldType::Named(_) => format!("w.doc(\"{f}\", this.{f})"),
+        FieldType::Named(n) => n.clone(),
+        FieldType::List(e) => format!("list_{}", mangle(e)),
+        _ => scalar(t).to_string(),
     }
 }
 
-fn read_call(f: &str, t: &FieldType) -> String {
-    match t {
-        FieldType::String => format!("r.string(\"{f}\")"),
-        FieldType::Bool => format!("r.bool(\"{f}\")"),
-        FieldType::Bytes => format!("r.bytes(\"{f}\")"),
-        FieldType::I32 => format!("r.i32(\"{f}\")"),
-        FieldType::I64 => format!("r.i64(\"{f}\")"),
-        FieldType::F64 => format!("r.f64(\"{f}\")"),
-        FieldType::F32 => format!("<f32>r.f64(\"{f}\")"),
-        FieldType::Named(n) => format!("{n}.decode(r.doc(\"{f}\"))"),
-        other => format!("<{}>r.i64(\"{f}\")", as_type(other)),
+impl Helpers {
+    /// The `Writer` call that writes `value`, of type `t`, as key `key` of
+    /// `w`, following `wire.rs`'s mapping.
+    fn write(&mut self, key: &str, value: &str, t: &FieldType) -> String {
+        match t {
+            FieldType::String => format!("w.string({key}, {value})"),
+            FieldType::Bool => format!("w.bool({key}, {value})"),
+            FieldType::Bytes => format!("w.bytes({key}, {value})"),
+            FieldType::I32 => format!("w.i32({key}, {value})"),
+            FieldType::I8 | FieldType::I16 | FieldType::U8 | FieldType::U16 => format!("w.i32({key}, <i32>{value})"),
+            FieldType::I64 => format!("w.i64({key}, {value})"),
+            FieldType::U32 | FieldType::U64 => format!("w.i64({key}, <i64>{value})"),
+            FieldType::F64 => format!("w.f64({key}, {value})"),
+            FieldType::F32 => format!("w.f64({key}, <f64>{value})"),
+            FieldType::Named(_) => format!("w.doc({key}, {value})"),
+            FieldType::List(e) => {
+                let f = format!("__write_{}", mangle(t));
+                if !self.0.contains_key(&f) {
+                    self.0.insert(f.clone(), String::new());
+                    let each = self.write("i.toString()", "v[i]", e);
+                    let body = format!(
+                        "function {f}(v: {}): Writer {{\n  const w = new Writer()\n  for (let i = 0; i < v.length; i++) {each}\n  return w\n}}\n",
+                        as_type(t)
+                    );
+                    self.0.insert(f.clone(), body);
+                }
+                format!("w.array({key}, {f}({value}))")
+            }
+        }
+    }
+
+    /// The expression that reads key `key` of `r` as type `t`.
+    fn read(&mut self, key: &str, t: &FieldType) -> String {
+        match t {
+            FieldType::String => format!("r.string({key})"),
+            FieldType::Bool => format!("r.bool({key})"),
+            FieldType::Bytes => format!("r.bytes({key})"),
+            FieldType::I32 => format!("r.i32({key})"),
+            FieldType::I64 => format!("r.i64({key})"),
+            FieldType::F64 => format!("r.f64({key})"),
+            FieldType::F32 => format!("<f32>r.f64({key})"),
+            FieldType::I8 | FieldType::I16 | FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 => {
+                format!("<{}>r.i64({key})", scalar(t))
+            }
+            FieldType::Named(n) => format!("{n}.decode(r.doc({key}))"),
+            FieldType::List(e) => {
+                let f = format!("__read_{}", mangle(t));
+                if !self.0.contains_key(&f) {
+                    self.0.insert(f.clone(), String::new());
+                    let each = self.read("keys[i]", e);
+                    let body = format!(
+                        "function {f}(r: Reader): {ty} {{\n  const keys = r.keys()\n  const out = new {ty}()\n  for (let i = 0; i < keys.length; i++) out.push({each})\n  return out\n}}\n",
+                        ty = as_type(t)
+                    );
+                    self.0.insert(f.clone(), body);
+                }
+                format!("{f}(r.array({key}))")
+            }
+        }
     }
 }
 
@@ -166,6 +219,7 @@ mod tests {
             message Odd { a: u8, b: f32, c: u64, d: bytes }
             message Ping {}
             message Nested { greeting: Greeting }
+            message Lists { names: [string], grid: [[u8]], people: [Greeting] }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
@@ -204,6 +258,14 @@ registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
         assert!(out.contains("new Odd(<u8>r.i64(\"a\"), <f32>r.f64(\"b\"), <u64>r.i64(\"c\"), r.bytes(\"d\"))"), "{out}");
         assert!(out.contains("w.doc(\"greeting\", this.greeting)"), "{out}");
         assert!(out.contains("new Nested(Greeting.decode(r.doc(\"greeting\")))"), "{out}");
+        assert!(out.contains("  names: Array<string>\n  grid: Array<Array<u8>>\n"), "{out}");
+        assert!(out.contains("w.array(\"grid\", __write_list_list_u8(this.grid))"), "{out}");
+        assert!(out.contains("new Lists(__read_list_string(r.array(\"names\")), __read_list_list_u8(r.array(\"grid\")), __read_list_Greeting(r.array(\"people\")))"), "{out}");
+        let write = "function __write_list_list_u8(v: Array<Array<u8>>): Writer {\n  const w = new Writer()\n  for (let i = 0; i < v.length; i++) w.array(i.toString(), __write_list_u8(v[i]))\n  return w\n}\n";
+        assert!(out.contains(write), "{out}");
+        let read = "function __read_list_list_u8(r: Reader): Array<Array<u8>> {\n  const keys = r.keys()\n  const out = new Array<Array<u8>>()\n  for (let i = 0; i < keys.length; i++) out.push(__read_list_u8(r.array(keys[i])))\n  return out\n}\n";
+        assert!(out.contains(read), "{out}");
+        assert!(out.contains("out.push(<u8>r.i64(keys[i]))") && out.contains("out.push(Greeting.decode(r.doc(keys[i])))"), "{out}");
         let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;
         assert!(only.find("class Nested") < only.find("class Greeting"), "the types a field names come with it: {only}");
         assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");

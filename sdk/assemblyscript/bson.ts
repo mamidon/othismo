@@ -83,6 +83,7 @@ export namespace bson {
 const BSON_DOUBLE: u8 = 0x01;
 const BSON_STRING: u8 = 0x02;
 const BSON_DOCUMENT: u8 = 0x03;
+const BSON_ARRAY: u8 = 0x04;
 const BSON_BINARY: u8 = 0x05;
 const BSON_BOOL: u8 = 0x08;
 const BSON_INT32: u8 = 0x10;
@@ -137,6 +138,11 @@ export class Writer {
     const sub = new Writer();
     m.encode(sub);
     this.element(BSON_DOCUMENT, name, sub.finish());
+  }
+
+  /** For list fields: `items`, whose keys are "0", "1", ..., as an array. */
+  array(name: string, items: Writer): void {
+    this.element(BSON_ARRAY, name, items.finish());
   }
 
   /** An element of any BSON type, its value's bytes as BSON lays them out. */
@@ -204,7 +210,7 @@ function size(tag: u8, p: usize, end: usize, name: string): usize {
     case 0x13: return 16; // decimal128
     case BSON_STRING: case 0x0D: case 0x0E: return 4 + <usize>load<u32>(p); // and code, symbol
     case BSON_BINARY: return 5 + <usize>load<u32>(p);
-    case BSON_DOCUMENT: case 0x04: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
+    case BSON_DOCUMENT: case BSON_ARRAY: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
     case 0x0C: return 4 + <usize>load<u32>(p) + 12; // db pointer
     case 0x0B: { // regex: two cstrings
       let q = p;
@@ -232,6 +238,7 @@ class Field {
  */
 export class Reader {
   private fields: Map<string, Field> = new Map<string, Field>();
+  private names: string[] = [];
 
   constructor(private buf: ArrayBuffer) {
     const base = changetype<usize>(buf);
@@ -246,6 +253,7 @@ export class Reader {
       const name = String.UTF8.decodeUnsafe(p, q - p);
       p = q + 1;
       this.fields.set(name, new Field(tag, p));
+      this.names.push(name);
       p += size(tag, p, end, name);
     }
   }
@@ -288,6 +296,16 @@ export class Reader {
   /** A message field's fields, for its type's `decode`. */
   doc(name: string): Reader {
     return new Reader(this.embedded(this.field(name, BSON_DOCUMENT)));
+  }
+
+  /** A list field's items, each under its index: "0", "1", .... */
+  array(name: string): Reader {
+    return new Reader(this.embedded(this.field(name, BSON_ARRAY)));
+  }
+
+  /** Every field's name, in order. */
+  keys(): string[] {
+    return this.names.slice();
   }
 
   /** A copy of an embedded document. */

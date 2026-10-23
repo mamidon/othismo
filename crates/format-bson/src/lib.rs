@@ -213,7 +213,7 @@ fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
             _ => return Err(bad()),
         },
         FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
-        FieldType::Named(_) => {
+        FieldType::Named(_) | FieldType::List(_) => {
             let mut p = Parser::new(text, false).map_err(|e| e.to_string())?;
             let v = p.value().map_err(|e| e.to_string())?;
             if *p.peek() != syntax::image_definition::Tok::Eof {
@@ -238,6 +238,7 @@ pub fn json_value(v: &B) -> String {
             Ok(s) => json_string(s),
             Err(_) => format!("<{} bytes>", b.bytes.len()),
         },
+        B::Array(items) => format!("[{}]", items.iter().map(json_value).collect::<Vec<_>>().join(", ")),
         B::Document(d) => {
             let fields: Vec<String> = d.iter().map(|(k, v)| format!("{}: {}", json_string(k), json_value(v))).collect();
             format!("{{{}}}", fields.join(", "))
@@ -303,6 +304,10 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
                 return Err(format!("`{at}` is missing field `{}`", missing.name));
             }
             B::Document(doc)
+        }
+        (FieldType::List(e), Value::List(items)) => {
+            let items = items.iter().enumerate().map(|(i, v)| to_bson(schemas, e, v, &format!("{at}[{i}]")));
+            B::Array(items.collect::<std::result::Result<_, _>>()?)
         }
         (FieldType::Named(n), v) => return Err(format!("`{at}` is a `{n}`, written `{{ <field>: <value>, ... }}`, but was given {v}")),
         (t, v) => return Err(format!("`{at}` is {t}, but was given {v}")),
@@ -376,6 +381,25 @@ mod tests {
         let schemas = Bson::schemas(&m);
         assert_eq!(Bson.literal(&schemas, "Record", "owner", r#"{ name: "Al", age: 3 }"#).map(|v| v.to_string()), Ok(r#"{ name: "Al", age: 3 }"#.into()));
         assert!(Bson.literal(&schemas, "Record", "owner", "{} {}").unwrap_err().contains("more than one value"));
+    }
+
+    #[test]
+    fn fields_may_be_lists() {
+        let m = messages(&format!("{NESTED} message Lists {{ names: [string], grid: [[u8]], people: [Person] }}"));
+        assert_eq!(m.types["Lists"].fields[1].ty.to_string(), "[[u8]]");
+        assert_eq!(m.closure("Lists"), ["Lists", "Person"]);
+        let bytes = Bson::encode_message(&m, "Lists", &value(r#"{ names: ["a", "b"], grid: [[1], []], people: [{ name: "Al", age: 3 }] }"#)).unwrap();
+        let shown = Bson.show(&bytes).unwrap();
+        assert_eq!(shown[0].1, r#"["a", "b"]"#);
+        assert_eq!(shown[1].1, "[[1], []]");
+        assert_eq!(shown[2].1, r#"[{"name": "Al", "age": 3}]"#);
+        let err = |src: &str| Bson::encode_message(&m, "Lists", &value(src)).unwrap_err();
+        assert!(err(r#"{ names: "a", grid: [], people: [] }"#).contains("`Lists.names` is [string], but was given \"a\""));
+        assert!(err(r#"{ names: [], grid: [[1, 256]], people: [] }"#).contains("256 does not fit in u8"));
+        assert!(err(r#"{ names: [], grid: [], people: [{ name: "Al" }] }"#).contains("`Lists.people[0]` is missing field `age`"));
+        assert_eq!(Bson.literal(&Bson::schemas(&m), "Lists", "names", r#"["x"]"#), Ok(Value::List(vec![Value::Str("x".into())])));
+        let e = format!("{:#}", Bson::parse_messages("message A { x: [Nope] }", &mut |p| bail!("no {p} here")).unwrap_err());
+        assert!(e.contains("1:17: `Nope` is not a field type"), "{e}");
     }
 
     #[test]

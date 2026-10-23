@@ -6,7 +6,12 @@ export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
 /** Every field of `r`, as text, so that two records can be compared. */
 function describe(r: Record): string {
-  return "name=" + r.name + " count=" + r.count.toString() + " owner=" + person(r.owner)
+  let grid: string[] = []
+  for (let i = 0; i < r.grid.length; i++) grid.push("[" + r.grid[i].join(",") + "]")
+  let team: string[] = []
+  for (let i = 0; i < r.team.length; i++) team.push(person(r.team[i]))
+  return "name=" + r.name + " count=" + r.count.toString() + " owner=" + person(r.owner) +
+    " tags=[" + r.tags.join(",") + "] grid=[" + grid.join(",") + "] team=[" + team.join(",") + "]"
 }
 
 function person(p: Person): string {
@@ -14,11 +19,11 @@ function person(p: Person): string {
 }
 
 /** The record the image writes at startup, described. */
-const STARTUP = "name=start count=7 owner={Ada 36}"
+const STARTUP = "name=start count=7 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}]"
 
 /** A record with something in every field. */
 function sample(): Record {
-  return new Record("sample", -3, new Person("Grace", 85))
+  return new Record("sample", -3, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)])
 }
 
 /** "" if `got` is `want`, or how it isn't. */

@@ -13,6 +13,7 @@
 //! | f32, f64                    | double  |
 //! | bytes                       | binary (generic subtype) |
 //! | a message type, `Person`    | document, without `$type` |
+//! | `[T]`, a list               | array |
 
 use crate::messages::FieldType;
 use anyhow::{Context, Result, bail};
