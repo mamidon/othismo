@@ -8,8 +8,6 @@ use othismo::ns::{Status, Verb};
 use othismo::payload::Payload;
 use othismo::runtime::Options;
 
-const MESSAGES: &str = "export message Ping {}\n";
-
 /// What every fixture image imports from env.
 const ENV: &str = "import { Console, Listener, Files, PackedFiles, MemoryConsole, MemoryListener } from env";
 
@@ -354,7 +352,7 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages.oth\"\n{ENV}\nneeds /cons Console\n{extra}\n");
+    let mut img = format!("{ENV}\nneeds /cons Console\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
         img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {} }}\n", bound(members)));
@@ -369,7 +367,7 @@ fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, head
         };
         f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &iface));
     }
-    f.file("messages.oth", MESSAGES).file("test.oth", img);
+    f.file("test.oth", img);
     f
 }
 
@@ -384,7 +382,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  write /a Ping  write /a/again Ping");
+    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  write /a \"ping\"  write /a/again \"ping\"");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -434,7 +432,7 @@ fn only_the_image_makes_operator_requests() {
     let a_header = "object A { needs /out { / write */* }  needs /raw/** { /** write */* } }";
     let b_header = "object B { needs /out { / write */* }  serves { /y operator write */* } }";
     let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")];
-    let f = fixture_with("operator", &objects, "mount /b b  write /b/y Ping", &[("A", a_header), ("B", b_header)]);
+    let f = fixture_with("operator", &objects, "mount /b b  write /b/y \"ping\"", &[("A", a_header), ("B", b_header)]);
     assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's write, never a's");
     let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
     assert_eq!(off, "b served\nforbidden\n", "the rule holds with checks off, as read-only mounts do");
@@ -609,7 +607,7 @@ fn packed_files_answer_like_files() {
 #[test]
 fn unknown_request_ids_stop_the_run() {
     let a = Script { serve: Some(Steps::Each(vec![Act::ReplyTo(7)])), ..Default::default() };
-    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a Ping");
+    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a \"ping\"");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
 }

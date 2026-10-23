@@ -47,6 +47,13 @@ pub fn module(wat: &str, iface: &str) -> Vec<u8> {
     othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap()
 }
 
+/// [`module`], with the message types `messages` declares embedded too.
+pub fn module_with(wat: &str, iface: &str, messages: &str) -> Vec<u8> {
+    use othismo::format::{Bson, Format};
+    let schemas = Bson::parse(messages, &mut |_| anyhow::bail!("no imports here")).unwrap();
+    othismo::iface::embed_schemas::<Bson>(&module(wat, iface), &schemas).unwrap()
+}
+
 /// A scratch directory holding an image, its messages and its scripts.
 pub struct Fixture {
     pub dir: PathBuf,

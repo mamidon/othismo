@@ -11,7 +11,8 @@
 //!
 //! Blobs are named by the SHA-256 of their contents and stored once.
 
-use crate::check::{self, Arg, Kind, Program, SlotKind};
+use crate::check::{self, Kind, Program};
+use crate::wire::{self, Message};
 use crate::render;
 use crate::tree::{Node, Tree};
 use anyhow::{Context, Result, bail};
@@ -22,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x05";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x06";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.
@@ -195,26 +196,21 @@ pub fn describe(pack: &Pack) -> String {
     out
 }
 
-/// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a message,
-/// each field's value and where it came from.
+/// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a structured
+/// slot, each field's value and where it came from.
 fn describe_slot(slot: &check::Slot) -> String {
-    let ty = match &slot.kind {
-        SlotKind::Message { type_name, .. } => type_name.as_str(),
-        SlotKind::Payload { ty, .. } => ty.as_str(),
-    };
+    let ty = &slot.ty;
     let origin = |f: &str| slot.origins.iter().find(|(name, _)| name == f).map(|(_, o)| o.as_str()).unwrap_or("?");
-    match &slot.value {
-        None => format!("slot {} : {ty} (unbound)", slot.name),
-        Some(Arg::Message(m)) => {
-            let fields: Vec<String> =
-                m.fields.iter().map(|(f, v)| format!("{f}: {} ({})", render::json_value(v), origin(f))).collect();
-            format!("slot {} : {ty} {{ {} }}", slot.name, fields.join(", "))
-        }
-        Some(value) => {
-            let text = value.text().unwrap_or_default();
-            format!("slot {} : {ty} = {} ({})", slot.name, render::json_value(&bson::Bson::String(text)), origin(""))
-        }
+    let Some(value) = &slot.value else { return format!("slot {} : {ty} (unbound)", slot.name) };
+    if slot.structured() {
+        let fields = value.payload().ok().and_then(|p| Message::decode(&p.bytes).ok());
+        let Some(m) = fields else { return format!("slot {} : {ty} (unreadable)", slot.name) };
+        let mut shown = vec![format!("{}: {} ({})", wire::TYPE_KEY, render::json_value(&bson::Bson::String(m.type_name.clone())), origin(wire::TYPE_KEY))];
+        shown.extend(m.fields.iter().map(|(f, v)| format!("{f}: {} ({})", render::json_value(v), origin(f))));
+        return format!("slot {} : {ty} {{ {} }}", slot.name, shown.join(", "));
     }
+    let text = value.text().unwrap_or_default();
+    format!("slot {} : {ty} = {} ({})", slot.name, render::json_value(&bson::Bson::String(text)), origin(""))
 }
 
 fn human_size(bytes: u64) -> String {

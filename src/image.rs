@@ -7,7 +7,7 @@ use crate::ns::Verb;
 use anyhow::{Result, bail};
 
 /// A source position, 1-based.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pos {
     pub line: usize,
     pub col: usize,
@@ -83,23 +83,17 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// `require <name> : <Type> [{ defaults }]` or `require <name> :
-/// <content type> [= "<default>"]`: a slot the host fills in.
+/// `require <name> : <content type> [= <default>]`: a value whoever
+/// instantiates the image gives it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Require {
     pub name: Ident,
-    pub slot: SlotDecl,
+    pub ty: Ident,
+    /// Text, or a structured literal, which may leave some fields out.
+    pub default: Option<Literal>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SlotDecl {
-    /// A message: its type and any default fields, which need not be all of them.
-    Message(Body),
-    /// A payload of a content type, such as `text/plain`, given as a string.
-    Payload { ty: Ident, default: Option<String> },
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Ident {
     pub name: String,
     pub pos: Pos,
@@ -145,13 +139,18 @@ pub struct Request {
     pub body: Option<Literal>,
 }
 
-/// What a startup request carries.
+/// What a startup request carries, or a slot is given.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
-    /// A message literal, or a slot's name.
-    Message(Body),
     /// `"text"`, a `text/plain` payload, or `<content type> "text"`.
     Text { ty: Option<Ident>, text: String, pos: Pos },
+    /// `<content type> { ... }`, encoded by that content type's format, or
+    /// `{ ... }` alone, where the type is a slot's.
+    Tree { ty: Option<Ident>, value: Value, pos: Pos },
+    /// `<content type> from "<file>"`: the file's bytes, relative to the image.
+    File { ty: Ident, path: String, pos: Pos },
+    /// A slot's name.
+    Name(Ident),
 }
 
 /// `include "<source>" [at <path>]`
@@ -170,20 +169,36 @@ pub struct Path {
     pub pos: Pos,
 }
 
-/// A typed message literal: `T` or `T { field: value, ... }`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Body {
-    pub type_name: Ident,
-    /// `None` for a unit message (`T` alone).
-    pub fields: Option<Vec<(Ident, Value)>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+/// A value in a structured literal: one syntax for every format.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Str(String),
     Int(i128),
     Float(f64),
     Bool(bool),
+    /// `{ name: value, ... }`
+    Object(Vec<(Ident, Value)>),
+    /// `[ value, ... ]`
+    List(Vec<Value>),
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Value::Str(s) => write!(f, "{s:?}"),
+            Value::Int(i) => write!(f, "{i}"),
+            Value::Float(x) => write!(f, "{x:?}"),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Object(fields) => {
+                let fields: Vec<String> = fields.iter().map(|(k, v)| format!("{}: {v}", k.name)).collect();
+                write!(f, "{{ {} }}", fields.join(", "))
+            }
+            Value::List(items) => {
+                let items: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                write!(f, "[{}]", items.join(", "))
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +214,8 @@ pub(crate) enum Tok {
     Float(f64),
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Comma,
     Colon,
     /// `->`, before what a request is answered with.
@@ -224,6 +241,8 @@ impl std::fmt::Display for Tok {
             Tok::Float(x) => write!(f, "number {x}"),
             Tok::LBrace => write!(f, "`{{`"),
             Tok::RBrace => write!(f, "`}}`"),
+            Tok::LBracket => write!(f, "`[`"),
+            Tok::RBracket => write!(f, "`]`"),
             Tok::Comma => write!(f, "`,`"),
             Tok::Colon => write!(f, "`:`"),
             Tok::Arrow => write!(f, "`->`"),
@@ -299,6 +318,9 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
             push_type(&mut toks, chars[start..i].iter().collect(), pos, Pos { line, col });
         } else if c == '*' {
             toks.push((Tok::Star, pos));
+            bump!();
+        } else if c == '[' || c == ']' {
+            toks.push((if c == '[' { Tok::LBracket } else { Tok::RBracket }, pos));
             bump!();
         } else if c == '=' {
             toks.push((Tok::Eq, pos));
@@ -485,7 +507,6 @@ impl Parser {
     fn file(&mut self) -> Result<Image> {
         let header = iface::File {
             imports: vec![],
-            messages: vec![],
             protocols: vec![],
             traits: vec![],
             objects: vec![],
@@ -504,6 +525,10 @@ impl Parser {
             }
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
+                Tok::Ident(kw) if kw == "message" || (kw == "export" && self.toks.get(self.i + 1).is_some_and(|(t, _)| *t == Tok::Ident("message".into()))) => bail!(
+                    "{pos}: message types are declared in a schema file, in the BSON format's own language: \
+                     `<Module>.messages`, beside the module's header"
+                ),
                 Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => bail!(
                     "{pos}: an image is no longer imported whole: import it by a name, `import Site from \"...\"`, \
                      and make an instance of it, `instance site : Site {{ ... }}`"
@@ -540,7 +565,7 @@ impl Parser {
                         image.header.exports.push(name);
                     }
                 }
-                Tok::Ident(kw) if ["message", "protocol", "trait", "object"].contains(&kw.as_str()) => {
+                Tok::Ident(kw) if ["protocol", "trait", "object"].contains(&kw.as_str()) => {
                     self.declaration(&mut image.header, doc, pos)?;
                 }
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
@@ -563,15 +588,9 @@ impl Parser {
         }
     }
 
-    /// A message type, protocol, trait or object, added to `header`; its name.
+    /// A protocol, trait or object, added to `header`; its name.
     fn declaration(&mut self, header: &mut iface::File, doc: String, pos: Pos) -> Result<Ident> {
         Ok(match self.peek().clone() {
-            Tok::Ident(kw) if kw == "message" => {
-                let m = self.message(doc)?;
-                let name = m.name.clone();
-                header.messages.push(m);
-                name
-            }
             Tok::Ident(kw) if kw == "protocol" => {
                 let p = self.protocol(doc)?;
                 let name = p.name.clone();
@@ -590,7 +609,7 @@ impl Parser {
                 header.objects.push(o);
                 name
             }
-            other => bail!("{pos}: `export` comes before a message, protocol, trait or object, or `{{ names }}`, found {other}"),
+            other => bail!("{pos}: `export` comes before a protocol, trait or object, or `{{ names }}`, found {other}"),
         })
     }
 
@@ -606,27 +625,99 @@ impl Parser {
         let path = self.path()?;
         let body = match self.peek() {
             Tok::Ident(w) if DECLS.contains(&w.as_str()) || Verb::from_keyword(w).is_some() => None,
-            Tok::Ident(_) | Tok::LBrace | Tok::Str(_) | Tok::Type(_) => Some(self.literal()?),
+            Tok::Ident(_) | Tok::LBrace | Tok::LBracket | Tok::Str(_) | Tok::Type(_) => Some(self.literal()?),
             _ => None,
         };
         Ok(Request { verb, verb_pos, path, body })
     }
 
-    /// A message literal or a slot's name, `"text"`, or `<content type> "text"`.
-    fn literal(&mut self) -> Result<Literal> {
+    /// `"text"`, `<content type> "text"`, `<content type> { ... }`,
+    /// `<content type> from "<file>"`, `{ ... }`, or a slot's name.
+    pub(crate) fn literal(&mut self) -> Result<Literal> {
+        let pos = self.pos();
         Ok(match self.peek().clone() {
             Tok::Str(text) => {
-                let (_, pos) = self.next();
+                self.next();
                 Literal::Text { ty: None, text, pos }
             }
+            Tok::LBrace | Tok::LBracket => Literal::Tree { ty: None, value: self.value()?, pos },
             Tok::Type(ty) => {
-                let (_, pos) = self.next();
-                match self.next() {
-                    (Tok::Str(text), _) => Literal::Text { ty: Some(Ident { name: ty, pos }), text, pos },
-                    (other, pos) => bail!("{pos}: expected a quoted string after `{ty}`, found {other}"),
+                self.next();
+                let ty = Ident { name: ty, pos };
+                match self.peek().clone() {
+                    Tok::Str(text) => {
+                        self.next();
+                        Literal::Text { ty: Some(ty), text, pos }
+                    }
+                    Tok::LBrace | Tok::LBracket => Literal::Tree { ty: Some(ty), value: self.value()?, pos },
+                    Tok::Ident(kw) if kw == "from" => {
+                        self.next();
+                        match self.next() {
+                            (Tok::Str(path), _) => Literal::File { ty, path, pos },
+                            (other, pos) => bail!("{pos}: expected the file to read, quoted, found {other}"),
+                        }
+                    }
+                    other => bail!("{}: expected a quoted string, `{{ ... }}` or `from \"<file>\"` after `{}`, found {other}", self.pos(), ty.name),
                 }
             }
-            _ => Literal::Message(self.body()?),
+            Tok::Ident(_) => {
+                let name = self.ident("a slot's name", false)?;
+                if matches!(self.peek(), Tok::LBrace) {
+                    bail!(
+                        "{pos}: `{} {{ ... }}` names a message type; write the payload's content type, and the type inside it: \
+                         `application/bson {{ $type: \"{}\", ... }}`",
+                        name.name,
+                        name.name
+                    );
+                }
+                Literal::Name(name)
+            }
+            other => bail!("{pos}: expected a payload, found {other}"),
+        })
+    }
+
+    /// A value: a string, a number, `true`, `false`, `{ name: value, ... }`
+    /// or `[ value, ... ]`.
+    pub(crate) fn value(&mut self) -> Result<Value> {
+        Ok(match self.next() {
+            (Tok::Str(s), _) => Value::Str(s),
+            (Tok::Int(i), _) => Value::Int(i),
+            (Tok::Float(x), _) => Value::Float(x),
+            (Tok::Ident(s), _) if s == "true" => Value::Bool(true),
+            (Tok::Ident(s), _) if s == "false" => Value::Bool(false),
+            (Tok::LBrace, _) => {
+                let mut fields: Vec<(Ident, Value)> = vec![];
+                while *self.peek() != Tok::RBrace {
+                    let name = match self.next() {
+                        (Tok::Ident(name), pos) => Ident { name, pos },
+                        (Tok::Str(name), pos) => Ident { name, pos },
+                        (other, pos) => bail!("{pos}: expected a field's name, found {other}"),
+                    };
+                    self.expect(Tok::Colon)?;
+                    fields.push((name, self.value()?));
+                    if *self.peek() == Tok::Comma {
+                        self.next();
+                    } else if *self.peek() != Tok::RBrace {
+                        bail!("{}: expected `,` or `}}`, found {}", self.pos(), self.peek());
+                    }
+                }
+                self.next();
+                Value::Object(fields)
+            }
+            (Tok::LBracket, _) => {
+                let mut items = vec![];
+                while *self.peek() != Tok::RBracket {
+                    items.push(self.value()?);
+                    if *self.peek() == Tok::Comma {
+                        self.next();
+                    } else if *self.peek() != Tok::RBracket {
+                        bail!("{}: expected `,` or `]`, found {}", self.pos(), self.peek());
+                    }
+                }
+                self.next();
+                Value::List(items)
+            }
+            (other, pos) => bail!("{pos}: expected a value, found {other}"),
         })
     }
 
@@ -683,17 +774,20 @@ impl Parser {
         self.expect_kw("require")?;
         let name = self.ident("slot name", false)?;
         self.expect(Tok::Colon)?;
-        let Tok::Type(ty) = self.peek().clone() else { return Ok(Require { name, slot: SlotDecl::Message(self.body()?) }) };
-        let (_, pos) = self.next();
+        let ty = match self.next() {
+            (Tok::Type(ty), pos) => Ident { name: ty, pos },
+            (Tok::Ident(t), pos) => bail!(
+                "{pos}: a slot is typed by a content type: `require {} : application/bson = {{ $type: \"{t}\", ... }}`",
+                name.name
+            ),
+            (other, pos) => bail!("{pos}: expected the slot's content type, found {other}"),
+        };
         let mut default = None;
         if *self.peek() == Tok::Eq {
             self.next();
-            match self.next() {
-                (Tok::Str(s), _) => default = Some(s),
-                (other, pos) => bail!("{pos}: expected the slot's default, a quoted string, found {other}"),
-            }
+            default = Some(self.literal()?);
         }
-        Ok(Require { name, slot: SlotDecl::Payload { ty: Ident { name: ty, pos }, default } })
+        Ok(Require { name, ty, default })
     }
 
     fn instance(&mut self) -> Result<Instance> {
@@ -768,59 +862,19 @@ impl Parser {
         Ok(Mount { at, target, read_only })
     }
 
-    fn body(&mut self) -> Result<Body> {
-        if *self.peek() == Tok::LBrace {
-            bail!("{}: anonymous messages are not supported; write `TypeName {{ ... }}`", self.pos());
-        }
-        let type_name = self.ident("message type", false)?;
-        if *self.peek() != Tok::LBrace {
-            return Ok(Body { type_name, fields: None });
-        }
-        Ok(Body { type_name, fields: Some(self.fields()?) })
-    }
-
-    /// `{ field: value, ... }`
-    fn fields(&mut self) -> Result<Vec<(Ident, Value)>> {
-        self.expect(Tok::LBrace)?;
-        let mut fields = vec![];
-        while *self.peek() != Tok::RBrace {
-            let field = self.ident("field name", false)?;
-            self.expect(Tok::Colon)?;
-            let value = match self.next() {
-                (Tok::Str(s), _) => Value::Str(s),
-                (Tok::Int(i), _) => Value::Int(i),
-                (Tok::Float(x), _) => Value::Float(x),
-                (Tok::Ident(s), _) if s == "true" => Value::Bool(true),
-                (Tok::Ident(s), _) if s == "false" => Value::Bool(false),
-                (other, pos) => bail!("{pos}: expected a value, found {other}"),
-            };
-            fields.push((field, value));
-            if *self.peek() == Tok::Comma {
-                self.next();
-            } else if *self.peek() != Tok::RBrace {
-                bail!("{}: expected `,` or `}}`, found {}", self.pos(), self.peek());
-            }
-        }
-        self.next();
-        Ok(fields)
-    }
-
-    /// A value file: `slot { field: value, ... }` or `slot = "text"`, any
+    /// A value file: `slot = "text"` or `slot = { field: value, ... }`, any
     /// number of times.
     fn values(&mut self) -> Result<Vec<SlotValues>> {
         let mut out = vec![];
         while *self.peek() != Tok::Eof {
             let slot = self.ident("slot name", false)?;
-            let value = if *self.peek() == Tok::Eq {
-                self.next();
-                match self.next() {
-                    (Tok::Str(s), pos) => SlotValue::Text(s, pos),
-                    (other, pos) => bail!("{pos}: expected a quoted string, found {other}"),
-                }
-            } else {
-                SlotValue::Fields(self.fields()?)
+            self.expect(Tok::Eq)?;
+            let pos = self.pos();
+            let value = match self.peek() {
+                Tok::Str(_) | Tok::LBrace | Tok::LBracket => self.value()?,
+                other => bail!("{pos}: expected a quoted string or `{{ ... }}`, found {other}"),
             };
-            out.push(SlotValues { slot, value });
+            out.push(SlotValues { slot, value, pos });
         }
         Ok(out)
     }
@@ -830,23 +884,16 @@ pub fn parse(src: &str) -> Result<Image> {
     Parser::new(src, true)?.file()
 }
 
-/// One slot's values in a value file.
+/// One slot's value in a value file: text, or some of a structured one's fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlotValues {
     pub slot: Ident,
-    pub value: SlotValue,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SlotValue {
-    /// `slot { field: value, ... }`, for a message.
-    Fields(Vec<(Ident, Value)>),
-    /// `slot = "text"`, for a payload.
-    Text(String, Pos),
+    pub value: Value,
+    pub pos: Pos,
 }
 
 /// Parses a value file, which gives slots their values in the image's own
-/// syntax: `listen = "0.0.0.0:80"`, `db { port: 5432 }`.
+/// syntax: `listen = "0.0.0.0:80"`, `db = { port: 5432 }`.
 pub fn parse_values(src: &str) -> Result<Vec<SlotValues>> {
     Parser::new(src, false)?.values()
 }
@@ -863,18 +910,18 @@ mod tests {
     fn parses_full_syntax() {
         let img = parse(
             r#"
-            import { Greeting, Ping as Pong } from "./messages.oth"   # trailing comment
+            import { Greeting, Ping as Pong } from "./shapes.oth"   # trailing comment
             import { Tick } from "./other.oth"
 
             instance cons : Console
             instance net : Listener
-            write /net Listen { address: "127.0.0.1:0" }
+            write /net "127.0.0.1:0"
             instance echo : Echo {
               mount /dev/cons cons
               mount /net/tcp net readonly
             }
-            write /echo/greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
-            create /echo Ping
+            write /echo/greeting application/bson { $type: "Greeting", prefix: "hi \"there\"", n: -3, x: 1.5, ok: true, l: [1, { a: 2 }] }
+            create /echo pinged
             remove /echo/old
             watch /echo
             "#,
@@ -884,7 +931,7 @@ mod tests {
         let imports = &img.header.imports;
         assert_eq!(imports.len(), 2);
         assert_eq!(names(&imports[0].names), ["Greeting", "Ping as Pong"]);
-        assert_eq!(imports[0].from, Source::Path("./messages.oth".into()));
+        assert_eq!(imports[0].from, Source::Path("./shapes.oth".into()));
 
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].type_name.name, "Console");
@@ -895,20 +942,19 @@ mod tests {
         let reqs = &img.requests;
         let verbs: Vec<_> = reqs.iter().map(|r| r.verb).collect();
         assert_eq!(verbs, [Verb::Write, Verb::Write, Verb::Create, Verb::Remove, Verb::Watch]);
-        let msg = |r: &Request| match r.body.as_ref().unwrap() {
-            Literal::Message(b) => b.clone(),
-            other => panic!("{other:?}"),
-        };
         assert_eq!(reqs[0].path.path, "/net");
-        assert_eq!(msg(&reqs[0]).type_name.name, "Listen");
+        assert!(matches!(&reqs[0].body, Some(Literal::Text { ty: None, text, .. }) if text == "127.0.0.1:0"));
         assert_eq!(reqs[1].path.path, "/echo/greeting");
-        let f = msg(&reqs[1]).fields.unwrap();
-        assert_eq!(f[0].1, Value::Str("hi \"there\"".into()));
-        assert_eq!(f[1].1, Value::Int(-3));
-        assert_eq!(f[2].1, Value::Float(1.5));
-        assert_eq!(f[3].1, Value::Bool(true));
+        let Some(Literal::Tree { ty: Some(ty), value: Value::Object(f), .. }) = &reqs[1].body else { panic!("{:?}", reqs[1].body) };
+        assert_eq!(ty.name, "application/bson");
+        assert_eq!((f[0].0.name.as_str(), &f[0].1), ("$type", &Value::Str("Greeting".into())));
+        assert_eq!(f[1].1, Value::Str("hi \"there\"".into()));
+        assert_eq!(f[2].1, Value::Int(-3));
+        assert_eq!(f[3].1, Value::Float(1.5));
+        assert_eq!(f[4].1, Value::Bool(true));
+        assert_eq!(f[5].1.to_string(), "[1, { a: 2 }]");
         assert_eq!(reqs[2].path.path, "/echo");
-        assert_eq!(msg(&reqs[2]).fields, None);
+        assert!(matches!(&reqs[2].body, Some(Literal::Name(n)) if n.name == "pinged"), "a slot");
         assert_eq!(reqs[3].body, None, "a verb ends a body-less request");
         assert_eq!(reqs[4].body, None);
     }
@@ -921,12 +967,11 @@ mod tests {
         let Some(Literal::Text { ty: Some(ty), text, .. }) = &bodies[1] else { panic!("{:?}", bodies[1]) };
         assert_eq!((ty.name.as_str(), text.as_str()), ("text/html", "<p>"));
         assert_eq!(bodies[2], None);
-        assert!(parse("write /a text/plain 3").unwrap_err().to_string().contains("expected a quoted string after `text/plain`"));
     }
 
     #[test]
     fn requests_can_come_anywhere() {
-        let img = parse("remove /a/x\ninstance a : A\nread /a\nrequire t : Text\nwatch /a").unwrap();
+        let img = parse("remove /a/x\ninstance a : A\nread /a\nrequire t : text/plain\nwatch /a").unwrap();
         let paths: Vec<_> = img.requests.iter().map(|r| (r.path.path.as_str(), r.body.is_some())).collect();
         assert_eq!(paths, [("/a/x", false), ("/a", false), ("/a", false)], "a declaration ends a body-less request");
     }
@@ -934,49 +979,33 @@ mod tests {
     #[test]
     fn parses_requires() {
         let img = parse(
-            r#"require listen : Listen { address: "127.0.0.1:8080" }
-            require admin : Text
-            instance net : Listener
+            r#"require listen : text/plain = "127.0.0.1:8080"
+            require admin : text/plain
+            require greeting : application/bson = { $type: "Greeting", prefix: "Hi" }
             write /net listen"#,
         )
         .unwrap();
-        let msg = |r: &Require| match &r.slot {
-            SlotDecl::Message(b) => b.clone(),
-            other => panic!("{other:?}"),
-        };
-        let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), msg(r).type_name.name)).collect();
-        assert_eq!(reqs, [("listen", "Listen".to_string()), ("admin", "Text".to_string())]);
-        assert_eq!(msg(&img.requires[0]).fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
-        assert_eq!(msg(&img.requires[1]).fields, None);
-        let Some(Literal::Message(body)) = img.requests[0].body.as_ref() else { panic!() };
-        assert_eq!(body.type_name.name, "listen", "a slot is used like a unit message");
-        assert!(parse("require : Text").is_err());
+        let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.ty.name.as_str())).collect();
+        assert_eq!(reqs, [("listen", "text/plain"), ("admin", "text/plain"), ("greeting", "application/bson")]);
+        assert!(matches!(&img.requires[0].default, Some(Literal::Text { text, .. }) if text == "127.0.0.1:8080"));
+        assert_eq!(img.requires[1].default, None);
+        assert!(matches!(&img.requires[2].default, Some(Literal::Tree { ty: None, .. })));
+        assert!(matches!(&img.requests[0].body, Some(Literal::Name(n)) if n.name == "listen"), "a slot is named");
+        assert!(parse("require : text/plain").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
-
-        let img = parse(r#"require a : text/plain = "x" require b : text/html"#).unwrap();
-        let slots: Vec<_> = img
-            .requires
-            .iter()
-            .map(|r| match &r.slot {
-                SlotDecl::Payload { ty, default } => (ty.name.clone(), default.clone()),
-                other => panic!("{other:?}"),
-            })
-            .collect();
-        assert_eq!(slots, [("text/plain".to_string(), Some("x".to_string())), ("text/html".into(), None)]);
-        assert!(parse("require a : text/plain = 3").unwrap_err().to_string().contains("a quoted string"));
+        let e = parse("require g : Greeting").unwrap_err().to_string();
+        assert!(e.contains("a slot is typed by a content type"), "{e}");
     }
 
     #[test]
     fn parses_value_files() {
-        let v = parse_values("# prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }\nhost = \"x\"").unwrap();
-        assert_eq!(v.len(), 3);
-        let SlotValue::Fields(listen) = &v[0].value else { panic!() };
-        assert_eq!((v[0].slot.name.as_str(), listen[0].0.pos), ("listen", Pos { line: 2, col: 10 }));
-        let SlotValue::Fields(db) = &v[1].value else { panic!() };
-        assert_eq!(db[1].1, Value::Bool(true));
-        assert_eq!(v[2].value, SlotValue::Text("x".into(), Pos { line: 4, col: 8 }));
+        let v = parse_values("# prod\nlisten = \"0.0.0.0:80\"\ndb = { port: 5432, tls: true }").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].slot.name.as_str(), &v[0].value, v[0].pos), ("listen", &Value::Str("0.0.0.0:80".into()), Pos { line: 2, col: 10 }));
+        let Value::Object(db) = &v[1].value else { panic!() };
+        assert_eq!((db[1].0.pos, &db[1].1), (Pos { line: 3, col: 20 }, &Value::Bool(true)));
         assert!(parse_values("listen address: 1").is_err());
-        assert!(parse_values("listen : Listen { address: \"x\" }").is_err(), "the image knows the type");
+        assert!(parse_values("listen : text/plain = \"x\"").is_err(), "the image knows the type");
     }
 
     #[test]
@@ -1008,16 +1037,18 @@ mod tests {
     #[test]
     fn one_file_declares_and_instantiates() {
         let img = parse(
-            "## A greeting.\nexport message Greeting { text: string }\nprotocol P { read }\nexport { P }\n\
-             ## An object.\nexport object O {}\ninstance o : O\nwrite /o Greeting { text: \"hi\" }",
+            "## A shape.\nexport trait T { / read }\nprotocol P { read }\nexport { P }\n\
+             ## An object.\nexport object O {}\ninstance o : O\nwrite /o \"hi\"",
         )
         .unwrap();
         let h = &img.header;
-        assert_eq!((h.messages.len(), h.protocols.len(), h.objects.len()), (1, 1, 1));
-        assert_eq!(h.messages[0].doc, "A greeting.");
+        assert_eq!((h.traits.len(), h.protocols.len(), h.objects.len()), (1, 1, 1));
+        assert_eq!(h.traits[0].doc, "A shape.");
         assert_eq!(h.objects[0].doc, "An object.");
         let exports: Vec<&str> = h.exports.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(exports, ["Greeting", "P", "O"]);
+        assert_eq!(exports, ["T", "P", "O"]);
+        let e = parse("export message M {}").unwrap_err().to_string();
+        assert!(e.contains("message types are declared in a schema file"), "{e}");
         assert_eq!((img.instances.len(), img.requests.len()), (1, 1));
         let e = parse("## an instance\ninstance o : O").unwrap_err().to_string();
         assert!(e.contains("documents what follows"), "{e}");
@@ -1110,9 +1141,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_anonymous_messages() {
-        let err = parse("write /a { x: 1 }").unwrap_err();
-        assert!(err.to_string().contains("anonymous"), "{err}");
+    fn writes_structured_payloads_and_files() {
+        let img = parse(r#"write /a application/bson { x: [1, 2] } write /b image/png from "./logo.png" write /c { x: 1 }"#).unwrap();
+        assert!(matches!(&img.requests[0].body, Some(Literal::Tree { ty: Some(_), value: Value::Object(_), .. })));
+        assert!(matches!(&img.requests[1].body, Some(Literal::File { ty, path, .. }) if ty.name == "image/png" && path == "./logo.png"));
+        assert!(matches!(&img.requests[2].body, Some(Literal::Tree { ty: None, .. })), "the checker asks what it is");
+        let e = parse("write /a Greeting { x: 1 }").unwrap_err().to_string();
+        assert!(e.contains("`Greeting { ... }` names a message type"), "{e}");
+        let e = parse("write /a text/plain 3").unwrap_err().to_string();
+        assert!(e.contains("expected a quoted string, `{ ... }` or `from \"<file>\"` after `text/plain`"), "{e}");
     }
 
     #[test]

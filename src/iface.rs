@@ -1,6 +1,8 @@
-//! Headers: the declarations in `.oth` files, which declare message types,
-//! protocols, traits and objects: what each object serves, what it needs
-//! and its documentation. See `docs/objects.md`.
+//! Headers: the declarations in `.oth` files, which declare protocols,
+//! traits and objects: what each object serves, what it needs and its
+//! documentation. See `docs/objects.md`. What a payload holds is its
+//! format's business, and its schemas are in files of their own (see
+//! [`crate::format`]).
 //!
 //! A file's declarations are parsed into a [`File`], then resolved into a
 //! [`Header`]: its imports followed, every name it mentions declared, and
@@ -8,7 +10,7 @@
 //! travel inside a module.
 
 use crate::image::{self, Ident, Image, Import, Parser, Pos, Source, Tok};
-use crate::messages::{FieldType, MessageType};
+use crate::format::{Bson, Format, Messages};
 use crate::ns::{Status, Verb};
 use crate::pattern::{self, Pattern};
 use crate::payload::{self, ANY, STAT, STAT_NAME};
@@ -49,15 +51,13 @@ pub fn env() -> &'static Header {
             };
             let header = resolve(&file, &mut earlier, &|_| bail!("env has no guides"))
                 .unwrap_or_else(|e| panic!("env/{name} resolves: {e:#}"));
-            env.messages.extend(header.messages.clone());
-            env.declared.extend(header.declared.iter().cloned());
             env.protocols.extend(header.protocols.clone());
             env.traits.extend(header.traits.clone());
             env.objects.extend(header.objects.iter().cloned());
             done.insert(name, header);
         }
         // Everything in it can be imported.
-        env.exports = env.messages.keys().chain(env.protocols.keys()).chain(env.traits.keys()).cloned().collect();
+        env.exports = env.protocols.keys().chain(env.traits.keys()).cloned().collect();
         env.exports.extend(env.objects.iter().map(|o| o.name.clone()));
         env
     })
@@ -68,10 +68,6 @@ pub fn env() -> &'static Header {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Header {
-    /// Every message type the header can name: its own and its imports.
-    pub messages: BTreeMap<String, MessageType>,
-    /// The ones it declares itself, in order.
-    pub declared: Vec<String>,
     /// Every protocol the header can name, its own and its imports.
     #[serde(default)]
     pub protocols: BTreeMap<String, Protocol>,
@@ -317,21 +313,44 @@ pub const SECTION: &str = "othismo.oth";
 
 /// `wasm` with `header` in its [`SECTION`], replacing any already there.
 pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
+    embed_section(wasm, SECTION, header).context("encoding the header")
+}
+
+/// `wasm` with `schemas`, a format's, in their section, replacing any
+/// already there.
+pub fn embed_schemas<F: Format>(wasm: &[u8], schemas: &F::Schemas) -> Result<Vec<u8>> {
+    embed_section(wasm, F::SECTION, schemas).context("encoding the schemas")
+}
+
+/// The schemas of format `F` inside `wasm`; none if it has no section for them.
+pub fn embedded_schemas<F: Format>(wasm: &[u8]) -> Result<F::Schemas> {
+    Ok(section(wasm, F::SECTION)?.unwrap_or_default())
+}
+
+/// `wasm` with `value`, as BSON, in the custom section `name`.
+fn embed_section(wasm: &[u8], name: &str, value: &impl Serialize) -> Result<Vec<u8>> {
     let mut out = wasm[..8].to_vec();
     for section in sections(wasm)? {
-        if section.custom != Some(SECTION) {
+        if section.custom != Some(name) {
             out.extend_from_slice(section.bytes);
         }
     }
     let mut payload = Vec::new();
-    leb128(&mut payload, SECTION.len() as u64);
-    payload.extend_from_slice(SECTION.as_bytes());
-    let doc = bson::serialize_to_document(header).context("encoding the header")?;
-    doc.to_writer(&mut payload).context("encoding the header")?;
+    leb128(&mut payload, name.len() as u64);
+    payload.extend_from_slice(name.as_bytes());
+    bson::serialize_to_document(value)?.to_writer(&mut payload)?;
     out.push(0);
     leb128(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);
     Ok(out)
+}
+
+/// What the custom section `name` of `wasm` holds, if it has one.
+fn section<T: serde::de::DeserializeOwned>(wasm: &[u8], name: &str) -> Result<Option<T>> {
+    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(name)) else { return Ok(None) };
+    let malformed = || format!("its `{name}` section is malformed; rebuild it with this othismo's `embed`");
+    let doc = bson::Document::from_reader(section.payload).with_context(malformed)?;
+    Ok(Some(bson::deserialize_from_document(doc).with_context(malformed)?))
 }
 
 /// Checks that `header` is fit for module `name`: it declares exactly one
@@ -348,10 +367,7 @@ pub fn for_module(header: &Header, name: &str) -> Result<()> {
 
 /// The header in `wasm`'s [`SECTION`], if it has one.
 pub fn embedded(wasm: &[u8]) -> Result<Option<Header>> {
-    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(SECTION)) else { return Ok(None) };
-    let malformed = || format!("its `{SECTION}` section is malformed; rebuild it with this othismo's `embed`");
-    let doc = bson::Document::from_reader(section.payload).with_context(malformed)?;
-    Ok(Some(bson::deserialize_from_document(doc).with_context(malformed)?))
+    section(wasm, SECTION)
 }
 
 struct Section<'a> {
@@ -423,7 +439,6 @@ fn read_leb128(bytes: &[u8], i: &mut usize) -> Result<usize> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct File {
     pub imports: Vec<Import>,
-    pub messages: Vec<MessageDecl>,
     pub protocols: Vec<ProtocolDecl>,
     pub traits: Vec<TraitDecl>,
     pub objects: Vec<ObjectDecl>,
@@ -729,7 +744,6 @@ pub fn resolve(
     import: &mut dyn FnMut(&Source) -> Result<Header>,
     guide: &dyn Fn(&str) -> Result<String>,
 ) -> Result<Header> {
-    let mut messages: BTreeMap<String, MessageType> = BTreeMap::new();
     let mut protocols: BTreeMap<String, Protocol> = BTreeMap::new();
     let mut traits: BTreeMap<String, Trait> = BTreeMap::new();
     let mut imported: BTreeMap<String, Object> = BTreeMap::new();
@@ -751,22 +765,16 @@ pub fn resolve(
             if let Some(prev) = from.insert(local.name.clone(), imp.from.to_string()) {
                 bail!(err_at(local, format!("`{}` is already imported from {prev}", local.name)));
             }
-            let declared = header.messages.contains_key(&name.name)
-                || header.protocols.contains_key(&name.name)
+            let declared = header.protocols.contains_key(&name.name)
                 || header.traits.contains_key(&name.name)
                 || header.object_named(&name.name).is_some();
             if !declared {
-                bail!(err_at(name, format!("{} has no message type, protocol, trait or object `{}`", imp.from, name.name)));
+                bail!(err_at(name, format!("{} has no protocol, trait or object `{}`", imp.from, name.name)));
             }
             if !header.exports.contains(&name.name) {
                 bail!(err_at(name, format!("{} doesn't export `{}`", imp.from, name.name)));
             }
-            if let Some(ty) = header.messages.get(&name.name) {
-                if local.name != name.name {
-                    bail!(err_at(local, format!("a message type is named on the wire, so `{}` can't be renamed", name.name)));
-                }
-                messages.insert(local.name.clone(), ty.clone());
-            } else if let Some(p) = header.protocols.get(&name.name) {
+            if let Some(p) = header.protocols.get(&name.name) {
                 protocols.insert(local.name.clone(), p.clone());
             } else if let Some(t) = header.traits.get(&name.name) {
                 traits.insert(local.name.clone(), t.clone());
@@ -776,9 +784,8 @@ pub fn resolve(
         }
     }
 
-    // A name means one thing, whether a message type, a protocol, a trait or an object.
-    let mut names: Vec<(&Ident, &str)> = file.messages.iter().map(|m| (&m.name, "message")).collect();
-    names.extend(file.protocols.iter().map(|p| (&p.name, "protocol")));
+    // A name means one thing, whether a protocol, a trait or an object.
+    let mut names: Vec<(&Ident, &str)> = file.protocols.iter().map(|p| (&p.name, "protocol")).collect();
     names.extend(file.traits.iter().map(|t| (&t.name, "trait")));
     names.extend(file.objects.iter().map(|o| (&o.name, "object")));
     for (i, &(name, kind)) in names.iter().enumerate() {
@@ -792,27 +799,6 @@ pub fn resolve(
             };
             bail!(err_at(name, what));
         }
-    }
-
-    for m in &file.messages {
-        let mut fields: Vec<(String, FieldType)> = vec![];
-        for f in &m.fields {
-            if fields.iter().any(|(n, _)| *n == f.name.name) {
-                bail!(err_at(&f.name, format!("`{}` has two fields called `{}`", m.name.name, f.name.name)));
-            }
-            let Some(ty) = FieldType::from_name(&f.ty.name) else {
-                bail!(err_at(
-                    &f.ty,
-                    format!(
-                        "`{}` is not a field type; fields are string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64 or bytes",
-                        f.ty.name
-                    )
-                ));
-            };
-            fields.push((f.name.name.clone(), ty));
-        }
-        let field_docs = m.fields.iter().map(|f| f.doc.clone()).collect();
-        messages.insert(m.name.name.clone(), MessageType { name: m.name.name.clone(), fields, doc: m.doc.clone(), field_docs });
     }
 
     let mut shapes = Shapes {
@@ -860,9 +846,8 @@ pub fn resolve(
         }
         exports.push(e.name.clone());
     }
-    let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
     let Shapes { protocols, traits, .. } = shapes;
-    Ok(Header { messages, declared, protocols, traits, objects, imported, exports, needs: image_needs })
+    Ok(Header { protocols, traits, objects, imported, exports, needs: image_needs })
 }
 
 /// What a protocol's or a trait's name stands for, written out.
@@ -1090,9 +1075,10 @@ pub fn load(path: &Path) -> Result<Header> {
 pub struct Loader {
     /// What to read instead of the file on disk, by path: for tests.
     pub files: BTreeMap<PathBuf, Vec<u8>>,
-    /// Every `.oth` file read, in the order they were first read.
+    /// Every `.oth` and schema file read, in the order they were first read.
     pub sources: Vec<PathBuf>,
     headers: BTreeMap<PathBuf, Header>,
+    schemas: BTreeMap<PathBuf, Messages>,
     /// The `.oth` files being resolved, to catch one that imports itself.
     loading: Vec<PathBuf>,
 }
@@ -1149,6 +1135,32 @@ impl Loader {
         Ok(header)
     }
 
+    /// The message types at `path`: a BSON schema file, `.messages`, or the
+    /// schemas inside a module; a module with none has none.
+    pub fn schemas(&mut self, path: &Path) -> Result<Messages> {
+        if let Some(m) = self.schemas.get(path) {
+            return Ok(m.clone());
+        }
+        let schemas = if path.extension().is_some_and(|e| e == "wasm") {
+            embedded_schemas::<Bson>(&self.read(path)?).with_context(|| path.display().to_string())?
+        } else {
+            if self.loading.iter().any(|p| p == path) {
+                bail!("{} imports itself, through the files it imports", path.display());
+            }
+            let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
+            if !self.sources.iter().any(|p| p == path) {
+                self.sources.push(path.to_path_buf());
+            }
+            let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            self.loading.push(path.to_path_buf());
+            let parsed = Bson::parse(&src, &mut |p| self.schemas(&join(&dir, p)));
+            self.loading.pop();
+            parsed.with_context(|| format!("in {}", path.display()))?
+        };
+        self.schemas.insert(path.to_path_buf(), schemas.clone());
+        Ok(schemas)
+    }
+
     /// Resolves `file`, the declarations of the `.oth` file at `path`.
     pub fn resolve(&mut self, file: &File, path: &Path) -> Result<Header> {
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -1178,16 +1190,6 @@ mod tests {
     use super::*;
 
     const GREETER: &str = r#"
-        ## Configures a Greeter.
-        message Greeting {
-          ## Put before each name.
-          prefix: string
-          ## End with `!` rather than `.`.
-          excited: bool
-        }
-
-        message Stats { lines: i32, chars: i64, average: f64 }
-
         ## Greets every name typed on the console.
         ##
         ## And reports statistics.
@@ -1296,7 +1298,7 @@ mod tests {
         assert!(err("trait T { /x read } object O { serves { /a/** T } }").contains("a trait can't be put under `/a/**`"));
         assert!(err("protocol P { read } object O : P {}").contains("`P` is a protocol; an object declares traits"));
         assert!(err("object O : Nope {}").contains("unknown protocol or trait `Nope`"));
-        assert!(err("message X {} protocol X { read }").contains("`X` is declared as a message and as a protocol"));
+        assert!(err("object X {} protocol X { read }").contains("`X` is declared as a protocol and as a object"));
         assert!(err("trait X { / read } trait X { / stat }").contains("trait `X` is declared twice"));
         assert!(err("import { File } from env protocol File { read }").contains("`File` is imported from env, and declared here too"));
         assert!(err("protocol P { read, read }").contains("protocol `P` takes `read` twice"));
@@ -1305,13 +1307,6 @@ mod tests {
     #[test]
     fn parses_and_resolves_a_header() {
         let h = resolve_str(GREETER).unwrap();
-        assert_eq!(h.messages.keys().collect::<Vec<_>>(), ["Greeting", "Stats"]);
-        assert_eq!(h.declared, ["Greeting", "Stats"]);
-        let g = &h.messages["Greeting"];
-        assert_eq!(g.doc, "Configures a Greeter.");
-        assert_eq!(g.fields, [("prefix".into(), FieldType::String), ("excited".into(), FieldType::Bool)]);
-        assert_eq!(g.field_docs, ["Put before each name.", "End with `!` rather than `.`."]);
-
         let o = h.object("Greeter").unwrap();
         assert_eq!(o.doc, "Greets every name typed on the console.\n\nAnd reports statistics.");
         assert_eq!(o.needs.len(), 2);
@@ -1348,18 +1343,15 @@ mod tests {
 
     #[test]
     fn rejects_mistakes() {
-        assert!(err("message A { x: Strin }").contains("`Strin` is not a field type"));
-        assert!(err("message A { x: ArrayBuffer }").contains("not a field type"), "headers write `bytes`");
-        assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
-        assert!(err("message A {} message A {}").contains("declared twice"));
-        assert!(err("message Stat {}").contains("reserved"));
-        assert!(err("import { Nope } from env").contains("env has no message type, protocol, trait or object `Nope`"));
+        assert!(err("message A { x: i32 }").contains("message types are declared in a schema file"));
+        assert!(err("protocol Stat { read }").contains("reserved"));
+        assert!(err("import { Nope } from env").contains("env has no protocol, trait or object `Nope`"));
         assert!(err(r#"import { X } from "./other.oth""#).contains("no \"./other.oth\" here"));
         assert!(err("import { X } from Other").contains("import from a file, relative to this one, such as `from \"./scripts/Other.oth\"`"));
         assert!(err("protocol P { read } export { P, Q }").contains("`Q` is neither declared nor imported here"));
         assert!(err("export protocol P { read } export { P }").contains("`P` is exported twice"));
         assert!(err("object A {} object A {}").contains("object `A` is declared twice"));
-        let e = err("message Greeting {} object A { serves { /x write Greeting } }");
+        let e = err("object A { serves { /x write Greeting } }");
         assert!(e.contains("`Greeting`: a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"), "{e}");
         assert!(err("object A { serves { /x read -> text/ } }").contains("isn't a well-formed content type"));
         assert!(err("object A { serves { /x read, read } }").contains("takes `read` twice"));

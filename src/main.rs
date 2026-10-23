@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
+use othismo::format::{Bson, Format, Messages};
+use othismo::{doc, iface, pack, runtime, slots, suite};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -7,7 +8,7 @@ const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>
        othismo test [--no-checks] <image>
        othismo build [-v] [--no-sources] <image.oth> -o <out.rti>
        othismo unpack <image> <dir>
-       othismo bindings [--library <path>] <header.oth | env> [-o <out.ts>]
+       othismo bindings [--library <path>] <schemas.messages> [-o <out.ts>]
        othismo embed <header.oth> <module.wasm>
        othismo doc <module.wasm | header.oth | built-in type | env>
 
@@ -28,13 +29,13 @@ An image is a .oth source, which is built in memory, or a built .rti file.
 lists its tests, and each test runs in a fresh run of the image, with nothing
 outside started. What the image prints is shown for the tests that fail.
 
-`bindings` writes AssemblyScript classes for a header's message types, to
-<header.oth>.ts unless -o says otherwise; a header that declares none
-gets no file. They import the BSON library from \"othismo/bson\", or from
---library.
-For `env`, the header is the runtime's own.
+`bindings` writes AssemblyScript classes for the message types a schema file
+declares, to <schemas.messages>.ts unless -o says otherwise; a file that
+declares none gets no file. They import the BSON library from
+\"othismo/bson\", or from --library.
 
-`embed` puts a module's header into the module, replacing any already there.
+`embed` puts a module's header into the module, with the message types in
+the .messages file beside the header, replacing any already there.
 The header declares one object, named for the module, and exports it:
 `export object Echo` for Echo.wasm.
 
@@ -124,29 +125,37 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
             _ => header = Some(PathBuf::from(arg)),
         }
     }
-    let header = header.ok_or(Usage)?;
-    let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", header.display())));
+    let source = header.ok_or(Usage)?;
+    let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", source.display())));
     Ok((|| {
-        let resolved = if header == Path::new("env") { iface::env().clone() } else { iface::load(&header)? };
+        if source.extension().is_none_or(|e| e != Bson::EXTENSION) {
+            anyhow::bail!("{} isn't a schema file; bindings for message types come from a `.{}` file", source.display(), Bson::EXTENSION);
+        }
+        let schemas = iface::Loader::default().schemas(&source)?;
         // Nothing to bind, and nothing left over from when there was.
-        if resolved.declared.is_empty() {
+        if schemas.declared.is_empty() {
             if out.exists() {
                 std::fs::remove_file(&out).with_context(|| format!("removing {}", out.display()))?;
             }
             return Ok(());
         }
-        let name = header.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let ts = bindings::assemblyscript(&resolved, &name, &library);
-        std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display()))
+        let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        std::fs::write(&out, Bson::bindings(&schemas, &name, &library)).with_context(|| format!("writing {}", out.display()))
     })())
 }
 
+/// Puts `header` into `module`, and the message types in the `.messages`
+/// file beside the header, if there is one.
 fn embed(header: &Path, module: &Path) -> Result<()> {
     let name = module.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let resolved = iface::load(header)?;
+    let mut loader = iface::Loader::default();
+    let resolved = loader.header(header)?;
     iface::for_module(&resolved, &name).with_context(|| format!("{} can't be {name}'s header", header.display()))?;
+    let schemas = header.with_extension(Bson::EXTENSION);
+    let schemas = if schemas.exists() { loader.schemas(&schemas)? } else { Messages::default() };
     let wasm = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
     let wasm = iface::embed(&wasm, &resolved).with_context(|| module.display().to_string())?;
+    let wasm = iface::embed_schemas::<Bson>(&wasm, &schemas).with_context(|| module.display().to_string())?;
     std::fs::write(module, wasm).with_context(|| format!("writing {}", module.display()))
 }
 
@@ -158,17 +167,19 @@ fn document(target: &str) -> Result<String> {
     }
     let env = iface::env();
     if let Some(o) = env.object(target).cloned().or_else(|| env.traits.get(target).map(|t| t.as_object())) {
-        return Ok(doc::object(&o, env, &[]));
+        return Ok(doc::object(&o, &Messages::default()));
     }
-    let header = match ext {
-        Some("wasm") => {
-            let wasm = std::fs::read(path).with_context(|| format!("reading {target}"))?;
-            iface::embedded(&wasm).with_context(|| target.to_string())?.with_context(|| format!("{target} has no header"))?
+    let mut loader = iface::Loader::default();
+    let (header, schemas) = match ext {
+        Some("wasm") => (loader.header(path)?, loader.schemas(path)?),
+        Some("oth") => {
+            let schemas = path.with_extension(Bson::EXTENSION);
+            let schemas = if schemas.exists() { loader.schemas(&schemas)? } else { Messages::default() };
+            (loader.header(path)?, schemas)
         }
-        Some("oth") => iface::load(path)?,
         _ => anyhow::bail!("{target} is not a module, a header or a built-in type"),
     };
-    let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &header, &header.declared)).collect();
+    let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &schemas)).collect();
     Ok(pages.join("\n"))
 }
 

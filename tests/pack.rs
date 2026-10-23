@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{Fixture, module};
+use common::{Fixture, module, module_with};
 use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
@@ -16,19 +16,17 @@ fn a() -> Vec<u8> {
 
 fn fixture(name: &str) -> Fixture {
     let f = Fixture::new(name);
-    f.file("messages.oth", "export message Ping {}\n")
-        .file("scripts/A.wasm", a())
+    f.file("scripts/A.wasm", a())
         .file("scripts/A.oth", A)
         .file("scripts/A.ts", "// A's source\n")
         .file("scripts/B.wasm", module("(module)", "object B {}"))
         .file(
             "test.oth",
-            r#"import { Ping } from "./messages.oth"
-            import { A } from "./scripts/A.oth"
+            r#"import { A } from "./scripts/A.oth"
             import { B } from "./scripts/B.wasm"
             import { Console } from env
             needs /dev/cons Console
-            instance a : A { bind /dev/cons /dev/cons }  mount /a a  write /a Ping
+            instance a : A { bind /dev/cons /dev/cons }  mount /a a  write /a "ping"
             instance b : B { mount /a a readonly }
             instance a2 : A { bind /dev/cons /dev/cons }"#,
         );
@@ -55,7 +53,7 @@ fn sealing_round_trips_and_is_reproducible() {
     let sources: Vec<&str> = built.sources.keys().map(String::as_str).collect();
     assert_eq!(
         sources,
-        ["messages.oth", "scripts/A.oth", "scripts/A.ts", "test.oth"],
+        ["scripts/A.oth", "scripts/A.ts", "test.oth"],
         "B has no header file or TypeScript, which is fine: its module carries its header"
     );
 }
@@ -97,7 +95,7 @@ fn load_tells_built_images_from_sources() {
     let loaded = pack::load(&rti).unwrap();
     assert_eq!(loaded.dir, f.dir);
     assert!(loaded.program.sources.is_empty());
-    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 3, "the image, the messages and A's header");
+    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 2, "the image and A's header");
 
     let e = format!("{:#}", pack::build(&rti, BuildOptions::default()).unwrap_err());
     assert!(e.contains("is already built"), "{e}");
@@ -281,16 +279,17 @@ fn the_cli_layers_value_files_then_set() {
     let f = Fixture::new("pack_cli_values");
     f.file(
         "test.oth",
-        r#"import { Info } from "./info.oth"
+        r#"import { A } from "./scripts/A.wasm"
         import { Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
-        require info : Info
+        require info : application/bson = { $type: "Info" }
+        instance a : A
         needs /net Listener
         write /net listen"#,
     )
-    .file("info.oth", "export message Info { kind: string, size: i64, mime: string }")
-    .file("a.vals", "listen = \"a\"\ninfo { kind: \"file\", size: 1, mime: \"\" }")
-    .file("b.vals", "info { size: 2 }");
+    .file("scripts/A.wasm", module_with("(module)", "object A {}", "message Info { kind: string, size: i64, mime: string }"))
+    .file("a.vals", "listen = \"a\"\ninfo = { kind: \"file\", size: 1, mime: \"\" }")
+    .file("b.vals", "info = { size: 2 }");
     let check = |extra: &[&str]| {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_othismo"))
             .current_dir(&f.dir)
@@ -304,7 +303,10 @@ fn the_cli_layers_value_files_then_set() {
     let (code, out) = check(&["--set", "listen=0.0.0.0:0", "--with", "a.vals", "--with", "b.vals"]);
     assert_eq!(code, Some(0), "{out}");
     assert!(out.starts_with("slot listen : text/plain = \"0.0.0.0:0\" (--set)\n"), "{out}");
-    assert!(out.contains("slot info : Info { kind: \"file\" (a.vals:2:8), size: 2 (b.vals:1:8), mime: \"\" (a.vals:2:31) }"), "{out}");
+    assert!(
+        out.contains("slot info : application/bson { $type: \"Info\" (default), kind: \"file\" (a.vals:2:10), size: 2 (b.vals:1:10), mime: \"\" (a.vals:2:33) }"),
+        "{out}"
+    );
 
     let (code, out) = check(&[]);
     assert_eq!(code, Some(1));

@@ -1,4 +1,4 @@
-// Generated from Greeter.oth by `othismo bindings`. Edit the header, not this file.
+// Generated from Greeter.messages by `othismo bindings`. Edit the schemas, not this file.
 
 import { Message, Reader, Writer, registerMessage } from "othismo/bson"
 

@@ -2,13 +2,14 @@
 //! `othismo doc` prints, and what the site's reference pages are made of.
 
 use crate::check;
-use crate::iface::{self, Entry, Header, Object};
-use crate::messages::MessageType;
+use crate::format::{Bson, Format, Messages};
+use crate::iface::{self, Entry, Object};
 use std::fmt::Write;
 
 /// An object's page: its guide, or its `##` comment if it has none, then
-/// the reference for what it serves and needs, and for `types`.
-pub fn object(o: &Object, header: &Header, types: &[String]) -> String {
+/// the reference for what it serves and needs, and for the message types
+/// its module declares.
+pub fn object(o: &Object, schemas: &Messages) -> String {
     let mut out = String::new();
     let guide = o.guide.as_deref().unwrap_or(&o.doc);
     if !guide.trim_start().starts_with("# ") {
@@ -19,7 +20,7 @@ pub fn object(o: &Object, header: &Header, types: &[String]) -> String {
     }
     out.push_str("## Reference\n\n");
     reference(&mut out, o, "###");
-    messages(&mut out, header, types, "###");
+    out.push_str(&Bson::document(schemas, "###"));
     out
 }
 
@@ -60,7 +61,6 @@ pub fn env() -> String {
         }
         out.push('\n');
     }
-    messages(&mut out, env, &env.declared, "##");
     out
 }
 
@@ -94,29 +94,6 @@ fn entries(out: &mut String, entries: &[Entry]) {
     out.push('\n');
 }
 
-fn messages(out: &mut String, header: &Header, types: &[String], h: &str) {
-    let types: Vec<&MessageType> = types.iter().filter_map(|t| header.messages.get(t)).collect();
-    if types.is_empty() {
-        return;
-    }
-    writeln!(out, "{h} Messages\n").unwrap();
-    for ty in types {
-        writeln!(out, "{h}# `{}`\n", ty.name).unwrap();
-        if !ty.doc.is_empty() {
-            writeln!(out, "{}\n", ty.doc).unwrap();
-        }
-        if ty.fields.is_empty() {
-            out.push_str("No fields.\n\n");
-            continue;
-        }
-        out.push_str("| Field | Type | |\n|---|---|---|\n");
-        for ((name, fty), doc) in ty.fields.iter().zip(&ty.field_docs) {
-            writeln!(out, "| `{name}` | {fty} | {} |", cell(doc)).unwrap();
-        }
-        out.push('\n');
-    }
-}
-
 /// Documentation for a table cell: one line, with `|` escaped.
 fn cell(doc: &str) -> String {
     doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|")
@@ -126,17 +103,20 @@ fn cell(doc: &str) -> String {
 mod tests {
     use super::*;
 
-    fn header(src: &str) -> Header {
+    fn header(src: &str) -> iface::Header {
         let file = iface::parse(src).unwrap();
         iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| Ok("# The Guide\n\nAll about it.".into())).unwrap()
     }
 
-    const SITE: &str = r#"
+    const HITS: &str = r#"
         ## A count.
         message Hits {
           ## So far; never | less.
           n: u64
         }
+    "#;
+
+    const SITE: &str = r#"
         ## Serves a site.
         ##
         ## From its files.
@@ -155,17 +135,17 @@ mod tests {
     #[test]
     fn documents_an_object_from_its_header() {
         let h = header(SITE);
-        let out = object(&h.objects[0], &h, &h.declared);
+        let out = object(&h.objects[0], &Bson::parse(HITS, &mut |_| unreachable!()).unwrap());
         assert!(out.starts_with("# Site\n\nServes a site.\n\nFrom its files.\n\n## Reference\n\n### Serves\n\n"), "{out}");
         assert!(out.contains("| `/hits` | `read -> application/bson` | How many, so far. |\n| `/**` | `read -> */*` |  |\n"), "{out}");
         assert!(out.contains("### Needs\n\n#### `/files`\n\nThe files.\n\n| Path | Requests | |"), "{out}");
-        assert!(out.contains("### Messages\n\n#### `Hits`\n\nA count.\n\n| Field | Type | |\n|---|---|---|\n| `n` | u64 | So far; never \\| less. |"), "{out}");
+        assert!(out.contains("### Messages\n\nPayloads of `application/bson`, each named by its `$type`.\n\n#### `Hits`\n\nA count.\n\n| Field | Type | |\n|---|---|---|\n| `n` | u64 | So far; never \\| less. |"), "{out}");
     }
 
     #[test]
     fn a_guide_replaces_the_comment() {
         let h = header(r#"object Big { guide "./Big.md" }"#);
-        assert_eq!(object(&h.objects[0], &h, &[]), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
+        assert_eq!(object(&h.objects[0], &Messages::default()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
     }
 
     #[test]

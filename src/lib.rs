@@ -5,6 +5,7 @@ pub mod bindings;
 pub mod check;
 pub mod doc;
 pub mod env;
+pub mod format;
 pub mod iface;
 pub mod image;
 pub mod messages;

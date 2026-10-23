@@ -14,28 +14,28 @@ fn example(rel: &str) -> PathBuf {
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
         // A module's own source, not its generated bindings.
-        if ts.extension().is_some_and(|e| e == "ts") && !ts.to_string_lossy().ends_with(".oth.ts") {
+        if ts.extension().is_some_and(|e| e == "ts") && !ts.to_string_lossy().ends_with(".messages.ts") {
             assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `task test`", ts.display());
         }
     }
     path
 }
 
-/// Every example header's bindings are generated and committed; this fails
-/// if one is stale, or missing. `task bindings` regenerates them.
+/// Every example schema file's bindings are generated and committed; this
+/// fails if one is stale, or missing. `task bindings` regenerates them.
 #[test]
 fn bindings_are_up_to_date() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut seen = 0;
     for dir in std::fs::read_dir(&examples).unwrap().flatten() {
         let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
-        for header in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "oth")) {
+        for source in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "messages")) {
             seen += 1;
-            let resolved = othismo::iface::load(&header).unwrap();
-            let committed = std::fs::read_to_string(format!("{}.ts", header.display())).ok();
-            let name = header.file_name().unwrap().to_string_lossy().into_owned();
-            let want = (!resolved.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&resolved, &name, "othismo/bson"));
-            assert!(committed == want, "{}.ts is stale; run `task bindings`", header.display());
+            let schemas = othismo::iface::Loader::default().schemas(&source).unwrap();
+            let committed = std::fs::read_to_string(format!("{}.ts", source.display())).ok();
+            let name = source.file_name().unwrap().to_string_lossy().into_owned();
+            let want = (!schemas.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&schemas, &name, "othismo/bson"));
+            assert!(committed == want, "{}.ts is stale; run `task bindings`", source.display());
         }
     }
     assert!(seen > 0);

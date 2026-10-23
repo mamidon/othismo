@@ -2,9 +2,10 @@ version: '3'
 
 # Every examples/<name>/<name>.oth is an example; its objects are the
 # scripts/*.ts next to it, compiled to scripts/*.wasm. Each object's header
-# is its scripts/<Type>.oth, embedded in the .wasm once it is compiled, and
-# the bindings generated from a header are committed next to it, as
-# <Type>.oth.ts.
+# is its scripts/<Type>.oth, and its message types, if it has any, are in
+# scripts/<Type>.messages; both are embedded in the .wasm once it is
+# compiled. The bindings generated from them are committed next to them, as
+# <Type>.messages.ts.
 vars:
   # Each example is a directory holding an image named after it.
   EXAMPLES:
@@ -83,7 +84,7 @@ tasks:
       - fly deploy
 
   bindings:
-    desc: Regenerate the AssemblyScript bindings from every header
+    desc: Regenerate the AssemblyScript bindings from every schema file
     cmds:
       - for: { var: EXAMPLES }
         task: bindings:one
@@ -123,7 +124,7 @@ tasks:
         cmd: '{{.BIN}} bindings {{.ITEM}}'
     vars:
       HEADERS:
-        sh: ls examples/{{.NAME}}/scripts/*.oth
+        sh: find examples/{{.NAME}}/scripts -name '*.messages'
 
   wasm:one:
     internal: true
@@ -135,9 +136,10 @@ tasks:
       - as/env/*.oth
       - src/iface.rs
       - examples/{{.NAME}}/scripts/*.oth
+      - examples/{{.NAME}}/scripts/*.messages
       - examples/{{.NAME}}/scripts/*.md
       - examples/{{.NAME}}/scripts/*.ts
-      - exclude: examples/{{.NAME}}/scripts/*.oth.ts
+      - exclude: examples/{{.NAME}}/scripts/*.messages.ts
     generates:
       - examples/{{.NAME}}/scripts/*.wasm
     cmds:
@@ -147,7 +149,7 @@ tasks:
         cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.oth {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
-        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.oth\.ts$'
+        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.messages\.ts$'
 
   # Seals examples/<NAME>/<NAME>.oth into a .rti with the othismo that
   # `build` just made, so the two always match.

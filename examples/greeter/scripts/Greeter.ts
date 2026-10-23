@@ -1,6 +1,6 @@
 import { Payload, Request, Response, Server, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { bson } from "othismo/bson"
-import { Greeting } from "./Greeter.oth"
+import { Greeting } from "./Greeter.messages"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 

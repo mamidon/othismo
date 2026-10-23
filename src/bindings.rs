@@ -1,21 +1,21 @@
-//! Generates AssemblyScript bindings from a header: a class for each message
-//! type it declares, with its encoder and decoder. Types it imports have
-//! bindings of their own, generated from their own headers.
+//! Generates AssemblyScript bindings for the BSON format: a class for each
+//! message type a schema file declares, with its encoder and decoder. Types
+//! it imports have bindings of their own, generated from their own files.
 
-use crate::iface::Header;
+use crate::format::Messages;
 use crate::messages::{FieldType, MessageType};
 use std::fmt::Write;
 
-/// The bindings for the message types `header` declares. `source` names the
-/// header in the generated comment, and `library` is where `Message`,
-/// `Reader` and `Writer` are imported from.
-pub fn assemblyscript(header: &Header, source: &str, library: &str) -> String {
+/// The bindings for the message types `schemas` declares. `source` names
+/// the schema file in the generated comment, and `library` is where
+/// `Message`, `Reader` and `Writer` are imported from.
+pub fn assemblyscript(schemas: &Messages, source: &str, library: &str) -> String {
     let mut out = format!(
-        "// Generated from {source} by `othismo bindings`. Edit the header, not this file.\n\n\
+        "// Generated from {source} by `othismo bindings`. Edit the schemas, not this file.\n\n\
          import {{ Message, Reader, Writer, registerMessage }} from \"{library}\"\n"
     );
-    for name in &header.declared {
-        let ty = &header.messages[name];
+    for name in &schemas.declared {
+        let ty = &schemas.types[name];
         out.push('\n');
         class(&mut out, ty);
     }
@@ -121,12 +121,7 @@ fn read_call(f: &str, t: FieldType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iface;
-
-    #[test]
-    fn the_runtime_declares_no_message_types() {
-        assert!(iface::env().declared.is_empty(), "so it has no bindings of its own");
-    }
+    use crate::format::{Bson, Format};
 
     #[test]
     fn generates_a_class_per_declared_message() {
@@ -143,11 +138,9 @@ mod tests {
             message Odd { a: u8, b: f32, c: u64, d: bytes }
             message Ping {}
         "#;
-        let file = iface::parse(src).unwrap();
-        let mut env = |_: &crate::image::Source| Ok(iface::env().clone());
-        let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
-        let out = assemblyscript(&header, "G.oth", "othismo/bson");
-        assert!(out.starts_with("// Generated from G.oth by `othismo bindings`."), "{out}");
+        let schemas = Bson::parse(src, &mut |_| unreachable!()).unwrap();
+        let out = assemblyscript(&schemas, "G.messages", "othismo/bson");
+        assert!(out.starts_with("// Generated from G.messages by `othismo bindings`."), "{out}");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */
