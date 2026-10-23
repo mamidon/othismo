@@ -549,20 +549,22 @@ pub fn load(path: &Path) -> Result<Header> {
 }
 
 /// Reads `.oth` files and the headers inside modules, each once, following
-/// imports relative to the file that makes them, and schema files in the
-/// formats it knows.
+/// imports relative to the file that makes them, and their schemas blocks
+/// in the formats it knows.
 #[derive(Default)]
 pub struct Loader {
     /// The formats whose schemas it reads.
     pub formats: Formats,
     /// What to read instead of the file on disk, by path: for tests.
     pub files: BTreeMap<PathBuf, Vec<u8>>,
-    /// Every `.oth` and schema file read, in the order they were first read.
+    /// Every `.oth` file read, in the order they were first read.
     pub sources: Vec<PathBuf>,
     headers: BTreeMap<PathBuf, Header>,
     schemas: BTreeMap<(PathBuf, &'static str), Schemas>,
     /// The `.oth` files being resolved, to catch one that imports itself.
     loading: Vec<PathBuf>,
+    /// The `.oth` files whose schemas are being read, likewise.
+    loading_schemas: Vec<PathBuf>,
 }
 
 impl Loader {
@@ -621,28 +623,28 @@ impl Loader {
         Ok(header)
     }
 
-    /// `format`'s schemas at `path`: a schema file of its, or those inside
-    /// a module; a module with none has none.
+    /// `format`'s schemas at `path`: the `.oth` file's block for its content
+    /// type, or those inside a module. A file or module with none has none.
     pub fn schemas(&mut self, format: &dyn Format, path: &Path) -> Result<Schemas> {
         let key = (path.to_path_buf(), format.content_type());
         if let Some(m) = self.schemas.get(&key) {
             return Ok(m.clone());
         }
-        let schemas = if path.extension().is_some_and(|e| e == "wasm") {
-            embedded_schemas(&self.read(path)?, format).with_context(|| path.display().to_string())?
-        } else {
-            if self.loading.iter().any(|p| p == path) {
-                bail!("{} imports itself, through the files it imports", path.display());
+        let schemas = match path.extension().and_then(|e| e.to_str()) {
+            Some("wasm") => embedded_schemas(&self.read(path)?, format).with_context(|| path.display().to_string())?,
+            Some("oth") => {
+                let block = self.image_definition(path)?.header.schemas.into_iter().find(|b| b.ty.name == format.content_type());
+                let Some(block) = block else { return Ok(Schemas::default()) };
+                if self.loading_schemas.iter().any(|p| p == path) {
+                    bail!("{}'s `{}` schemas import themselves, through the files they import", path.display(), block.ty.name);
+                }
+                let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+                self.loading_schemas.push(path.to_path_buf());
+                let parsed = format.parse(&block.positioned_body(), &mut |p| self.schemas(format, &join(&dir, p)));
+                self.loading_schemas.pop();
+                parsed.with_context(|| format!("in {}", path.display()))?
             }
-            let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
-            if !self.sources.iter().any(|p| p == path) {
-                self.sources.push(path.to_path_buf());
-            }
-            let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-            self.loading.push(path.to_path_buf());
-            let parsed = format.parse(&src, &mut |p| self.schemas(format, &join(&dir, p)));
-            self.loading.pop();
-            parsed.with_context(|| format!("in {}", path.display()))?
+            _ => bail!("{} is neither a `.oth` file nor a module (`.wasm`), where schemas are", path.display()),
         };
         self.schemas.insert(key, schemas.clone());
         Ok(schemas)

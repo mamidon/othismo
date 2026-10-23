@@ -21,8 +21,7 @@ fn program(src: &str) -> Program {
     let wasm = othismo::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
     let wasm = othismo::iface::embed_schemas(&wasm, &Bson, &Bson.parse(info, &mut |_| unreachable!()).unwrap()).unwrap();
     let mut loader = othismo::iface::Loader::new(othismo::formats());
-    loader.files.insert("/slots/A.oth".into(), a.into());
-    loader.files.insert("/slots/A.messages".into(), info.into());
+    loader.files.insert("/slots/A.oth".into(), format!("{a}\nexport schemas application/bson {{ {info} }}").into_bytes());
     loader.files.insert("/slots/A.wasm".into(), wasm);
     let src = format!("import {{ A }} from \"./A.oth\" import {{ Console, Listener }} from env {src}");
     loader.files.insert("/slots/test.oth".into(), src.into_bytes());

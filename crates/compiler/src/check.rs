@@ -432,12 +432,13 @@ impl Builder<'_> {
             let formats = self.loader.formats.clone();
             for f in formats.iter() {
                 let schemas = self.loader.schemas(f, &module)?;
-                if origin.extension().is_some_and(|e| e == "oth") {
-                    let source = origin.with_extension(f.extension());
-                    let written = if self.loader.read(&source).is_ok() { self.loader.schemas(f, &source)? } else { Default::default() };
-                    if !f.same(&written, &schemas) {
-                        bail!("{} is stale: the types inside it aren't {}'s; rebuild it", module.display(), source.display());
-                    }
+                if origin.extension().is_some_and(|e| e == "oth") && !f.same(&self.loader.schemas(f, &origin)?, &schemas) {
+                    bail!(
+                        "{} is stale: the types inside it aren't those of {}'s `{}` schemas; rebuild it",
+                        module.display(),
+                        origin.display(),
+                        f.content_type()
+                    );
                 }
                 let ty = f.content_type().to_string();
                 let from = self.message_from.entry(ty.clone()).or_default();
@@ -860,8 +861,8 @@ mod tests {
         out
     }
 
-    /// `src` taken apart: its `message` declarations, which go in a schema
-    /// file, and the header that is left.
+    /// `src` taken apart: its `message` declarations, which go in its
+    /// schemas block, and the header that is left.
     fn split(src: &str) -> (String, String) {
         let (mut header, mut messages) = (String::new(), String::new());
         let mut rest = src;
@@ -886,14 +887,18 @@ mod tests {
         iface::embed_schemas(&wasm, &Bson, &schemas).unwrap()
     }
 
+    /// `header` with `messages` in its schemas block.
+    fn with_schemas(header: &str, messages: &str) -> String {
+        format!("{header}\nexport schemas application/bson {{\n{messages}\n}}\n")
+    }
+
     /// Puts module `ty`, with header `src`, at /check: its header and
     /// schemas, and the module, which declares MESSAGES too.
     fn put_module(loader: &mut Loader, dir: &Path, ty: &str, src: &str) {
         let (header, own) = split(src);
         let header = exported(&header);
         let messages = format!("{MESSAGES}\n{own}");
-        loader.files.entry(dir.join(format!("{ty}.oth"))).or_insert_with(|| header.clone().into_bytes());
-        loader.files.entry(dir.join(format!("{ty}.messages"))).or_insert_with(|| messages.clone().into_bytes());
+        loader.files.entry(dir.join(format!("{ty}.oth"))).or_insert_with(|| with_schemas(&header, &messages).into_bytes());
         if ty != "Ghost" {
             loader.files.entry(dir.join(format!("{ty}.wasm"))).or_insert_with(|| module(&header, &messages));
         }
@@ -1252,8 +1257,7 @@ mod tests {
         let header = exported(&header);
         let stale = |oth: &str, schemas: &str| {
             let mut loader = Loader::new(formats());
-            loader.files.insert("/s/Greeter.oth".into(), oth.as_bytes().to_vec());
-            loader.files.insert("/s/Greeter.messages".into(), schemas.as_bytes().to_vec());
+            loader.files.insert("/s/Greeter.oth".into(), with_schemas(oth, schemas).into_bytes());
             loader.files.insert("/s/Greeter.wasm".into(), module(&header, &messages));
             loader.files.insert("/s/test.oth".into(), br#"import { Greeter } from "./Greeter.oth" instance g : Greeter"#.to_vec());
             format!("{:#}", load_with(Path::new("/s/test.oth"), &mut loader).unwrap_err())
@@ -1261,7 +1265,7 @@ mod tests {
         let e = stale("export object Greeter { serves { /greeting write text/plain } }", &messages);
         assert!(e.contains("/s/Greeter.wasm is stale: the header inside it isn't /s/Greeter.oth's; rebuild it"), "{e}");
         let e = stale(&header, "message Hello { prefix: i32 }");
-        assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't /s/Greeter.messages's; rebuild it"), "{e}");
+        assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't those of /s/Greeter.oth's `application/bson` schemas; rebuild it"), "{e}");
 
         // Or it is imported from the module itself.
         let mut loader = Loader::new(formats());

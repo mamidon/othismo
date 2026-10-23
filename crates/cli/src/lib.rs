@@ -18,3 +18,19 @@ pub use syntax::image_definition;
 pub fn formats() -> format::Formats {
     format::Formats::new(vec![Box::new(format_bson::Bson)])
 }
+
+/// The AssemblyScript bindings for the `.oth` file at `source`, as
+/// `othismo bindings` writes them, importing the SDK from `library`: its
+/// server bases and clients, and the classes for its schemas' types.
+/// `None` if it has nothing to bind.
+pub fn bindings_for(source: &std::path::Path, library: &str) -> anyhow::Result<Option<String>> {
+    let formats = formats();
+    let mut loader = iface::Loader::new(formats.clone());
+    let header = loader.header(source)?;
+    let mut schemas = vec![];
+    for f in formats.iter() {
+        schemas.push((f, loader.schemas(f, source)?));
+    }
+    let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(bindings::namespace(&header, &schemas, &name, library, "othismo/env"))
+}

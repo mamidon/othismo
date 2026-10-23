@@ -3,10 +3,9 @@ version: '3'
 # Every examples/<name>/<name>.oth is an example. Objects are modules: the
 # reusable ones in sdk/objects/<name>/, and an example's own in its
 # scripts/. Each <Type>.ts is compiled to <Type>.wasm beside it. Each
-# object's header is its <Type>.oth, and its message types, if it has any,
-# are in <Type>.messages; both are embedded in the .wasm once it is
-# compiled. The bindings generated from them are committed next to them, as
-# <Type>.oth.ts and <Type>.messages.ts.
+# object's header is its <Type>.oth, with its message types, if it has any,
+# in a schemas block; both are embedded in the .wasm once it is compiled.
+# The bindings generated from it are committed next to it, as <Type>.oth.ts.
 vars:
   # Each example is a directory holding an image named after it.
   EXAMPLES:
@@ -88,7 +87,7 @@ tasks:
       - fly deploy
 
   bindings:
-    desc: Regenerate the AssemblyScript bindings from every header and schema file
+    desc: Regenerate the AssemblyScript bindings from every module's .oth
     cmds:
       - task: bindings:env
       - for: { var: MODULE_DIRS }
@@ -141,7 +140,7 @@ tasks:
         cmd: '{{.BIN}} bindings {{.ITEM}}'
     vars:
       HEADERS:
-        sh: find {{.DIR}} -maxdepth 1 -name '*.messages' -o -maxdepth 1 -name '*.oth'
+        sh: find {{.DIR}} -maxdepth 1 -name '*.oth'
 
   wasm:one:
     internal: true
@@ -153,10 +152,8 @@ tasks:
       - sdk/env/*.oth
       - crates/**/*.rs
       - '{{.DIR}}/*.oth'
-      - '{{.DIR}}/*.messages'
       - '{{.DIR}}/*.md'
       - '{{.DIR}}/*.ts'
-      - exclude: '{{.DIR}}/*.messages.ts'
       - exclude: '{{.DIR}}/*.oth.ts'
     generates:
       - '{{.DIR}}/*.wasm'
@@ -167,7 +164,7 @@ tasks:
         cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.oth {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
-        sh: ls {{.DIR}}/*.ts | grep -v -e '\.messages\.ts$' -e '\.oth\.ts$'
+        sh: ls {{.DIR}}/*.ts | grep -v '\.oth\.ts$'
 
   # Seals examples/<NAME>/<NAME>.oth into a .rti with the othismo that
   # `build` just made, so the two always match.

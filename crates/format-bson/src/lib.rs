@@ -1,6 +1,7 @@
 //! The BSON format, for `application/bson`: a payload is a BSON document
 //! whose first key, `$type`, names its message type. Its schemas are
-//! message types, written in `.messages` files beside a module's header.
+//! message types, written in a `.oth` file's `schemas application/bson`
+//! block.
 //! It is the format the SDK supports, and the protocol knows nothing of it.
 
 pub mod bindings;
@@ -9,7 +10,7 @@ pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use format::{Format, Schemas};
+use format::{Bindings, Format, Schemas};
 use messages::{FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,7 @@ impl Bson {
                 Tok::Ident(kw) if kw == "import" => {
                     p.no_docs(&doc, pos)?;
                     let imp = p.import()?;
-                    let Source::Path(path) = &imp.from else { bail!("{pos}: message types are imported from other `.messages` files") };
+                    let Source::Path(path) = &imp.from else { bail!("{pos}: message types are imported from other `.oth` files' `{BSON}` schemas") };
                     let theirs = import(path).map_err(|e| anyhow::anyhow!("{pos}: importing from {path:?}: {e:#}"))?;
                     for n in &imp.names {
                         if n.local.name != n.name.name {
@@ -167,10 +168,6 @@ impl Format for Bson {
         BSON
     }
 
-    fn extension(&self) -> &'static str {
-        "messages"
-    }
-
     fn section(&self) -> &'static str {
         "othismo.schema.bson"
     }
@@ -235,9 +232,12 @@ impl Format for Bson {
         Some(out)
     }
 
-    fn bindings(&self, schemas: &Schemas, source: &str, library: &str) -> Option<String> {
-        let messages = Bson::messages(schemas);
-        (!messages.declared.is_empty()).then(|| bindings::assemblyscript(&messages, source, library))
+    fn declared(&self, schemas: &Schemas) -> Vec<String> {
+        Bson::messages(schemas).declared
+    }
+
+    fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings> {
+        (!types.is_empty()).then(|| bindings::assemblyscript(&Bson::messages(schemas), types, &format!("{library}/bson")))
     }
 
     fn document(&self, schemas: &Schemas, h: &str) -> String {
@@ -372,13 +372,13 @@ mod tests {
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
         assert!(err("message A {} message A {}").contains("message `A` is declared twice"));
         assert!(err("object A {}").contains("expected `import` or `message`"));
-        assert!(err(r#"import { A } from "./a.messages""#).contains("no ./a.messages here"));
+        assert!(err(r#"import { A } from "./a.oth""#).contains("no ./a.oth here"));
 
         let mut import = |_: &str| Ok(messages(GREETING));
-        let m = Bson::parse_messages(r#"import { Greeting } from "./g.messages" message Mine { g: string }"#, &mut import).unwrap();
+        let m = Bson::parse_messages(r#"import { Greeting } from "./g.oth" message Mine { g: string }"#, &mut import).unwrap();
         assert_eq!(m.declared, ["Mine"], "imported types have their own bindings");
         assert!(m.types.contains_key("Greeting"));
-        let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.messages""#, &mut import).unwrap_err());
+        let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.oth""#, &mut import).unwrap_err());
         assert!(e.contains("can't be renamed"), "{e}");
     }
 

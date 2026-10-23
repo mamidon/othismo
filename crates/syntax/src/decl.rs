@@ -1,6 +1,7 @@
 //! The declarations in a `.oth` file, parsed: protocols, traits, objects
-//! and what an image needs, and the message types of a BSON schema file,
-//! which share the grammar of fields. Resolving them is the compiler's.
+//! and what an image needs, the schemas blocks, kept as written, and the
+//! message types that BSON's blocks declare, which share the grammar of
+//! fields. Resolving them is the compiler's.
 
 use crate::image_definition::{self, Ident, Import, Parser, Pos, Tok};
 use anyhow::{Result, bail};

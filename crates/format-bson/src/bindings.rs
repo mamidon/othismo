@@ -1,25 +1,22 @@
-//! The BSON format's AssemblyScript bindings: a class for each message type
-//! a schema file declares, with its encoder and decoder. Types it imports
-//! have bindings of their own, generated from their own files.
+//! The BSON format's AssemblyScript bindings: a class for each message
+//! type, with its encoder and decoder.
 
 use crate::Messages;
 use crate::messages::{FieldType, MessageType};
+use format::Bindings;
 use std::fmt::Write;
 
-/// The bindings for the message types `schemas` declares. `source` names
-/// the schema file in the generated comment, and `library` is where
-/// `Message`, `Reader` and `Writer` are imported from.
-pub fn assemblyscript(schemas: &Messages, source: &str, library: &str) -> String {
-    let mut out = format!(
-        "// Generated from {source} by `othismo bindings`. Edit the schemas, not this file.\n\n\
-         import {{ Message, Reader, Writer, registerMessage }} from \"{library}\"\n"
-    );
-    for name in &schemas.declared {
+/// The classes for `types`, each of which `schemas` has, in that order.
+/// `library` is where `Message`, `Reader` and `Writer` are imported from.
+pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bindings {
+    let imports = format!("import {{ Message, Reader, Writer, registerMessage }} from \"{library}\"\n");
+    let mut code = String::new();
+    for name in types {
         let ty = &schemas.types[name];
-        out.push('\n');
-        class(&mut out, ty);
+        code.push('\n');
+        class(&mut code, ty);
     }
-    out
+    Bindings { imports, code }
 }
 
 fn class(out: &mut String, ty: &MessageType) {
@@ -141,8 +138,8 @@ mod tests {
             message Ping {}
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
-        let out = assemblyscript(&schemas, "G.messages", "othismo/bson");
-        assert!(out.starts_with("// Generated from G.messages by `othismo bindings`."), "{out}");
+        let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo/bson");
+        assert_eq!(imports, "import { Message, Reader, Writer, registerMessage } from \"othismo/bson\"\n");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */

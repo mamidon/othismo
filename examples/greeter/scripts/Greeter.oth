@@ -16,3 +16,13 @@ export object Greeter {
     /greeting  write application/bson
   }
 }
+
+export schemas application/bson {
+  ## Configures a Greeter; sent once at startup by the image.
+  message Greeting {
+    ## Put before each name.
+    prefix: string
+    ## End with `!` rather than `.`.
+    excited: bool
+  }
+}

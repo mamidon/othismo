@@ -1,9 +1,11 @@
-//! Generates AssemblyScript bindings from a header: a server base class for
-//! each object, which routes the requests it serves to a method each, and a
-//! client for each of its needs, whose methods make the requests they list.
-//! A schema file's bindings are its format's to generate.
+//! Generates AssemblyScript bindings from a `.oth` file: a server base
+//! class for each object, which routes the requests it serves to a method
+//! each, a client for each of its needs, whose methods make the requests
+//! they list, and the types of its schemas blocks, which each block's
+//! format generates.
 
 use compiler::iface::{self, Entry, Header};
+use format::{Format, Schemas};
 use protocol::ns::Verb;
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -28,12 +30,15 @@ fn doc(out: &mut String, indent: &str, text: &str) {
 // ---------------------------------------------------------------------------
 // From a header
 
-/// The bindings for `header`: a server base for each object it declares,
-/// and a client for each of their needs. `source` names the header in the
+/// The bindings for a `.oth` file, whose header is `header` and whose
+/// blocks' schemas are `schemas`, each with its format: a server base for
+/// each object it declares, a client for each of their needs, and a class
+/// for each type its blocks declare. `source` names the file in the
 /// generated comment; `library` and `env` are where the SDK and the
 /// runtime's clients are imported from. `None` if there is nothing to bind.
-pub fn namespace(header: &Header, source: &str, library: &str, env: &str) -> Option<String> {
-    if header.objects.is_empty() {
+pub fn namespace(header: &Header, schemas: &[(&dyn Format, Schemas)], source: &str, library: &str, env: &str) -> Option<String> {
+    let types: Vec<_> = schemas.iter().filter_map(|(f, s)| f.bindings(s, &f.declared(s), library)).collect();
+    if header.objects.is_empty() && types.is_empty() {
         return None;
     }
     let mut body = String::new();
@@ -70,12 +75,18 @@ pub fn namespace(header: &Header, source: &str, library: &str, env: &str) -> Opt
             }
         }
     }
-    let mut out = format!(
-        "// Generated from {source} by `othismo bindings`. Edit the header, not this file.\n\n\
-         import {{ Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"\n"
-    );
+    let mut out = format!("// Generated from {source} by `othismo bindings`. Edit the header, not this file.\n\n");
+    if !header.objects.is_empty() {
+        writeln!(out, "import {{ Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"").unwrap();
+    }
     if !from_env.is_empty() {
         writeln!(out, "import {{ {} }} from \"{env}\"", from_env.into_iter().collect::<Vec<_>>().join(", ")).unwrap();
+    }
+    for t in &types {
+        out.push_str(&t.imports);
+    }
+    for t in &types {
+        out.push_str(&t.code);
     }
     out.push_str(&body);
     Some(out)
@@ -381,7 +392,7 @@ mod tests {
         "#;
         let file = iface::parse(src).unwrap();
         let header = iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap();
-        let out = namespace(&header, "Greeter.oth", "othismo", "othismo/env").unwrap();
+        let out = namespace(&header, &[], "Greeter.oth", "othismo", "othismo/env").unwrap();
         assert!(out.contains("import { ConsoleClient } from \"othismo/env\"\n"), "{out}");
         assert!(out.contains("/** Greets. */\nexport class GreeterServer extends Server {"), "{out}");
         assert!(out.contains("  writeGreeting(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }"), "{out}");
