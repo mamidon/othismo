@@ -148,6 +148,7 @@ dependencies = [
  "image",
  "protocol",
  "runtime",
+ "shell",
  "syntax",
  "wat",
 ]

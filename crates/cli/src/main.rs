@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot[.field]=value>]... <image>
+       othismo shell [--plain] [--no-checks] [--with <file>]... [--set <slot[.field]=value>]... <image>
        othismo test [--no-checks] <image>
        othismo build [-v] [--no-sources] <image.oth> -o <out.rti>
        othismo unpack <image> <dir>
@@ -24,6 +25,12 @@ An image is a .oth source, which is built in memory, or a built .rti file.
                   otherwise
   --no-sources    leave the reference copies of the sources out of a build
   -v              list each packed path that a later include replaced
+
+`shell` runs the image, and lets you look around it and make requests of it
+while it runs: from the image's own view, or from any instance's. Only you,
+at this terminal, can: the shell runs the image in its own process, and
+nothing outside the process can reach it. --plain reads commands a line at
+a time, as a script can; type :help in the shell for its commands.
 
 `test` runs the image's tests: each instance whose type declares TestSuite
 lists its tests, and each test runs in a fresh run of the image, with nothing
@@ -78,6 +85,7 @@ fn command(args: &[String]) -> Result<Result<()>, Usage> {
             _ => Err(Usage),
         },
         Some("run") => run(&args[1..]),
+        Some("shell") => shell(&args[1..]),
         Some("test") => test(&args[1..]),
         Some("bindings") => bindings(&args[1..]),
         Some("doc") => match &args[1..] {
@@ -218,39 +226,72 @@ fn test(args: &[String]) -> Result<Result<()>, Usage> {
     }))
 }
 
-fn run(args: &[String]) -> Result<Result<()>, Usage> {
-    let mut image = None;
-    let mut options = runtime::Options::default();
-    let mut check_only = false;
-    let (mut files, mut sets) = (vec![], vec![]);
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--check" => check_only = true,
-            "--no-checks" => options.no_checks = true,
-            "--with" => files.push(PathBuf::from(args.next().ok_or(Usage)?)),
-            "--set" => sets.push(args.next().ok_or(Usage)?),
-            _ if arg.starts_with('-') || image.is_some() => return Err(Usage),
-            _ => image = Some(PathBuf::from(arg)),
+/// What `run` and `shell` are given: the image, how to run it, and its
+/// slots' values.
+struct Running {
+    image: PathBuf,
+    options: runtime::Options,
+    files: Vec<PathBuf>,
+    sets: Vec<String>,
+}
+
+impl Running {
+    /// Reads the arguments `run` and `shell` share; `flag` takes the
+    /// command's own flags, and says whether it did.
+    fn parse(args: &[String], mut flag: impl FnMut(&str) -> bool) -> Result<Running, Usage> {
+        let mut image = None;
+        let mut options = runtime::Options::default();
+        let (mut files, mut sets) = (vec![], vec![]);
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--no-checks" => options.no_checks = true,
+                "--with" => files.push(PathBuf::from(args.next().ok_or(Usage)?)),
+                "--set" => sets.push(args.next().ok_or(Usage)?.clone()),
+                _ if flag(arg) => {}
+                _ if arg.starts_with('-') || image.is_some() => return Err(Usage),
+                _ => image = Some(PathBuf::from(arg)),
+            }
         }
+        Ok(Running { image: image.ok_or(Usage)?, options, files, sets })
     }
-    let image = image.ok_or(Usage)?;
-    Ok(pack::load(&image).and_then(|mut pack| {
-        // Files first, in order, then --set: later values win.
+
+    /// Loads the image, with its slots bound: files first, in order, then
+    /// --set, later values winning.
+    fn load(&self) -> Result<pack::Pack> {
+        let mut pack = pack::load(&self.image)?;
         let mut given = vec![];
-        for file in &files {
+        for file in &self.files {
             given.extend(slots::read_values(file)?);
         }
-        for set in sets {
+        for set in &self.sets {
             given.push(slots::parse_set(set)?);
         }
-        let formats = othismo::formats();
-        slots::bind(&mut pack.program, &formats, &given)?;
+        slots::bind(&mut pack.program, &othismo::formats(), &given)?;
+        Ok(pack)
+    }
+}
+
+fn run(args: &[String]) -> Result<Result<()>, Usage> {
+    let mut check_only = false;
+    let running = Running::parse(args, |arg| arg == "--check" && { check_only = true; true })?;
+    Ok(running.load().and_then(|pack| {
         if check_only {
-            print!("{}", pack::describe(&pack, &formats));
+            print!("{}", pack::describe(&pack, &othismo::formats()));
             Ok(())
         } else {
-            runtime::run(&pack, runtime::Io::std(), options)
+            runtime::run(&pack, runtime::Io::std(), running.options)
         }
     }))
+}
+
+fn shell(args: &[String]) -> Result<Result<()>, Usage> {
+    let mut plain = false;
+    let running = Running::parse(args, |arg| arg == "--plain" && { plain = true; true })?;
+    let options = running.options;
+    Ok((|| {
+        let mut session = othismo::shell::Session::start(move || running.load(), options, othismo::formats())?;
+        let _ = plain;
+        othismo::shell::repl::run(&mut session, std::io::stdin().lock(), &mut std::io::stdout())
+    })())
 }

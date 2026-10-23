@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-description = "The othismo command: run, test, build, unpack, embed, bindings and doc"
+description = "The othismo command: run, shell, test, build, unpack, embed, bindings and doc"
 version.workspace = true
 edition.workspace = true
 
@@ -22,6 +22,7 @@ image.workspace = true
 runtime.workspace = true
 compiler.workspace = true
 codegen.workspace = true
+shell.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

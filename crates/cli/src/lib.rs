@@ -9,6 +9,7 @@ pub mod pack;
 pub use ::codegen::{bindings, doc};
 pub use ::compiler::{check, iface};
 pub use ::image::{slots, tree};
+pub use ::shell;
 pub use ::runtime::{env, operator, render, runtime, suite};
 pub use format_bson::{messages, wire};
 pub use protocol::{ns, pattern, payload};
