@@ -146,9 +146,8 @@ For `instance web : Site { ... }`:
 - **Its instances are private.** They are named `web.http`, `web.pages` and
   `web.files`, so they never collide with anything outside, and nothing
   outside can reach them except through what is exported.
-- **Its startup requests** are made in its own view when it starts, after
-  everything its instance block mounts (see
-  [Startup order](namespace.md#startup-order)).
+- **Its startup requests** are made in its own view, before those of the
+  image that instantiates it (see [Startup order](namespace.md#startup-order)).
 - **It is the operator of its own instances.** Its startup requests carry
   the operator flag, and so do those its parent makes of it through its
   exports. No object can make one.

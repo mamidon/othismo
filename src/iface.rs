@@ -21,14 +21,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The runtime's own header, one file at a time: the bodies its objects
-/// share, then each trait it implements with the types it adds,
-/// Packed.Files, and TestSuite. A file may import from the files before it.
+/// share, then each trait it implements with its stand-in in memory,
+/// PackedFiles, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
     ("bodies.oth", include_str!("../as/env/bodies.oth")),
     ("Console.oth", include_str!("../as/env/Console.oth")),
     ("Listener.oth", include_str!("../as/env/Listener.oth")),
     ("Files.oth", include_str!("../as/env/Files.oth")),
-    ("Packed.Files.oth", include_str!("../as/env/Packed.Files.oth")),
+    ("PackedFiles.oth", include_str!("../as/env/PackedFiles.oth")),
     ("TestSuite.oth", include_str!("../as/env/TestSuite.oth")),
 ];
 
@@ -87,6 +87,9 @@ pub struct Header {
     /// imported ones it names in `export { ... }`.
     #[serde(default)]
     pub exports: Vec<String>,
+    /// An image's top-level needs: what it needs from whoever instantiates it.
+    #[serde(default)]
+    pub needs: Vec<Need>,
 }
 
 /// `protocol <Name> { ... }`: the requests one path takes, with any
@@ -427,6 +430,8 @@ pub struct File {
     /// What it exports: declarations written `export`, and imported ones
     /// named in `export { ... }`.
     pub exports: Vec<Ident>,
+    /// Top-level `needs`: what an image needs from whoever instantiates it.
+    pub needs: Vec<NeedDecl>,
 }
 
 /// `protocol <Name> { <item>, ... }`: the requests one path takes.
@@ -592,19 +597,7 @@ impl Parser {
                     self.no_docs(&doc, pos)?;
                     return Ok(obj);
                 }
-                Tok::Ident(kw) if kw == "needs" => {
-                    let at = self.path()?;
-                    // `needs /net/tcp Listener` is the trait's whole tree.
-                    let entries = match self.peek() {
-                        Tok::Ident(_) => {
-                            let name = self.ident("trait name", false)?;
-                            let path = image::Path { path: "/".into(), pos: name.pos };
-                            vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
-                        }
-                        _ => self.entries()?,
-                    };
-                    obj.needs.push(NeedDecl { at, doc, entries });
-                }
+                Tok::Ident(kw) if kw == "needs" => obj.needs.push(self.need(doc)?),
                 Tok::Ident(kw) if kw == "serves" => {
                     self.no_docs(&doc, pos)?;
                     obj.serves.extend(self.entries()?);
@@ -622,6 +615,21 @@ impl Parser {
                 other => bail!("{pos}: expected `needs`, `serves`, `guide` or `}}`, found {other}"),
             }
         }
+    }
+
+    /// What follows `needs`: `<mount point> <trait>` for the trait's whole
+    /// tree, or `<mount point> { entries }`.
+    pub(crate) fn need(&mut self, doc: String) -> Result<NeedDecl> {
+        let at = self.path()?;
+        let entries = match self.peek() {
+            Tok::Ident(_) => {
+                let name = self.ident("trait name", false)?;
+                let path = image::Path { path: "/".into(), pos: name.pos };
+                vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
+            }
+            _ => self.entries()?,
+        };
+        Ok(NeedDecl { at, doc, entries })
     }
 
     /// `{ <path> <request>, ... }`, each path optionally documented.
@@ -727,6 +735,15 @@ pub fn resolve(
     let mut imported: BTreeMap<String, Object> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
     for imp in &file.imports {
+        if let Some(d) = &imp.default {
+            reserve(d)?;
+            if let Some(prev) = from.insert(d.name.clone(), imp.from.to_string()) {
+                bail!(err_at(d, format!("`{}` is already imported from {prev}", d.name)));
+            }
+        }
+        if imp.names.is_empty() {
+            continue;
+        }
         let header = import(&imp.from).with_context(|| format!("{}: importing from {}", imp.pos, imp.from))?;
         for n in &imp.names {
             let (name, local) = (&n.name, &n.local);
@@ -818,21 +835,7 @@ pub fn resolve(
             Some((path, pos)) => Some(guide(path).with_context(|| format!("{pos}: reading the guide {path:?}"))?),
             None => None,
         };
-        let mut needs: Vec<Need> = vec![];
-        for n in &o.needs {
-            let at = pattern(&n.at)?;
-            if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
-                bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
-            }
-            // An object can't make the operator's requests, so a need never
-            // includes them, even where it names a trait that serves some.
-            let mut entries = shapes.entries(&n.entries)?;
-            for e in &mut entries {
-                e.requests.retain(|r| !r.operator);
-            }
-            entries.retain(|e| !e.requests.is_empty());
-            needs.push(Need { at, doc: n.doc.clone(), entries });
-        }
+        let needs = shapes.needs(&o.needs)?;
         let mut serves = shapes.entries(&o.serves)?;
         for t in &o.traits {
             let Shape::Trait(entries) = shapes.named(t)? else {
@@ -845,6 +848,7 @@ pub fn resolve(
         let traits = o.traits.iter().map(|t| t.name.clone()).collect();
         objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves, origin: None });
     }
+    let image_needs = shapes.needs(&file.needs)?;
     let mut exports: Vec<String> = vec![];
     for e in &file.exports {
         let known = names.iter().any(|(n, _)| n.name == e.name) || from.contains_key(&e.name);
@@ -858,7 +862,7 @@ pub fn resolve(
     }
     let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
     let Shapes { protocols, traits, .. } = shapes;
-    Ok(Header { messages, declared, protocols, traits, objects, imported, exports })
+    Ok(Header { messages, declared, protocols, traits, objects, imported, exports, needs: image_needs })
 }
 
 /// What a protocol's or a trait's name stands for, written out.
@@ -947,6 +951,26 @@ impl Shapes<'_> {
             None => None,
         };
         Ok(Request { operator: r.operator, verb: r.verb, body, answer })
+    }
+
+    /// The needs blocks `decls` stand for. An object can't make the
+    /// operator's requests, so a need never includes them, even where it
+    /// names a trait that serves some.
+    fn needs(&mut self, decls: &[NeedDecl]) -> Result<Vec<Need>> {
+        let mut needs: Vec<Need> = vec![];
+        for n in decls {
+            let at = pattern(&n.at)?;
+            if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
+                bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
+            }
+            let mut entries = self.entries(&n.entries)?;
+            for e in &mut entries {
+                e.requests.retain(|r| !r.operator);
+            }
+            entries.retain(|e| !e.requests.is_empty());
+            needs.push(Need { at, doc: n.doc.clone(), entries });
+        }
+        Ok(needs)
     }
 
     /// The entries `decls` stand for, with each trait's tree put at its path.
@@ -1319,7 +1343,7 @@ mod tests {
             assert!(env.traits.contains_key(name), "{name}");
         }
         let objects: Vec<&str> = env.objects.iter().map(|o| o.name.as_str()).collect();
-        assert_eq!(objects, ["Packed.Files"], "the rest are declared by trait");
+        assert_eq!(objects, ["MemoryConsole", "MemoryListener", "PackedFiles"], "the rest are needed by trait");
     }
 
     #[test]

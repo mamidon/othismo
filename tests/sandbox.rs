@@ -11,7 +11,28 @@ use othismo::runtime::Options;
 const MESSAGES: &str = "export message Ping {}\n";
 
 /// What every fixture image imports from env.
-const ENV: &str = "import { Console, Listener, Files, Packed.Files } from env";
+const ENV: &str = "import { Console, Listener, Files, PackedFiles, MemoryConsole, MemoryListener } from env";
+
+/// The image's needs that fixtures bind, and the trait each one is.
+const NEEDS: &[(&str, &str)] = &[("/cons", "Console"), ("/files", "Files")];
+
+/// `members` with each mount of `cons`, which is the root's need, written
+/// as a bind of it.
+fn bound(members: &str) -> String {
+    let words: Vec<&str> = members.split_whitespace().collect();
+    let mut out: Vec<String> = vec![];
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "mount" && i + 2 < words.len() && words[i + 2] == "cons" {
+            out.push(format!("bind {} /{}", words[i + 1], words[i + 2]));
+            i += 3;
+        } else {
+            out.push(words[i].to_string());
+            i += 1;
+        }
+    }
+    out.join(" ")
+}
 
 /// One thing a scripted module does.
 enum Act {
@@ -284,12 +305,16 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
     let mut out = format!("object {ty} {{\n");
     let words: Vec<&str> = members.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
-        if *w != "mount" {
+        if *w != "mount" && *w != "bind" {
             continue;
         }
         let (at, target) = (words[i + 1], words[i + 2]);
         let ro = words.get(i + 3) == Some(&"readonly");
-        let built_in = env.object(&types[target]).cloned().or_else(|| env.traits.get(&types[target]).map(|t| t.as_object()));
+        let ty = match NEEDS.iter().find(|(path, _)| *path == target) {
+            Some((_, trait_name)) => trait_name.to_string(),
+            None => types[target].clone(),
+        };
+        let built_in = env.object(&ty).cloned().or_else(|| env.traits.get(&ty).map(|t| t.as_object()));
         let entries: Vec<String> = match built_in {
             None => vec![anything(ro)],
             Some(built_in) => built_in
@@ -318,8 +343,9 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
     out
 }
 
-/// An image with a Console called `cons`, the given Wasm instances
-/// (`name`, script, members) and any extra declarations and requests. Each scripted
+/// An image that needs a Console at `/cons`, with the given Wasm instances
+/// (`name`, script, members) and any extra declarations and requests. A
+/// member that mounts `cons` binds the image's `/cons`. Each scripted
 /// module gets a header from [`header`].
 fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixture {
     fixture_with(name, objects, extra, &[])
@@ -328,10 +354,10 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages.oth\"\n{ENV}\ninstance cons : Console\n{extra}\n");
+    let mut img = format!("import {{ Ping }} from \"./messages.oth\"\n{ENV}\nneeds /cons Console\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {members} }}\n"));
+        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {} }}\n", bound(members)));
     }
     let parsed = othismo::image::parse(&img).unwrap();
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
@@ -339,7 +365,7 @@ fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, head
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
         let iface = match headers.iter().find(|(t, _)| *t == ty) {
             Some((_, src)) => src.to_string(),
-            None => header(&ty, script, members, &types),
+            None => header(&ty, script, &bound(members), &types),
         };
         f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &iface));
     }
@@ -557,8 +583,8 @@ fn unversioned(out: &str) -> String {
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Files  mount /files files  write /files \"public\"";
-    let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
+    let files = "needs /files Files  write /files \"public\"";
+    let f = fixture("files", &[("a", &files_script(), "bind /f /files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
     assert_eq!(unversioned(&run(&f).unwrap()), FILES_OUTPUT);
@@ -566,7 +592,7 @@ fn files_read_stat_and_list() {
 
 #[test]
 fn packed_files_answer_like_files() {
-    let files = "instance files : Packed.Files { include \"public/\" }";
+    let files = "instance files : PackedFiles { include \"public/\" }";
     let f = fixture("packed", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
@@ -743,8 +769,8 @@ fn missing_module_is_reported() {
 }
 
 #[test]
-fn an_imported_image_runs_in_memory_and_can_be_dialed() {
-    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/static.oth");
+fn an_image_given_a_listener_in_memory_can_be_dialed() {
+    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/site.oth");
     let request = "GET /index.html HTTP/1.1\r\nHost: anything\r\n\r\n";
     let probe = Script {
         start: vec![Act::Call {
@@ -756,12 +782,16 @@ fn an_imported_image_runs_in_memory_and_can_be_dialed() {
         answer: Some(Steps::Each(vec![Act::ShowText("/out")])),
         ..Default::default()
     };
-    let f = Fixture::new("import");
+    let f = Fixture::new("instantiate");
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs /net Dialer needs /out Console }"));
     f.file(
         "test.oth",
         format!(
-            "import \"{}\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\ninstance out : Console\ninstance probe : Probe {{\n  mount /net net\n  mount /out out\n}}\n",
+            "import Site from \"{}\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\n\
+             needs /out Console\n\
+             instance net : MemoryListener\ninstance cons : MemoryConsole\n\
+             instance web : Site {{\n  mount /net/tcp net\n  mount /dev/cons cons\n}}\n\
+             instance probe : Probe {{\n  mount /net net\n  bind /out /out\n}}\n",
             site.display()
         ),
     );
@@ -772,37 +802,60 @@ fn an_imported_image_runs_in_memory_and_can_be_dialed() {
 }
 
 #[test]
-fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
+fn an_instantiated_image_is_relative_to_its_own_file() {
     let probe = Script {
-        start: vec![call(Verb::Read, "/f/hello.txt"), call(Verb::Read, "/f/missing")],
+        start: vec![call(Verb::Read, "/f/files/hello.txt"), call(Verb::Read, "/f/files/missing")],
         answer: Some(Steps::Each(vec![Act::Show("/out")])),
         ..Default::default()
     };
-    let f = Fixture::new("import_files");
-    // The imported image is in a directory of its own, with its files there.
+    let f = Fixture::new("instantiate_files");
+    // The image is in a directory of its own, with its files there.
     std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
-    f.file("site/site.oth", &format!("{ENV}\ninstance files : Files\nmount /files files\nwrite /files \"public\"\n"));
+    f.file("site/site.oth", &format!("{ENV}\ninstance files : PackedFiles {{ include \"public/\" }}\nmount /files files\nexport /files\n"));
     f.file("site/public/hello.txt", "hi");
-    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Files } from env object Probe { needs /f Files needs /out Console }"));
+    let header = "import { Console } from env object Probe { needs /f { /files/** read -> */* } needs /out Console }";
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), header));
     f.file(
         "test.oth",
-        format!("import \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\ninstance out : Console\ninstance probe : Probe {{\n  mount /f files\n  mount /out out\n}}\n"),
+        format!("import Site from \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance site : Site\ninstance probe : Probe {{\n  mount /f site\n  bind /out /out\n}}\n"),
     );
-    let out = run(&f).unwrap();
-    assert_eq!(out, "hi\nnot_found\n");
-
+    assert_eq!(run(&f).unwrap(), "hi\nnot_found\n");
     let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap());
-    assert!(described.contains("files  serves a snapshot of host files under public, taken at start"), "{described}");
+    assert!(described.contains("site.files  serves 1 built-in file, 2 bytes"), "{described}");
 }
 
 #[test]
-fn an_import_shares_names_with_the_image() {
-    let f = Fixture::new("import_clash");
-    f.file("site.oth", &format!("{ENV}\ninstance cons : Console\nmount /cons cons\n"));
-    f.file("test.oth", &format!("import \"./site.oth\"\n{ENV}\ninstance cons : Console\n"));
-    assert!(run_err(&f).contains("instance `cons` is declared twice"), "{}", run_err(&f));
-    f.file("test.oth", &format!("import \"./site.oth\"\n{ENV}\ninstance other : Console\nmount /cons other\n"));
-    assert!(run_err(&f).contains("`/cons` is already mounted in the image's view"), "{}", run_err(&f));
-    f.file("test.oth", "import \"./nope.oth\"\n");
-    assert!(run_err(&f).contains("1:8: importing ./nope.oth"), "{}", run_err(&f));
+fn an_images_names_are_its_own() {
+    let f = Fixture::new("instantiate_names");
+    f.file("site.oth", &format!("{ENV}\ninstance cons : MemoryConsole\nmount /cons cons\n"));
+    f.file("test.oth", &format!("import Site from \"./site.oth\"\n{ENV}\ninstance cons : MemoryConsole\ninstance site : Site\nmount /cons cons\n"));
+    let p = othismo::pack::load(&f.image()).unwrap();
+    let names: Vec<&str> = p.program.instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["cons", "site", "site.cons"]);
+    f.file("test.oth", "import \"./site.oth\"\n");
+    assert!(run_err(&f).contains("an image is no longer imported whole"), "{}", run_err(&f));
+    f.file("test.oth", "import Nope from \"./nope.oth\"\ninstance n : Nope\n");
+    assert!(run_err(&f).contains("nope.oth"), "{}", run_err(&f));
+}
+
+#[test]
+fn an_image_serves_only_what_it_exports() {
+    // web exports a's /x alone. The probe binds web where its needs let it
+    // read anything, but nothing else of web is there to read.
+    let a = Script { serve: Some(Steps::Each(vec![reply(text("from a"))])), ..Default::default() };
+    let probe = Script {
+        start: vec![Act::Bind { src: "/web", at: "/raw", read_only: false }, call(Verb::Read, "/raw/x"), call(Verb::Read, "/raw/y")],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let f = Fixture::new("exports");
+    f.file("scripts/A.wasm", module(&script_wat(&a), &format!("object A {{ serves {{ {} }} }}", anything(false))));
+    let probe_header = "import { Console } from env object Probe { needs /out Console  needs /web { /x read -> */** }  needs /raw/** { /** read -> */* } }";
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), probe_header));
+    f.file("site.oth", "import { A } from \"./scripts/A.wasm\"\ninstance a : A\nmount /a a\nexport /a/x at /x\n");
+    f.file(
+        "test.oth",
+        format!("import Site from \"./site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance web : Site\ninstance probe : Probe {{ mount /web web  bind /out /out }}\n"),
+    );
+    assert_eq!(run(&f).unwrap(), "not_found\nfrom a\n", "the unexported path is refused at once");
 }

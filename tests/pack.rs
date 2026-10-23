@@ -27,10 +27,10 @@ fn fixture(name: &str) -> Fixture {
             import { A } from "./scripts/A.oth"
             import { B } from "./scripts/B.wasm"
             import { Console } from env
-            instance cons : Console
-            instance a : A { mount /dev/cons cons }  mount /a a  write /a Ping
+            needs /dev/cons Console
+            instance a : A { bind /dev/cons /dev/cons }  mount /a a  write /a Ping
             instance b : B { mount /a a readonly }
-            instance a2 : A { mount /dev/cons cons }"#,
+            instance a2 : A { bind /dev/cons /dev/cons }"#,
         );
     f
 }
@@ -115,9 +115,9 @@ fn unpacking_writes_modules_and_sources() {
     assert!(read("sources/test.oth").contains("instance a2 : A"));
 }
 
-/// An image whose only instance is `files : Packed.Files { <includes> }`.
+/// An image whose only instance is `files : PackedFiles { <includes> }`.
 fn packed(f: &Fixture, includes: &str) -> anyhow::Result<Pack> {
-    f.file("test.oth", format!("import {{ Packed.Files }} from env instance files : Packed.Files {{ {includes} }}"));
+    f.file("test.oth", format!("import {{ PackedFiles }} from env instance files : PackedFiles {{ {includes} }}"));
     pack::build(&f.image(), BuildOptions::default())
 }
 
@@ -250,13 +250,11 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         r#"import { Console, Files, Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
         require root : text/plain
-        instance net   : Listener
-        instance files : Files
-        mount /net net
-        mount /files files
+        needs /net   Listener
+        needs /files Files
+        needs /cons  Console
         write /net listen
-        write /files root
-        instance cons  : Console"#,
+        write /files root"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
     let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
@@ -270,11 +268,11 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         "slot listen : text/plain = \"127.0.0.1:8080\" (default)\n\
          slot root : text/plain = \"www\" (--set)\n\
          \n\
-         the image sees /net → net, /files → files\n\
-         \n\
-         net    listens on 127.0.0.1:8080\n\
-         files  reads host files under www\n\
-         cons   reads stdin, writes stdout\n"
+         from the host:\n\
+         \x20 /net    listens on 127.0.0.1:8080\n\
+         \x20 /files  reads host files under www\n\
+         \x20 /cons   reads stdin, writes stdout\n\
+         \n"
     );
 }
 
@@ -287,8 +285,7 @@ fn the_cli_layers_value_files_then_set() {
         import { Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
         require info : Info
-        instance net : Listener
-        mount /net net
+        needs /net Listener
         write /net listen"#,
     )
     .file("info.oth", "export message Info { kind: string, size: i64, mime: string }")

@@ -1,0 +1,32 @@
+# A static site, which touches nothing of its own: whoever instantiates it
+# gives it a listener and a console for the access log. Its files are packed
+# into the image when it is built.
+
+import { HttpServer } from "./scripts/HttpServer.oth"
+import { StaticSite } from "./scripts/StaticSite.oth"
+import { Console, Listener, PackedFiles } from env
+
+needs /net/tcp  Listener
+needs /dev/cons Console
+
+# HTTP in, namespace requests out. It reaches the files only through pages.
+instance http : HttpServer {
+  bind  /net/tcp  /net/tcp
+  bind  /dev/cons /dev/cons
+  mount /www pages
+}
+
+# The pages can read the files and nothing else.
+instance pages : StaticSite {
+  mount /files files readonly
+}
+
+instance files : PackedFiles { include "./public/" }
+
+mount /http http
+
+write /http/hosts/* "/www"
+write /http/hosts/files.localhost "/www/static"
+
+# Whoever instantiates the site can add hosts, and nothing else.
+export /http/hosts at /hosts

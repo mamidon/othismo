@@ -1,34 +1,18 @@
-# A static file server. It touches the host in only two ways: one TCP
-# listener, and the console for the access log. The site's files are packed
-# into the image when it is built.
+# Serves the site on the host. Everything this program can do to the
+# machine it runs on is in its needs: one TCP listener, and the console.
 
-import { HttpServer } from "./scripts/HttpServer.oth"
-import { StaticSite } from "./scripts/StaticSite.oth"
-import { Console, Listener, Packed.Files } from env
+import Site from "./site.oth"
+import { Console, Listener } from env
 
 # Where to listen. Deploy with e.g. `--set listen=0.0.0.0:80`.
 require listen : text/plain = "127.0.0.1:8080"
 
-# HTTP in, namespace requests out. It reaches the files only through the site.
-instance http : HttpServer {
-  mount /net/tcp net
-  mount /www site
-  mount /dev/cons cons
+needs /net/tcp  Listener
+needs /dev/cons Console
+
+instance web : Site {
+  bind /net/tcp  /net/tcp
+  bind /dev/cons /dev/cons
 }
 
-# The site can read the files and nothing else.
-instance site : StaticSite {
-  mount /files files readonly
-}
-
-instance net   : Listener
-instance cons  : Console
-instance files : Packed.Files { include "./public/" }
-
-# What the image itself can reach, to configure it.
-mount /net  net
-mount /http http
-
-write /net listen
-write /http/hosts/* "/www"
-write /http/hosts/files.localhost "/www/static"
+write /net/tcp listen

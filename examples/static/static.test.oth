@@ -1,8 +1,19 @@
-# The static site's tests. The site runs as static.oth declares it, but in
-# memory: nothing listens on the host. SiteTests dials its listener with each
-# test's request. Run them with `othismo test static.test.oth`.
-import "./static.oth"
+# The site's tests. It runs as site.oth declares it, but given a listener
+# and a console in memory: nothing touches the host. SiteTests dials the
+# listener with each test's request. Run them with
+# `othismo test static.test.oth`.
+
+import Site from "./site.oth"
 import { SiteTests } from "./scripts/SiteTests.oth"
+import { MemoryConsole, MemoryListener } from env
+
+instance net  : MemoryListener
+instance cons : MemoryConsole
+
+instance web : Site {
+  mount /net/tcp  net
+  mount /dev/cons cons
+}
 
 instance tests : SiteTests {
   mount /net net

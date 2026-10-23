@@ -29,11 +29,11 @@ pub fn env() -> String {
     let env = iface::env();
     let mut out = String::from(
         "# Built-in objects\n\n\
-         The objects the runtime implements, which are the only way any object reaches the world \
-         outside the image, and the shapes and message types they use. An image declares one by \
-         its trait, `instance net : Listener`, and the runtime picks how to run it; `Packed.Files` \
-         is declared by its own name. They are declared in the runtime's own header, `env`, and \
-         this page is generated from it.\n\n",
+         The objects the runtime implements, and the shapes they are made of. Console, Listener and \
+         Files are the only way any object reaches the world outside the image: the image being run \
+         gets one by needing it, `needs /net/tcp Listener`, and the runtime picks how to run it. The \
+         others touch nothing outside the image, and any image can declare one by its name. They are \
+         declared in the runtime's own header, `env`, and this page is generated from it.\n\n",
     );
     let runs = check::NATIVE.iter().map(|name| env.traits[*name].as_object()).chain(env.objects.iter().cloned());
     for o in runs {
@@ -172,7 +172,7 @@ mod tests {
     fn documents_the_built_in_objects() {
         let out = env();
         assert!(out.starts_with("# Built-in objects\n\n"), "{out}");
-        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`"] {
+        for o in ["## Console", "## Listener", "## Files", "## PackedFiles", "## MemoryListener", "## Shapes", "### `FileTree`"] {
             assert!(out.contains(&format!("{o}\n")), "{o}: {out}");
         }
         assert!(out.contains("| `Connection` | `watch -> application/octet-stream*`, `write application/octet-stream` |"), "{out}");

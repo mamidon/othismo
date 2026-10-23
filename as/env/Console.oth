@@ -9,11 +9,15 @@ export trait Console {
   /   watch -> text/plain*, write */*
 }
 
-## The other side of a console run in memory, which an image that imports
-## another can drive it with: type lines into it, and watch what it prints.
+## The other side of a console in memory: type lines into it, and watch
+## what it prints.
 export trait Terminal {
   ## Type a line, as if on stdin.
   /typed     write text/plain
   ## Everything written to the console, as it is written.
   /printed   watch -> */**
 }
+
+## A console in memory, which touches nothing on the host, to give an image
+## where it would be given the real one.
+export object MemoryConsole : Console, Terminal {}

@@ -18,13 +18,11 @@ pub use files::Files;
 pub use packed::Packed;
 pub use tcp::{MemoryListener, Tcp};
 
-use crate::check::{Instance, IncludeDecl, Kind};
+use crate::check::{Instance, Kind};
 use crate::ns::{Status, Verb};
-use crate::pack::{self, Pack};
+use crate::pack::Pack;
 use crate::payload::Payload;
-use crate::tree::Tree;
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;
@@ -76,34 +74,25 @@ pub enum EnvObject {
     Tcp(Tcp),
     Files(Files),
     Packed(Packed),
-    /// A Console in an imported image.
+    /// A console in memory.
     MemoryConsole(MemoryConsole),
-    /// A Listener in an imported image.
+    /// A listener in memory.
     MemoryListener(MemoryListener),
 }
 
 impl EnvObject {
-    /// `None` for instances implemented in Wasm. A Tcp listener is bound
-    /// here, so its address is known before anything starts. A relative
-    /// files root is relative to the directory of the image that declared
-    /// it. One of the runtime's objects in an imported image runs in memory:
-    /// a Files instance serves a snapshot of its directory, taken now.
+    /// `None` for instances implemented in Wasm and instances of images. A
+    /// Tcp listener is bound here, so its address is known before anything
+    /// starts. A relative files root is relative to the directory of the
+    /// image that declared it.
     pub fn new(inst: &Instance, pack: &Pack) -> Result<Option<EnvObject>> {
         let dir = pack.dir.join(&inst.dir);
         Ok(Some(match &inst.kind {
-            Kind::Wasm { .. } => return Ok(None),
-            Kind::Console if inst.in_memory => EnvObject::MemoryConsole(MemoryConsole::default()),
+            Kind::Wasm { .. } | Kind::Image { .. } => return Ok(None),
             Kind::Console => EnvObject::Console(Console::default()),
-            Kind::Tcp if inst.in_memory => EnvObject::MemoryListener(MemoryListener::default()),
+            Kind::MemoryConsole => EnvObject::MemoryConsole(MemoryConsole::default()),
             Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config(inst)?)?),
-            Kind::Files if inst.in_memory => {
-                let root = config(inst)?;
-                let snapshot = IncludeDecl { source: format!("{}/", root.trim_end_matches('/')), at: None };
-                let (mut tree, mut blobs) = (Tree::default(), BTreeMap::new());
-                tree.include(&dir, &snapshot, &mut |bytes| pack::add(&mut blobs, bytes))
-                    .with_context(|| format!("taking a snapshot of {}", dir.join(&root).display()))?;
-                EnvObject::Packed(Packed::new(tree, blobs))
-            }
+            Kind::MemoryListener => EnvObject::MemoryListener(MemoryListener::default()),
             Kind::Files => EnvObject::Files(Files::open(dir.join(config(inst)?))?),
             Kind::Packed { .. } => {
                 let tree = pack.trees.get(&inst.name).context("its files are missing")?.clone();

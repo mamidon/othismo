@@ -19,7 +19,7 @@
 //! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
 //! module asks for is refused before it is instantiated.
 
-use crate::check::{Kind, Program};
+use crate::check::{Kind, MountDecl, Program};
 use crate::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
 use crate::iface;
@@ -283,6 +283,9 @@ impl WasmObject {
 enum Object {
     Wasm(Box<WasmObject>),
     Env(EnvObject),
+    /// An instance of an image, which serves only through what it exports:
+    /// a request that lands on it found nothing there.
+    Image,
 }
 
 pub struct Runtime<'p> {
@@ -305,15 +308,22 @@ impl<'p> Runtime<'p> {
     pub fn new(pack: &'p Pack, io: Io, options: Options) -> Result<Runtime<'p>> {
         let program = &pack.program;
         let n = program.instances.len();
-        // One view per instance, and the image's own after them.
+        // One view per instance, and the root image's own after them. An
+        // instance of an image serves only what it exports.
         let mut ns = Namespace::new(n + 1);
+        let resolved = |m: &MountDecl| Resolved { inst: m.target, path: m.path.clone(), read_only: m.read_only };
         for (i, inst) in program.instances.iter().enumerate() {
             for m in &inst.mounts {
-                ns.mount(i, &m.at, m.target, m.read_only);
+                ns.mount_resolved(i, &m.at, resolved(m));
+            }
+            if let Kind::Image { exports } = &inst.kind {
+                for e in exports {
+                    ns.expose_resolved(i, &e.at, resolved(e));
+                }
             }
         }
         for m in &program.view {
-            ns.mount(n, &m.at, m.target, m.read_only);
+            ns.mount_resolved(n, &m.at, resolved(m));
         }
         let interfaces = program
             .instances
@@ -343,6 +353,7 @@ impl<'p> Runtime<'p> {
                     let module = pack.blob(&pack.modules[type_name]);
                     Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))
                 }
+                Kind::Image { .. } => Object::Image,
                 kind => Object::Env(
                     EnvObject::new(inst, pack)?
                         .ok_or_else(|| anyhow!("no environment object for {kind:?}"))
@@ -364,22 +375,36 @@ impl<'p> Runtime<'p> {
     /// Delivers the image's startup requests and runs every module's
     /// `start`, but starts nothing outside: no stdin, no sockets.
     pub fn start(&mut self) -> Result<()> {
-        // The image's startup requests, in the order it makes them, each
-        // resolved in the image's view.
-        let image_view = self.program.instances.len();
+        // Every image's startup requests, in the order they are made, each
+        // resolved in its image's view.
+        let root_view = self.program.instances.len();
         for s in &self.program.startup {
-            let what = format!("{} {}", s.verb.keyword(), s.path);
+            let what = match s.image {
+                Some(i) => format!("{} {} in {}", s.verb.keyword(), s.path, self.program.instances[i].name),
+                None => format!("{} {}", s.verb.keyword(), s.path),
+            };
             let body = s.body.as_ref().map(|b| b.payload()).transpose()?;
             let mut shared = self.shared.borrow_mut();
-            let to = shared.ns.resolve(image_view, &s.path).and_then(|r| {
+            let to = shared.ns.resolve(s.image.unwrap_or(root_view), &s.path).and_then(|r| {
                 if r.read_only && !s.verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
             });
             shared.request(Requester::Image(what), to, s.verb, body);
         }
         self.drain()?;
-        // Then every module's start(), each instance after everything it mounts.
-        let mounts: Vec<Vec<usize>> =
-            self.program.instances.iter().map(|i| i.mounts.iter().map(|m| m.target).collect()).collect();
+        // Then every module's start(), each instance after everything it
+        // mounts, and an image's after everything it exports.
+        let mounts: Vec<Vec<usize>> = self
+            .program
+            .instances
+            .iter()
+            .map(|i| {
+                let exports = match &i.kind {
+                    Kind::Image { exports } => exports.as_slice(),
+                    _ => &[],
+                };
+                i.mounts.iter().chain(exports).map(|m| m.target).collect()
+            })
+            .collect();
         let order = ns::start_order(&mounts);
         for &i in &order {
             if let Object::Wasm(obj) = &mut self.objects[i] {
@@ -451,6 +476,9 @@ impl<'p> Runtime<'p> {
                             e.serve(req, verb, &path, body.as_ref(), &mut self.output).map_err(|e| self.failed(to, &doing, e))?;
                         self.send_replies(to, replies)?;
                     }
+                    Object::Image => {
+                        self.shared.borrow_mut().reply(to, req, Status::NotFound, None, String::new(), true)?;
+                    }
                     Object::Wasm(obj) => {
                         let (ty, body) = body.map(|b| (b.ty, b.bytes)).unwrap_or_default();
                         let mut bytes = path.as_bytes().to_vec();
@@ -477,6 +505,7 @@ impl<'p> Runtime<'p> {
                 res.map_err(|e| self.failed(to, "handling an answer", e))?;
             }
             Delivery::Cancel { to, req } => match &mut self.objects[to] {
+                Object::Image => {}
                 Object::Env(e) => {
                     let replies = e.cancel(req);
                     self.send_replies(to, replies)?;

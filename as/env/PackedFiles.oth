@@ -2,4 +2,4 @@ import { FileTree } from "./bodies.oth"
 
 ## Files packed into the image when it was built, by its `include`s. It
 ## answers as `Files` does.
-export object Packed.Files : FileTree {}
+export object PackedFiles : FileTree {}

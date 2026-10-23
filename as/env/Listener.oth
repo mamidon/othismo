@@ -20,10 +20,13 @@ export trait Listener {
   /{conn}          remove
 }
 
-## The other side of a listener run in memory, which an image that imports
-## another can drive it with.
+## The other side of a listener in memory: connect to it.
 export trait Dialer {
   ## Connect, sending the request's bytes, and get back everything the
   ## server writes, until it closes the connection.
   /dial   create application/octet-stream -> application/octet-stream*
 }
+
+## A listener in memory, which touches nothing on the host, to give an image
+## where it would be given a real one. Connections come from `/dial`.
+export object MemoryListener : Listener, Dialer {}

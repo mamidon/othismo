@@ -148,8 +148,8 @@ fn hash(bytes: &[u8]) -> Hash {
 }
 
 /// [`check::describe`], after each slot's value and where its fields came
-/// from, and saying what each environment object touches on the host and
-/// what each packed instance holds.
+/// from, and what the image takes from the host: each of its needs, and
+/// what it touches there. Each object in memory says what it holds.
 pub fn describe(pack: &Pack) -> String {
     let p = &pack.program;
     let mut out = String::new();
@@ -161,23 +161,37 @@ pub fn describe(pack: &Pack) -> String {
         out.push('\n');
     }
     let config = |inst: &check::Instance| inst.config.as_ref().and_then(|c| c.text().ok()).unwrap_or_else(|| "?".into());
+    let host = |i: usize| -> Option<String> {
+        let inst = &p.instances[i];
+        Some(match &inst.kind {
+            Kind::Console => "reads stdin, writes stdout".to_string(),
+            Kind::Tcp => format!("listens on {}", config(inst)),
+            Kind::Files => format!("reads host files under {}", config(inst)),
+            _ => return None,
+        })
+    };
+    let needs: Vec<usize> = (0..p.instances.len()).filter(|&i| host(i).is_some()).collect();
+    if !needs.is_empty() {
+        out.push_str("from the host:\n");
+        let width = needs.iter().map(|&i| p.instances[i].name.len()).max().unwrap_or(0);
+        for &i in &needs {
+            out.push_str(&format!("  {:width$}  {}\n", p.instances[i].name, host(i).unwrap()));
+        }
+        out.push('\n');
+    }
     let about = |i: usize| {
         let inst = &p.instances[i];
         Some(match &inst.kind {
-            Kind::Wasm { .. } => return None,
-            Kind::Console if inst.in_memory => "a console in memory".to_string(),
-            Kind::Console => "reads stdin, writes stdout".to_string(),
-            Kind::Tcp if inst.in_memory => "listens in memory, for /dial".to_string(),
-            Kind::Tcp => format!("listens on {}", config(inst)),
-            Kind::Files if inst.in_memory => format!("serves a snapshot of host files under {}, taken at start", config(inst)),
-            Kind::Files => format!("reads host files under {}", config(inst)),
+            Kind::MemoryConsole => "a console in memory".to_string(),
+            Kind::MemoryListener => "listens in memory, for /dial".to_string(),
             Kind::Packed { .. } => {
                 let (files, size) = pack.trees.get(&inst.name)?.size();
                 format!("serves {files} built-in file{}, {}", if files == 1 { "" } else { "s" }, human_size(size))
             }
+            _ => return None,
         })
     };
-    out.push_str(&check::describe(p, &about));
+    out.push_str(&check::describe(p, &about, &|i| host(i).is_some()));
     out
 }
 

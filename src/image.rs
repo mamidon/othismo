@@ -23,22 +23,35 @@ impl std::fmt::Display for Pos {
 /// and the image it describes, which is empty for a header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
-    /// Its imports, declarations and exports.
+    /// Its imports, declarations, exported declarations and top-level
+    /// `needs`.
     pub header: iface::File,
-    /// `import "<image>"`: other images, whose instances, mounts, slots and
-    /// requests become this one's.
-    pub images: Vec<Path>,
     pub requires: Vec<Require>,
     pub instances: Vec<Instance>,
     /// Top-level mounts: the image's own view, which its requests resolve in.
     pub mounts: Vec<Mount>,
+    /// `export <path> [at <path>] [readonly]`: what an instance of the image serves.
+    pub exports: Vec<Export>,
     /// `<verb> <path> [T { ... }]`: startup requests, in the order they are made.
     pub requests: Vec<Request>,
 }
 
-/// `import { A, B as C } from <source>`
+/// `export <path> [at <path>] [readonly]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct Export {
+    /// A path in the image's view.
+    pub path: Path,
+    /// Where an instance of the image serves it: `path` itself, unless it says.
+    pub at: Option<Path>,
+    pub read_only: bool,
+}
+
+/// `import Image, { A, B as C } from <source>`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
+    /// The file itself, as an image that can be instantiated, by the name
+    /// it is given here.
+    pub default: Option<Ident>,
     pub names: Vec<ImportName>,
     pub from: Source,
     pub pos: Pos,
@@ -95,18 +108,24 @@ pub struct Ident {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
     pub name: Ident,
-    /// The directory of the image that declared it, relative to this one's:
-    /// `""` for its own, and an imported image's for one it imported.
-    pub dir: String,
-    /// Declared by an imported image, so the runtime's objects among them
-    /// run in memory.
-    pub imported: bool,
-    /// A module name (`scripts/<name>.wasm`) or a dotted environment type,
-    /// e.g. `Console`.
+    /// An object, one of the runtime's objects, or an image, as imported.
     pub type_name: Ident,
     pub mounts: Vec<Mount>,
+    /// `bind <path> <path in the image's view> [readonly]`
+    pub binds: Vec<Bind>,
+    /// `<slot> = <value>`: an instantiated image's slots.
+    pub values: Vec<(Ident, Literal)>,
     /// `include "<path>" [at <path>]`: files to pack into the image.
     pub includes: Vec<Include>,
+}
+
+/// `bind <at> <path> [readonly]`: what `path` means in the image's own
+/// view, at `at` in the instance's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bind {
+    pub at: Path,
+    pub path: Path,
+    pub read_only: bool,
 }
 
 /// `mount <path> <instance> [readonly]`
@@ -464,23 +483,51 @@ impl Parser {
     }
 
     fn file(&mut self) -> Result<Image> {
-        let header = iface::File { imports: vec![], messages: vec![], protocols: vec![], traits: vec![], objects: vec![], exports: vec![] };
-        let mut image = Image { header, images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
+        let header = iface::File {
+            imports: vec![],
+            messages: vec![],
+            protocols: vec![],
+            traits: vec![],
+            objects: vec![],
+            exports: vec![],
+            needs: vec![],
+        };
+        let mut image =
+            Image { header, requires: vec![], instances: vec![], mounts: vec![], exports: vec![], requests: vec![] };
         loop {
             let doc = self.docs();
             let pos = self.pos();
-            let documented = matches!(self.peek(), Tok::Ident(kw) if ["export", "message", "protocol", "trait", "object"].contains(&kw.as_str()));
+            let documented =
+                matches!(self.peek(), Tok::Ident(kw) if ["export", "message", "protocol", "trait", "object", "needs"].contains(&kw.as_str()));
             if !documented {
                 self.no_docs(&doc, pos)?;
             }
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
-                Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => {
-                    self.next();
-                    let (Tok::Str(path), pos) = self.next() else { unreachable!("just matched") };
-                    image.images.push(Path { path, pos });
-                }
+                Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => bail!(
+                    "{pos}: an image is no longer imported whole: import it by a name, `import Site from \"...\"`, \
+                     and make an instance of it, `instance site : Site {{ ... }}`"
+                ),
                 Tok::Ident(kw) if kw == "import" => image.header.imports.push(self.import()?),
+                Tok::Ident(kw) if kw == "needs" => {
+                    self.next();
+                    image.header.needs.push(self.need(doc)?);
+                }
+                Tok::Ident(kw) if kw == "export" && matches!(self.toks.get(self.i + 1), Some((Tok::Path(_), _))) => {
+                    self.next();
+                    let path = self.path()?;
+                    let at = if self.is_kw("at") {
+                        self.next();
+                        Some(self.path()?)
+                    } else {
+                        None
+                    };
+                    let read_only = self.is_kw("readonly");
+                    if read_only {
+                        self.next();
+                    }
+                    image.exports.push(Export { path, at, read_only });
+                }
                 Tok::Ident(kw) if kw == "export" => {
                     self.next();
                     if *self.peek() == Tok::LBrace {
@@ -509,8 +556,8 @@ impl Parser {
                     self.pos()
                 ),
                 other => bail!(
-                    "{pos}: expected `import`, `export`, `message`, `protocol`, `trait`, `object`, `require`, `instance`, \
-                     `mount` or a verb, found {other}"
+                    "{pos}: expected `import`, `export`, `message`, `protocol`, `trait`, `object`, `needs`, `require`, \
+                     `instance`, `mount` or a verb, found {other}"
                 ),
             }
         }
@@ -557,30 +604,49 @@ impl Parser {
         }
         .ok_or_else(|| anyhow::anyhow!("{verb_pos}: expected a verb"))?;
         let path = self.path()?;
-        let body = match self.peek().clone() {
-            Tok::Ident(w) if !DECLS.contains(&w.as_str()) && Verb::from_keyword(&w).is_none() => {
-                Some(Literal::Message(self.body()?))
-            }
-            Tok::LBrace => Some(Literal::Message(self.body()?)),
-            Tok::Str(text) => {
-                let (_, pos) = self.next();
-                Some(Literal::Text { ty: None, text, pos })
-            }
-            Tok::Type(ty) => {
-                let (_, pos) = self.next();
-                match self.next() {
-                    (Tok::Str(text), _) => Some(Literal::Text { ty: Some(Ident { name: ty, pos }), text, pos }),
-                    (other, pos) => bail!("{pos}: expected a quoted string after `{ty}`, found {other}"),
-                }
-            }
+        let body = match self.peek() {
+            Tok::Ident(w) if DECLS.contains(&w.as_str()) || Verb::from_keyword(w).is_some() => None,
+            Tok::Ident(_) | Tok::LBrace | Tok::Str(_) | Tok::Type(_) => Some(self.literal()?),
             _ => None,
         };
         Ok(Request { verb, verb_pos, path, body })
     }
 
-    /// `import { A, B as C } from env` or `from "./file.oth"`.
+    /// A message literal or a slot's name, `"text"`, or `<content type> "text"`.
+    fn literal(&mut self) -> Result<Literal> {
+        Ok(match self.peek().clone() {
+            Tok::Str(text) => {
+                let (_, pos) = self.next();
+                Literal::Text { ty: None, text, pos }
+            }
+            Tok::Type(ty) => {
+                let (_, pos) = self.next();
+                match self.next() {
+                    (Tok::Str(text), _) => Literal::Text { ty: Some(Ident { name: ty, pos }), text, pos },
+                    (other, pos) => bail!("{pos}: expected a quoted string after `{ty}`, found {other}"),
+                }
+            }
+            _ => Literal::Message(self.body()?),
+        })
+    }
+
+    /// `import { A, B as C } from env`, or `import Image, { ... } from
+    /// "./file.oth"`, or `import Image from "./file.oth"`.
     pub(crate) fn import(&mut self) -> Result<Import> {
         let pos = self.expect_kw("import")?;
+        let mut default = None;
+        if let Tok::Ident(_) = self.peek() {
+            default = Some(self.ident("a name for the image", false)?);
+            if *self.peek() != Tok::Comma {
+                self.expect_kw("from")?;
+                let from = match self.next() {
+                    (Tok::Str(s), _) => Source::Path(s),
+                    (other, pos) => bail!("{pos}: an image is imported from its file, quoted, found {other}"),
+                };
+                return Ok(Import { default, names: vec![], from, pos });
+            }
+            self.next();
+        }
         self.expect(Tok::LBrace)?;
         let mut names = vec![];
         loop {
@@ -607,7 +673,10 @@ impl Parser {
             ),
             (other, pos) => bail!("{pos}: expected env or a quoted path to import from, found {other}"),
         };
-        Ok(Import { names, from, pos })
+        if default.is_some() && from == Source::Env {
+            bail!("{pos}: env has no image to import, only declarations");
+        }
+        Ok(Import { default, names, from, pos })
     }
 
     fn require(&mut self) -> Result<Require> {
@@ -632,7 +701,7 @@ impl Parser {
         let name = self.ident("instance name", false)?;
         self.expect(Tok::Colon)?;
         let type_name = self.ident("instance type", true)?;
-        let mut inst = Instance { name, dir: String::new(), imported: false, type_name, mounts: vec![], includes: vec![] };
+        let mut inst = Instance { name, type_name, mounts: vec![], binds: vec![], values: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
             return Ok(inst);
         }
@@ -642,10 +711,21 @@ impl Parser {
             let word = match tok {
                 Tok::RBrace => return Ok(inst),
                 Tok::Ident(word) => word,
-                other => bail!("{pos}: expected `mount`, `include` or `}}`, found {other}"),
+                other => bail!("{pos}: expected `mount`, `bind`, `include`, a slot's value or `}}`, found {other}"),
             };
-            if word == "mount" {
+            if *self.peek() == Tok::Eq {
+                self.next();
+                inst.values.push((Ident { name: word, pos }, self.literal()?));
+            } else if word == "mount" {
                 inst.mounts.push(self.mount()?);
+            } else if word == "bind" {
+                let at = self.path()?;
+                let path = self.path()?;
+                let read_only = self.is_kw("readonly");
+                if read_only {
+                    self.next();
+                }
+                inst.binds.push(Bind { at, path, read_only });
             } else if word == "include" {
                 let source = match self.next() {
                     (Tok::Str(s), _) => s,
@@ -669,7 +749,7 @@ impl Parser {
                     inst.name.name
                 );
             } else {
-                bail!("{pos}: expected `mount`, `include` or `}}`, found `{word}`");
+                bail!("{pos}: expected `mount`, `bind`, `include`, a slot's value or `}}`, found `{word}`");
             }
         }
     }
@@ -1018,7 +1098,7 @@ mod tests {
         let e = parse("write hosts").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
         let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
-        assert!(e.contains("expected `mount`, `include` or `}`"), "{e}");
+        assert!(e.contains("expected `mount`, `bind`, `include`, a slot's value or `}`"), "{e}");
         let e = parse("instance http : H { write /hosts/* Text }").unwrap_err().to_string();
         assert!(e.contains("requests are made at the top level, in the image's view; mount `http` there, e.g. `mount /http http`, and then `write /http/hosts/* ...`"), "{e}");
         let e = parse("instance net : T { write / listen }").unwrap_err().to_string();

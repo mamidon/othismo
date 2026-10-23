@@ -223,6 +223,18 @@ impl Namespace {
         put(&mut self.views[inst], at.into(), target);
     }
 
+    /// Puts what `target` names at `at` in `inst`'s view: part of another's
+    /// served tree, already resolved. `at` must already be a [`mount_point`].
+    pub fn mount_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
+        put(&mut self.views[inst], at.into(), target);
+    }
+
+    /// Splices what `target` names into `inst`'s served tree at `at`, which
+    /// must already be a [`mount_point`].
+    pub fn expose_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
+        put(&mut self.exposed[inst], at.into(), target);
+    }
+
     /// Resolves `path` in `inst`'s view.
     pub fn resolve(&self, inst: usize, path: &str) -> Result<Resolved, Status> {
         let path = clean(path)?;

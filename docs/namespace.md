@@ -183,18 +183,19 @@ it real ones.
 1. Every instance is created, and every view is built from the images'
    mounts and binds. Module top-level code runs. It may already make
    requests, which are queued.
-2. The startup requests of each image are delivered, in the order they are
-   written: those of an instantiated image when it starts (see below), and
-   the root's own before anything starts.
+2. Every image's startup requests are delivered, each image's in the order
+   they are written, and an instantiated image's before those of the image
+   that instantiates it, so it is set up by the time its parent configures
+   it through what it exports.
 3. `start()` runs on every Wasm instance, in start order.
 4. Environment objects start listening (stdin, sockets).
 
 **Start order** follows the mounts and binds: an instance starts after
 everything it mounts, so whatever it finds in its view has been configured
-and started first. An instance of an image starts by making its startup
-requests, and its instances start in their own order within it. Instances
-that don't depend on each other keep image order. Where instances mount each
-other, the one that comes first in the image starts last.
+and started first. Mounting an instance of an image counts as mounting what
+it exports. Instances that don't depend on each other keep image order.
+Where instances mount each other, the one that comes first in the image
+starts last.
 
 The run ends when the queue is empty and no outside event can arrive any more.
 

@@ -1,9 +1,12 @@
-//! Resolves and validates a parsed image into a [`Program`] the runtime can run.
+//! Resolves and validates a parsed image into a [`Program`] the runtime can
+//! run. The image is instantiated whole: every image it instantiates is
+//! made part of it, with its instances named under the instance's name, and
+//! every view, bind and export is worked out before anything runs.
 
 use crate::iface::{self, Header, Loader, Object, Trait};
-use crate::image::{self, Ident, Image, Literal, SlotDecl, Value};
+use crate::image::{self, Ident, Image, Literal, Pos, SlotDecl, Value};
 use crate::messages::{FieldType, MessageType};
-use crate::ns::{self, Namespace, Status, Verb};
+use crate::ns::{self, Namespace, Resolved, Status, Verb};
 use crate::pattern::Pattern;
 use crate::payload::{self, Payload};
 use crate::wire::{self, Message};
@@ -15,47 +18,54 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-/// The traits the runtime implements itself. An image declares an instance
-/// of one by the trait, and the runtime picks how to run it.
+/// The traits the runtime implements on the host. The image being run gets
+/// one by needing it, and the runtime picks how to run it.
 pub const CONSOLE: &str = "Console";
 pub const LISTENER: &str = "Listener";
 pub const FILES: &str = "Files";
 pub const NATIVE: &[&str] = &[CONSOLE, LISTENER, FILES];
-/// The one built-in written by its own name: it touches nothing on the host,
-/// so there is nothing to choose.
-pub const PACKED: &str = "Packed.Files";
-
-/// What an imported image's instance of one of the runtime's traits is run
-/// as: in memory, with a trait of its own that the importing image can use
-/// to drive it from the other side.
-const MEMORY: &[(&str, Option<&str>)] = &[(CONSOLE, Some("Terminal")), (LISTENER, Some("Dialer")), (FILES, None)];
+/// The runtime's objects that touch nothing outside the image, which any
+/// image can declare by name.
+pub const PACKED: &str = "PackedFiles";
+pub const MEMORY_CONSOLE: &str = "MemoryConsole";
+pub const MEMORY_LISTENER: &str = "MemoryListener";
+pub const IN_MEMORY: &[&str] = &[PACKED, MEMORY_CONSOLE, MEMORY_LISTENER];
 
 /// The runtime's objects that are configured, by the image's write of their
 /// root, with text saying what each one is.
 const CONFIGURED: &[&str] = &[LISTENER, FILES];
 
 /// What the runtime's objects were called when images named them directly.
-const RENAMED: &[(&str, &str)] =
-    &[("Environment.Console", CONSOLE), ("Environment.Tcp", LISTENER), ("Environment.Files", FILES)];
+const RENAMED: &[(&str, &str)] = &[
+    ("Environment.Console", CONSOLE),
+    ("Environment.Tcp", LISTENER),
+    ("Environment.Files", FILES),
+    ("Packed.Files", PACKED),
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     /// Every message type the image knows: the runtime's, every module's
-    /// and its imports'.
+    /// and its files'.
     pub messages: BTreeMap<String, MessageType>,
-    /// Each instance type's interface, from its module's header or, for a
-    /// built-in type, from the runtime's.
+    /// Each instance type's interface: a module's header, the runtime's,
+    /// or for an instance of an image, what it needs and exports.
     pub interfaces: BTreeMap<String, Object>,
-    /// Values the host provides, in image order; [`Arg::Slot`] refers to them by index.
+    /// Values whoever runs the image provides, in image order; [`Arg::Slot`]
+    /// refers to them by index. Only the root image's slots are theirs.
     pub slots: Vec<Slot>,
-    /// Instances in image order; everything else refers to them by index.
+    /// Every instance, each image's in its order, an instantiated image's
+    /// own after its image's, and everything else refers to them by index. An
+    /// instance of an image is one too, whose view is its image's and which
+    /// serves what the image exports. The root image's needs come first.
     pub instances: Vec<Instance>,
-    /// The image's own view, which its startup requests resolve in.
+    /// The root image's own view, which its startup requests resolve in.
     pub view: Vec<MountDecl>,
-    /// The image's startup requests, in the order it makes them.
+    /// Every image's startup requests, in the order they are made: an
+    /// instantiated image's before those of the image instantiating it.
     pub startup: Vec<Startup>,
-    /// The files the image was checked from: the `.oth` files: the image and the headers it
-    /// imports from files.
+    /// The `.oth` files the image was checked from: its own, those of the
+    /// images it instantiates, and the headers they import.
     /// Not kept in a built image, which has copies under its sources.
     #[serde(skip)]
     pub sources: Vec<PathBuf>,
@@ -63,18 +73,15 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
+    /// Under the names of the image instances it is in: `web.http`. One of
+    /// the root image's needs is named by its mount point, `/net/tcp`.
     pub name: String,
-    /// A module name, one of the runtime's traits, such as `Listener`, or
-    /// `Packed.Files`; or for one of those traits run in memory, such as
-    /// `Memory.Listener`.
+    /// The key of its interface in [`Program::interfaces`].
     pub type_name: String,
     pub kind: Kind,
-    /// The directory of the image that declared it, relative to this one's,
-    /// which its relative paths (module, includes, files root) start from.
+    /// The directory of the image that declared it, relative to the root's,
+    /// which its relative paths (includes, a files root) start from.
     pub dir: String,
-    /// One of the runtime's objects in an imported image, which runs in
-    /// memory and touches nothing on the host.
-    pub in_memory: bool,
     /// An environment object's config.
     pub config: Option<Arg>,
     /// The initial view.
@@ -86,11 +93,28 @@ pub struct MountDecl {
     /// Clean, absolute.
     pub at: String,
     pub target: usize,
+    /// The path in the target's served tree that is put there: `/` for
+    /// all of it, or another for a bind.
+    #[serde(default = "root")]
+    pub path: String,
     pub read_only: bool,
+}
+
+fn root() -> String {
+    "/".into()
+}
+
+impl MountDecl {
+    fn resolved(&self) -> Resolved {
+        Resolved { inst: self.target, path: self.path.clone(), read_only: self.read_only }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Startup {
+    /// The instance of an image whose view it resolves in, or `None` for
+    /// the root image's.
+    pub image: Option<usize>,
     pub verb: Verb,
     /// Clean, in the image's view.
     pub path: String,
@@ -180,6 +204,13 @@ pub enum Kind {
     Files,
     /// Serves the files its includes packed into the image, in order.
     Packed { includes: Vec<IncludeDecl> },
+    /// A console in memory: Console and Terminal.
+    MemoryConsole,
+    /// A listener in memory: Listener and Dialer.
+    MemoryListener,
+    /// An instance of an image: its view is the instance's mounts, and it
+    /// serves what these put in its served tree, from that view.
+    Image { exports: Vec<MountDecl> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,14 +225,14 @@ fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{}: {msg}", id.pos)
 }
 
-/// One `.oth` file of an image: the root, or one it imports whole.
+/// A `.oth` file the image uses as an image: the root, or one it instantiates.
 struct Unit {
     image: Image,
     /// Its directory, relative to the root's: where its relative paths
     /// (includes, a files root) start.
     rel: PathBuf,
-    /// Imported whole by another, so the runtime's objects in it run in memory.
-    imported: bool,
+    /// Its directory as it is read.
+    dir: PathBuf,
     /// What its names mean: its declarations and imports, resolved.
     scope: Header,
 }
@@ -209,15 +240,72 @@ struct Unit {
 /// What an instance's type turned out to be.
 enum TypeRef {
     /// One of the runtime's own, by its name: a trait it implements, such
-    /// as `Listener`, or `Packed.Files`.
+    /// as `Listener`, for one of the root's needs, or one of the objects
+    /// in memory, such as `PackedFiles`.
     Builtin(String),
-    /// A module's object: the interface the module itself carries, the
-    /// module, relative to the root's directory, and its message types.
-    Wasm { object: Object, module: String, messages: BTreeMap<String, MessageType> },
+    /// A module's object: the interface the module itself carries, and the
+    /// module, relative to the root's directory.
+    Wasm { object: Object, module: String },
+    /// An image, by the unit it is.
+    Image(usize),
 }
 
-/// Reads, parses and checks the image at `path`, with the images it imports
-/// whole and everything it imports declarations from, reading each module's
+/// Something in an image that is resolved once every view is built: a
+/// bind, into an instance's view, or an export, into an image's served tree.
+struct Pending {
+    /// Whose view the bind is into, or the instance of an image the export
+    /// is from.
+    node: usize,
+    export: bool,
+    at: String,
+    /// A path in `from`'s view: the instance of an image, or `None` for the root.
+    from: Option<usize>,
+    path: String,
+    read_only: bool,
+    pos: Pos,
+}
+
+/// An instance, while the image is being instantiated.
+struct Node {
+    name: String,
+    unit: usize,
+    ty: TypeRef,
+    /// Where it was declared, for errors; `None` for one of the root's needs.
+    decl: Option<image::Instance>,
+    mounts: Vec<MountDecl>,
+    /// Where each of `mounts` is written, to keep them in that order.
+    written: Vec<Pos>,
+    exports: Vec<MountDecl>,
+    config: Option<Arg>,
+}
+
+/// A startup request, with the slots its image was given.
+struct Request {
+    image: Option<usize>,
+    unit: usize,
+    request: image::Request,
+    slots: BTreeMap<String, Arg>,
+}
+
+struct Builder<'l> {
+    loader: &'l mut Loader,
+    /// The root image's directory.
+    dir: PathBuf,
+    units: Vec<Unit>,
+    unit_paths: BTreeMap<PathBuf, usize>,
+    nodes: Vec<Node>,
+    view: Vec<MountDecl>,
+    pending: Vec<Pending>,
+    requests: Vec<Request>,
+    /// The root's slots.
+    slots: Vec<Slot>,
+    /// Message types, with where each set is from, for [`all_messages`].
+    sets: Vec<(String, BTreeMap<String, MessageType>)>,
+    modules: BTreeMap<String, String>,
+}
+
+/// Reads, parses and checks the image at `path`, with the images it
+/// instantiates and everything its files import, reading each module's
 /// header from the module.
 pub fn load(path: &Path) -> Result<Program> {
     load_with(path, &mut Loader::default())
@@ -225,324 +313,584 @@ pub fn load(path: &Path) -> Result<Program> {
 
 /// [`load`], reading every file through `loader`.
 pub fn load_with(path: &Path, loader: &mut Loader) -> Result<Program> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let mut units = vec![];
-    gather(path, Path::new(""), 0, loader, &mut units)?;
-    let mut program = check(&units, dir, loader).with_context(|| format!("checking {}", path.display()))?;
+    let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut b = Builder {
+        loader,
+        dir,
+        units: vec![],
+        unit_paths: BTreeMap::new(),
+        nodes: vec![],
+        view: vec![],
+        pending: vec![],
+        requests: vec![],
+        slots: vec![],
+        sets: vec![("the runtime".into(), iface::env().messages.clone())],
+        modules: BTreeMap::new(),
+    };
+    let root = b.unit(path, Path::new(""))?;
+    let mut program = b.build(root).with_context(|| format!("checking {}", path.display()))?;
     program.sources = loader.sources.clone();
     Ok(program)
 }
 
-/// Adds the image at `path` to `units`, after every image it imports whole,
-/// so that their requests are made first. `rel` is `path`'s directory
-/// relative to the root's.
-fn gather(path: &Path, rel: &Path, depth: usize, loader: &mut Loader, units: &mut Vec<Unit>) -> Result<()> {
-    if depth > 16 {
-        bail!("images import each other in a loop");
-    }
-    let image = loader.image(path)?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    for imp in &image.images {
-        let child = Path::new(&imp.path);
-        let child_rel = iface::join(rel, &child.parent().unwrap_or(Path::new("")).to_string_lossy());
-        gather(&iface::join(dir, &imp.path), &child_rel, depth + 1, loader, units)
-            .with_context(|| format!("{}: importing {}", imp.pos, imp.path))?;
-    }
-    let scope = loader.resolve(&image.header, path)?;
-    units.push(Unit { image, rel: rel.to_path_buf(), imported: depth > 0, scope });
-    Ok(())
-}
-
-/// What the instance type `ty` names in `unit`: an object it declares or
-/// imports, or one of the runtime's traits it imports from env. A module's
-/// interface is the header inside it, which must be the one it was built
-/// from. `dir` is the root's directory.
-fn instance_type(unit: &Unit, ty: &Ident, dir: &Path, loader: &mut Loader) -> Result<TypeRef> {
-    if let Some(o) = unit.scope.object_named(&ty.name) {
-        let Some(origin) = &o.origin else { return Ok(TypeRef::Builtin(o.name.clone())) };
-        let module = if origin.extension().is_some_and(|e| e == "wasm") { origin.clone() } else { origin.with_extension("wasm") };
-        if loader.read(&module).is_err() {
-            bail!("cannot read {} (did you compile {}.ts?)", module.display(), o.name);
+impl Builder<'_> {
+    /// The unit for the `.oth` file at `path`, read once; `rel` is its
+    /// directory relative to the root's.
+    fn unit(&mut self, path: &Path, rel: &Path) -> Result<usize> {
+        if let Some(&u) = self.unit_paths.get(path) {
+            return Ok(u);
         }
-        let header = loader.header(&module)?;
-        iface::for_module(&header, &o.name).with_context(|| format!("{} has the wrong header", module.display()))?;
-        let object = header.object(&o.name).cloned().expect("for_module found it");
-        if !object.same_shape(o) {
-            bail!("{} is stale: the header inside it isn't {}'s; rebuild it", module.display(), origin.display());
-        }
-        let rel = module.strip_prefix(dir).unwrap_or(&module).to_string_lossy().into_owned();
-        return Ok(TypeRef::Wasm { object, module: rel, messages: header.messages });
+        let image = self.loader.image(path)?;
+        let scope = self.loader.resolve(&image.header, path)?;
+        self.sets.push((path.display().to_string(), scope.messages.clone()));
+        let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.units.push(Unit { image, rel: rel.to_path_buf(), dir, scope });
+        self.unit_paths.insert(path.to_path_buf(), self.units.len() - 1);
+        Ok(self.units.len() - 1)
     }
-    if let Some(t) = unit.scope.traits.get(&ty.name) {
-        if NATIVE.contains(&t.name.as_str()) && iface::env().traits.get(&t.name) == Some(t) {
-            return Ok(TypeRef::Builtin(t.name.clone()));
-        }
-        let runs = NATIVE.join(", ");
-        bail!(err_at(ty, format!("`{}` is a shape the runtime has no implementation of; it runs {runs}, and {PACKED}", ty.name)));
-    }
-    if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) {
-        bail!(err_at(ty, format!("the runtime's objects are declared by their traits: `{now}`, imported from env")));
-    }
-    if NATIVE.contains(&ty.name.as_str()) || ty.name == PACKED {
-        bail!(err_at(ty, format!("`{}` is the runtime's; import it first: `import {{ {} }} from env`", ty.name, ty.name)));
-    }
-    bail!(err_at(ty, format!("unknown object `{}`; is it imported?", ty.name)))
-}
 
-/// Validates the image made of `units`, the root last: its messages against
-/// their types, and its wiring against its objects' interfaces. `dir` is the
-/// root's directory, and `loader` reads modules' headers.
-fn check(units: &[Unit], dir: &Path, loader: &mut Loader) -> Result<Program> {
-    // Everything every file declares, with the file it is in.
-    fn all<'u, T>(units: &'u [Unit], of: fn(&'u Image) -> &'u [T]) -> Vec<(usize, &'u T)> {
-        units.iter().enumerate().flat_map(|(u, unit)| of(&unit.image).iter().map(move |t| (u, t))).collect()
+    fn build(mut self, root: usize) -> Result<Program> {
+        // The root's slots are whoever runs it's to give.
+        let mut slots = BTreeMap::new();
+        for req in self.units[root].image.requires.clone() {
+            let scope = &self.units[root].scope.messages;
+            let name = &req.name.name;
+            if scope.contains_key(name) {
+                bail!(err_at(&req.name, format!("`{name}` is a message type; a slot needs a name of its own")));
+            }
+            if self.slots.iter().any(|s| s.name == *name) {
+                bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
+            }
+            let kind = slot_kind(scope, &req.slot)?;
+            slots.insert(name.clone(), Arg::Slot(self.slots.len()));
+            self.slots.push(Slot { name: name.clone(), kind, value: None, origins: vec![] });
+        }
+        self.instantiate(root, "", None, &slots, 0)?;
+        self.resolve_pending()?;
+        self.finish()
     }
-    let decls = all(units, |i| &i.instances);
-    let requires = all(units, |i| &i.requires);
-    let requests = all(units, |i| &i.requests);
-    let top_mounts: Vec<image::Mount> = all(units, |i| &i.mounts).into_iter().map(|(_, m)| m.clone()).collect();
 
-    let mut types: Vec<TypeRef> = vec![];
-    let mut modules: BTreeMap<String, String> = BTreeMap::new();
-    let mut sets: Vec<(String, BTreeMap<String, MessageType>)> = vec![("the runtime".into(), iface::env().messages.clone())];
-    for &(u, inst) in &decls {
-        let ty = &inst.type_name;
-        let t = instance_type(&units[u], ty, dir, loader).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
-        if let TypeRef::Wasm { object, module, messages } = &t {
-            if let Some(prev) = modules.insert(object.name.clone(), module.clone())
-                && prev != *module
+    /// Makes `unit` part of the image, with its instances named under
+    /// `prefix`, as the instance of an image `image`, or as the root.
+    /// `slots` gives each of its slots a value.
+    fn instantiate(&mut self, unit: usize, prefix: &str, image: Option<usize>, slots: &BTreeMap<String, Arg>, depth: usize) -> Result<()> {
+        if depth > 16 {
+            bail!("images instantiate each other in a loop");
+        }
+        let img = self.units[unit].image.clone();
+        if image.is_none() {
+            self.root_needs(unit)?;
+        }
+        // Every instance first, so that mounts can name any of them.
+        let mut local: HashMap<String, usize> = HashMap::new();
+        for inst in &img.instances {
+            let ty = self.instance_type(unit, &inst.type_name).with_context(|| format!("{}: instance `{}`", inst.type_name.pos, inst.name.name))?;
+            if local.insert(inst.name.name.clone(), self.nodes.len()).is_some() {
+                bail!(err_at(&inst.name, format!("instance `{}` is declared twice", inst.name.name)));
+            }
+            let name = format!("{prefix}{}", inst.name.name);
+            self.nodes.push(Node { name, unit, ty, decl: Some(inst.clone()), mounts: vec![], written: vec![], exports: vec![], config: None });
+        }
+        let target = |m: &image::Mount| -> Result<usize> {
+            local.get(&m.target.name).copied().ok_or_else(|| err_at(&m.target, format!("unknown instance `{}`", m.target.name)))
+        };
+        for inst in &img.instances {
+            let node = local[&inst.name.name];
+            for m in &inst.mounts {
+                let t = target(m)?;
+                let whose = format!("`{}`'s view", inst.name.name);
+                let decl = mount_decl(&m.at, t, m.read_only)?;
+                push_mount(&mut self.nodes[node].mounts, decl, m.at.pos, &whose)?;
+                self.nodes[node].written.push(m.at.pos);
+            }
+            for b in &inst.binds {
+                let at = clean_mount_point(&b.at)?;
+                let path = ns::clean(&b.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", b.path.pos, b.path.path))?;
+                self.pending.push(Pending { node, export: false, at, from: image, path, read_only: b.read_only, pos: b.at.pos });
+            }
+            if let TypeRef::Builtin(b) = &self.nodes[node].ty
+                && let Some(at) = inst.mounts.first().map(|m| &m.at).or(inst.binds.first().map(|b| &b.at))
             {
-                bail!("{}: `{}` would come from both {prev} and {module}; an image can't use two modules of one name", ty.pos, object.name);
+                bail!("{}: {b} has no view to mount into; it only serves", at.pos);
             }
-            sets.push((object.name.clone(), messages.clone()));
-        }
-        types.push(t);
-    }
-    sets.extend(units.iter().map(|u| ("the image's imports".to_string(), u.scope.messages.clone())));
-    let messages = all_messages(&sets)?;
-
-    // What each instance runs as: a module's object, or one of the
-    // runtime's, which in an imported image runs in memory.
-    let mut interfaces: BTreeMap<String, Object> = BTreeMap::new();
-    let mut type_names = vec![];
-    for (&(u, _), t) in decls.iter().zip(&types) {
-        let o = match t {
-            TypeRef::Builtin(name) => builtin(name, units[u].imported).expect("only the runtime's are Builtin"),
-            TypeRef::Wasm { object, .. } => object.clone(),
-        };
-        type_names.push(o.name.clone());
-        interfaces.insert(o.name.clone(), o);
-    }
-
-    let mut slots: Vec<Slot> = vec![];
-    for &(u, req) in &requires {
-        let scope = &units[u].scope.messages;
-        let name = &req.name.name;
-        if scope.contains_key(name) {
-            bail!(err_at(&req.name, format!("`{name}` is a message type; a slot needs a name of its own")));
-        }
-        if slots.iter().any(|s| s.name == *name) {
-            bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
-        }
-        let kind = match &req.slot {
-            SlotDecl::Message(body) => {
-                let (type_name, defaults) = body_fields(scope, body, false)?;
-                SlotKind::Message { type_name, defaults }
+            let is_packed = matches!(&self.nodes[node].ty, TypeRef::Builtin(n) if n == PACKED);
+            if !is_packed && let Some(inc) = inst.includes.first() {
+                bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, inst.type_name.name);
             }
-            SlotDecl::Payload { ty, default } => SlotKind::Payload { ty: content_type(ty)?, default: default.clone() },
-        };
-        slots.push(Slot { name: name.clone(), kind, value: None, origins: vec![] });
-    }
-
-    let mut index: HashMap<&str, usize> = HashMap::new();
-    for (i, (_, inst)) in decls.iter().enumerate() {
-        if index.insert(&inst.name.name, i).is_some() {
-            bail!(err_at(&inst.name, format!("instance `{}` is declared twice", inst.name.name)));
-        }
-    }
-
-    // The image's requests resolve in its own view, as an instance's do in
-    // its. Nothing has exposed anything yet, so this is where they land.
-    let view = mount_decls(&top_mounts, &index, "the image's view")?;
-    let image_view = decls.len();
-    let mut image_ns = Namespace::new(image_view + 1);
-    for m in &view {
-        image_ns.mount(image_view, &m.at, m.target, m.read_only);
-    }
-    // (the instance it lands in, the path there, the path in the image's view)
-    let mut addressed: Vec<(usize, String, String)> = vec![];
-    for (_, r) in &requests {
-        let full =
-            ns::clean(&r.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
-        let to = image_ns
-            .resolve(image_view, &full)
-            .map_err(|_| anyhow!("{}: nothing is mounted at `{full}` in the image's view", r.path.pos))?;
-        if to.read_only && !r.verb.is_safe() {
-            bail!("{}: `{full}` is read-only in the image's view, so it can't take `{}`", r.verb_pos, r.verb);
-        }
-        addressed.push((to.inst, to.path, full));
-    }
-    // A configurable built-in object's config is the image's write of its
-    // root, taken before the object is made rather than sent as a request.
-    let is_config = |to: usize, verb: Verb, path: &str| {
-        verb == Verb::Write && path == "/" && matches!(&types[to], TypeRef::Builtin(n) if CONFIGURED.contains(&n.as_str()))
-    };
-
-    let mut instances = vec![];
-    for (i, &(u, inst)) in decls.iter().enumerate() {
-        let unit = &units[u];
-        let made_of: Vec<(&image::Request, &str, usize)> = requests
-            .iter()
-            .zip(&addressed)
-            .filter(|(_, (to, ..))| *to == i)
-            .map(|(&(ru, r), (_, p, _))| (r, p.as_str(), ru))
-            .collect();
-        let mut config = None;
-        let type_name = type_names[i].clone();
-        let obj = interfaces.get(&type_name);
-        if !matches!(&types[i], TypeRef::Builtin(n) if n == PACKED)
-            && let Some(inc) = inst.includes.first()
-        {
-            bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, inst.type_name.name);
-        }
-        let configs: Vec<&(&image::Request, &str, usize)> = made_of.iter().filter(|(r, path, _)| is_config(i, r.verb, path)).collect();
-        let kind = match &types[i] {
-            TypeRef::Builtin(builtin) => {
-                let name = type_name.as_str();
-                if let Some(m) = inst.mounts.first() {
-                    bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
+            match self.nodes[node].ty {
+                TypeRef::Image(child) => {
+                    let given = self.slot_values(unit, slots, child, inst)?;
+                    let prefix = format!("{prefix}{}.", inst.name.name);
+                    self.instantiate(child, &prefix, Some(node), &given, depth + 1)?;
                 }
-                if let Some(what) = config_what(builtin) {
-                    let needs = || {
-                        err_at(
-                            &inst.name,
-                            format!("{name} needs exactly one config: mount it in the image's view and `write` its root with {what}"),
-                        )
-                    };
-                    let [(c, _, cu)] = configs.as_slice() else { bail!(needs()) };
-                    let arg = body_arg(&units[*cu].scope.messages, &slots, c.body.as_ref().ok_or_else(needs)?)?;
-                    if !payload::fits("text/*", arg_type(&slots, &arg)) {
-                        bail!(needs());
+                _ => {
+                    if let Some((v, _)) = inst.values.first() {
+                        bail!(err_at(v, format!("`{}` is a {}, which has no slots; only an image's instance takes values", inst.name.name, inst.type_name.name)));
                     }
-                    config = Some(arg);
-                }
-                builtin_kind(builtin, &inst.includes)?
-            }
-            TypeRef::Wasm { object, module, .. } => Kind::Wasm { type_name: object.name.clone(), module: module.clone() },
-        };
-
-        let mounts = mount_decls(&inst.mounts, &index, &format!("`{}`'s view", inst.name.name))?;
-
-        if let Some(obj) = obj {
-            let made_of: Vec<(&image::Request, &str, usize)> =
-                made_of.iter().filter(|(r, path, _)| !is_config(i, r.verb, path)).copied().collect();
-            check_requests(inst, obj, &made_of, units, &slots)?;
-            check_mounts(&type_names, inst, obj, &index, &interfaces)?;
-        }
-        let in_memory = unit.imported && matches!(&types[i], TypeRef::Builtin(n) if NATIVE.contains(&n.as_str()));
-        let dir = unit.rel.to_string_lossy().into_owned();
-        instances.push(Instance { name: inst.name.name.clone(), type_name, kind, dir, in_memory, config, mounts });
-    }
-
-    let mut startup = vec![];
-    for (&(u, r), (to, path, full)) in requests.iter().zip(&addressed) {
-        if is_config(*to, r.verb, path) {
-            continue;
-        }
-        let body = r.body.as_ref().map(|b| body_arg(&units[u].scope.messages, &slots, b)).transpose()?;
-        startup.push(Startup { verb: r.verb, path: full.clone(), body });
-    }
-
-    Ok(Program { messages, interfaces, slots, instances, view, startup, sources: vec![] })
-}
-
-/// A view's mounts, resolved against the instances in `index`. `whose`
-/// names the view in errors.
-fn mount_decls(mounts: &[image::Mount], index: &HashMap<&str, usize>, whose: &str) -> Result<Vec<MountDecl>> {
-    let mut out: Vec<MountDecl> = vec![];
-    for m in mounts {
-        let target =
-            *index.get(m.target.name.as_str()).ok_or_else(|| err_at(&m.target, format!("unknown instance `{}`", m.target.name)))?;
-        let at = ns::mount_point(&m.at.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
-        if out.iter().any(|prev| prev.at == at) {
-            bail!("{}: `{at}` is already mounted in {whose}", m.at.pos);
-        }
-        out.push(MountDecl { at, target, read_only: m.read_only });
-    }
-    Ok(out)
-}
-
-/// Each of the image's requests of `inst`, with its path in `inst`'s
-/// served tree, against what `obj` serves.
-fn check_requests(
-    inst: &image::Instance,
-    obj: &Object,
-    requests: &[(&image::Request, &str, usize)],
-    units: &[Unit],
-    slots: &[Slot],
-) -> Result<()> {
-    let name = &inst.name.name;
-    for &(r, path, u) in requests {
-        let body = r.body.as_ref().map(|b| body_arg(&units[u].scope.messages, slots, b)).transpose()?;
-        let body_type = body.as_ref().map(|b| arg_type(slots, b));
-        let Some(entry) = obj.serving(path) else {
-            bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
-        };
-        let given = match body_type {
-            Some(t) => format!("{} {t}", r.verb),
-            None => r.verb.to_string(),
-        };
-        match entry.takes(r.verb, body_type) {
-            Ok(_) => {}
-            Err(Status::NotSupported) => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
-            Err(_) => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
-        }
-    }
-    Ok(())
-}
-
-/// Each of `inst`'s mounts against what `obj` needs there, and each need
-/// for one mount point in particular against the mounts.
-fn check_mounts(
-    type_names: &[String],
-    inst: &image::Instance,
-    obj: &Object,
-    index: &HashMap<&str, usize>,
-    interfaces: &BTreeMap<String, Object>,
-) -> Result<()> {
-    let name = &inst.name.name;
-    let mut ats = vec![];
-    for m in &inst.mounts {
-        let at = ns::mount_point(&m.at.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
-        ats.push(at.clone());
-        let Some(need) = obj.need(&at) else { continue };
-        let target = index[m.target.name.as_str()];
-        let Some(served) = interfaces.get(&type_names[target]) else { continue };
-        for e in &need.entries {
-            for r in &e.requests {
-                if m.read_only && !r.verb.is_safe() {
-                    bail!("{}: `{name}` needs `{} {r}` at `{at}`, but `{}` is mounted there read-only", m.at.pos, e.path, m.target.name);
-                }
-                if !serves_need(served, need, e, r) {
-                    let shown: Vec<String> =
-                        served.serves.iter().filter(|s| s.path.overlaps(&e.path)).map(|s| format!("`{s}`")).collect();
-                    let has = if shown.is_empty() { "nothing there".to_string() } else { shown.join(", ") };
-                    bail!(
-                        "{}: `{name}` needs `{} {r}` at `{at}`, and `{}` serves {has}",
-                        m.at.pos,
-                        e.path,
-                        m.target.name
-                    );
                 }
             }
         }
-    }
-    for need in obj.needs.iter().filter(|n| n.at.is_literal()) {
-        if !ats.iter().any(|at| need.at.matches(at)) {
-            bail!("{}: `{name}` needs something mounted at `{}`", inst.name.pos, need.at);
+        for m in &img.mounts {
+            let decl = mount_decl(&m.at, target(m)?, m.read_only)?;
+            match image {
+                Some(i) => {
+                    push_mount(&mut self.nodes[i].mounts, decl, m.at.pos, "the image's view")?;
+                    self.nodes[i].written.push(m.at.pos);
+                }
+                None => push_mount(&mut self.view, decl, m.at.pos, "the image's view")?,
+            }
         }
+        if let Some(i) = image {
+            for e in &img.exports {
+                let path = ns::clean(&e.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", e.path.pos, e.path.path))?;
+                let at = clean_mount_point(e.at.as_ref().unwrap_or(&e.path))?;
+                self.pending.push(Pending { node: i, export: true, at, from: Some(i), path, read_only: e.read_only, pos: e.path.pos });
+            }
+        }
+        for r in &img.requests {
+            self.requests.push(Request { image, unit, request: r.clone(), slots: slots.clone() });
+        }
+        Ok(())
     }
+
+    /// The root image's needs, which the runtime fills with the real thing:
+    /// each names one of its traits, and gets an instance named for it.
+    fn root_needs(&mut self, unit: usize) -> Result<()> {
+        for n in self.units[unit].image.header.needs.clone() {
+            let named = match n.entries.as_slice() {
+                [e] if e.path.path == "/" => match e.items.as_slice() {
+                    [iface::Item::Named(id)] => self.units[unit].scope.traits.get(&id.name).map(|t| (t.name.clone(), id.clone())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some((name, id)) = named.filter(|(name, _)| NATIVE.contains(&name.as_str())) else {
+                bail!(
+                    "{}: the image being run has its needs filled by the runtime, so each names one of its traits: {}",
+                    n.at.pos,
+                    NATIVE.join(", ")
+                );
+            };
+            if iface::env().traits.get(&name) != self.units[unit].scope.traits.get(&id.name) {
+                bail!(err_at(&id, format!("`{}` isn't the runtime's {name}; import it from env", id.name)));
+            }
+            let at = clean_mount_point(&n.at)?;
+            let decl = MountDecl { at: at.clone(), target: self.nodes.len(), path: "/".into(), read_only: false };
+            push_mount(&mut self.view, decl, n.at.pos, "the image's view")?;
+            let ty = TypeRef::Builtin(name);
+            self.nodes.push(Node { name: at, unit, ty, decl: None, mounts: vec![], written: vec![], exports: vec![], config: None });
+        }
+        Ok(())
+    }
+
+    /// The slots of `child`, an image instantiated as `inst` in `unit`,
+    /// whose own slots are `slots`: each given in the instance block, or
+    /// else its default.
+    fn slot_values(&mut self, unit: usize, slots: &BTreeMap<String, Arg>, child: usize, inst: &image::Instance) -> Result<BTreeMap<String, Arg>> {
+        let mut out = BTreeMap::new();
+        let requires = self.units[child].image.requires.clone();
+        for (name, value) in &inst.values {
+            if !requires.iter().any(|r| r.name.name == name.name) {
+                bail!(err_at(name, format!("`{}` has no slot `{}`", inst.type_name.name, name.name)));
+            }
+            if out.contains_key(&name.name) {
+                bail!(err_at(name, format!("slot `{}` is given twice", name.name)));
+            }
+            let arg = match value {
+                Literal::Message(b) if b.fields.is_none() && slots.contains_key(&b.type_name.name) => slots[&b.type_name.name].clone(),
+                literal => body_arg(&self.units[unit].scope.messages, &[], literal)?,
+            };
+            out.insert(name.name.clone(), arg);
+        }
+        for req in &requires {
+            let kind = slot_kind(&self.units[child].scope.messages, &req.slot)?;
+            let name = &req.name.name;
+            let given = match out.get(name) {
+                Some(arg) => arg.clone(),
+                None => match &kind {
+                    SlotKind::Payload { ty, default: Some(d) } => Arg::Payload(Payload::new(ty.clone(), d.as_bytes())),
+                    SlotKind::Message { type_name, defaults } if self.complete(type_name, defaults) => {
+                        Arg::Message(Message { type_name: type_name.clone(), fields: defaults.clone() })
+                    }
+                    _ => bail!(err_at(&inst.name, format!("`{}` needs a value for its slot `{name}`: `{name} = ...` in its block", inst.name.name))),
+                },
+            };
+            let fits = match (&kind, &given) {
+                (SlotKind::Message { type_name, .. }, Arg::Message(m)) => m.type_name == *type_name,
+                (SlotKind::Payload { ty, .. }, Arg::Payload(p)) => payload::fits(ty, &p.ty),
+                (_, Arg::Slot(i)) => self.slots[*i].content_type() == kind_type(&kind),
+                _ => false,
+            };
+            if !fits {
+                bail!(err_at(&inst.name, format!("`{}`'s slot `{name}` is a {}, and isn't given one", inst.name.name, kind_type(&kind))));
+            }
+            out.insert(name.clone(), given);
+        }
+        Ok(out)
+    }
+
+    /// Whether `fields` give a `type_name` every field.
+    fn complete(&self, type_name: &str, fields: &Document) -> bool {
+        self.sets.iter().find_map(|(_, s)| s.get(type_name)).is_some_and(|t| t.fields.iter().all(|(f, _)| fields.contains_key(f)))
+    }
+
+    /// What the instance type `ty` names in `unit`: an object it declares or
+    /// imports, one of the runtime's objects in memory, or an image it
+    /// imports. A module's interface is the header inside it, which must be
+    /// the one it was built from.
+    fn instance_type(&mut self, unit: usize, ty: &Ident) -> Result<TypeRef> {
+        let image = self.units[unit].image.header.imports.iter().find(|i| i.default.as_ref().is_some_and(|d| d.name == ty.name));
+        if let Some(imp) = image {
+            let image::Source::Path(p) = &imp.from else { unreachable!("env has no image") };
+            let path = iface::join(&self.units[unit].dir, p);
+            let rel = iface::join(&self.units[unit].rel, &Path::new(p).parent().unwrap_or(Path::new("")).to_string_lossy());
+            return Ok(TypeRef::Image(self.unit(&path, &rel)?));
+        }
+        let scope = &self.units[unit].scope;
+        if let Some(o) = scope.object_named(&ty.name) {
+            let Some(origin) = o.origin.clone() else { return Ok(TypeRef::Builtin(o.name.clone())) };
+            let o = o.clone();
+            let module = if origin.extension().is_some_and(|e| e == "wasm") { origin.clone() } else { origin.with_extension("wasm") };
+            if self.loader.read(&module).is_err() {
+                bail!("cannot read {} (did you compile {}.ts?)", module.display(), o.name);
+            }
+            let header = self.loader.header(&module)?;
+            iface::for_module(&header, &o.name).with_context(|| format!("{} has the wrong header", module.display()))?;
+            let object = header.object(&o.name).cloned().expect("for_module found it");
+            if !object.same_shape(&o) {
+                bail!("{} is stale: the header inside it isn't {}'s; rebuild it", module.display(), origin.display());
+            }
+            let rel = module.strip_prefix(&self.dir).unwrap_or(&module).to_string_lossy().into_owned();
+            if let Some(prev) = self.modules.insert(object.name.clone(), rel.clone())
+                && prev != rel
+            {
+                bail!("`{}` would come from both {prev} and {rel}; an image can't use two modules of one name", object.name);
+            }
+            self.sets.push((object.name.clone(), header.messages.clone()));
+            return Ok(TypeRef::Wasm { object, module: rel });
+        }
+        if let Some(t) = scope.traits.get(&ty.name) {
+            if NATIVE.contains(&t.name.as_str()) && iface::env().traits.get(&t.name) == Some(t) {
+                bail!(err_at(
+                    ty,
+                    format!(
+                        "no image declares the runtime's {}: the image being run gets one by needing it, e.g. `needs /dev/cons Console`, \
+                         and gives it to what it instantiates",
+                        t.name
+                    )
+                ));
+            }
+            let runs = IN_MEMORY.join(", ");
+            bail!(err_at(ty, format!("`{}` is a shape, not an object; of the runtime's, an image can declare {runs}", ty.name)));
+        }
+        if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) {
+            bail!(err_at(ty, format!("the runtime's objects have new names: `{now}`, imported from env")));
+        }
+        if IN_MEMORY.contains(&ty.name.as_str()) {
+            bail!(err_at(ty, format!("`{}` is the runtime's; import it first: `import {{ {} }} from env`", ty.name, ty.name)));
+        }
+        bail!(err_at(ty, format!("unknown object `{}`; is it imported?", ty.name)))
+    }
+
+    fn is_image(&self, node: usize) -> bool {
+        node < self.nodes.len() && matches!(self.nodes[node].ty, TypeRef::Image(_))
+    }
+
+    /// A namespace with every view built so far, and every export, for
+    /// working out where paths lead.
+    fn namespace(&self) -> Namespace {
+        let n = self.nodes.len();
+        let mut ns = Namespace::new(n + 1);
+        for (i, node) in self.nodes.iter().enumerate() {
+            for m in &node.mounts {
+                ns.mount_resolved(i, &m.at, m.resolved());
+            }
+            for e in &node.exports {
+                ns.expose_resolved(i, &e.at, e.resolved());
+            }
+        }
+        for m in &self.view {
+            ns.mount_resolved(n, &m.at, m.resolved());
+        }
+        ns
+    }
+
+    /// Works out every bind and export. Each is resolved in its image's
+    /// view as soon as it leads to an object: an export can be of what
+    /// another image exports, or of something bound, so they are taken in
+    /// whatever order they can be.
+    fn resolve_pending(&mut self) -> Result<()> {
+        let n = self.nodes.len();
+        // An image's needs for one mount point in particular are filled by
+        // its instance's block, or nothing it binds from there can resolve.
+        for (i, node) in self.nodes.iter().enumerate() {
+            let TypeRef::Image(u) = node.ty else { continue };
+            for need in self.units[u].scope.needs.iter().filter(|n| n.at.is_literal()) {
+                let filled = node.mounts.iter().any(|m| need.at.matches(&m.at))
+                    || self.pending.iter().any(|p| p.node == i && !p.export && need.at.matches(&p.at));
+                if !filled {
+                    let pos = node.decl.as_ref().map(|d| d.name.pos).unwrap_or(Pos { line: 0, col: 0 });
+                    bail!("{pos}: `{}` needs something mounted at `{}`", node.name, need.at);
+                }
+            }
+        }
+        let mut pending = std::mem::take(&mut self.pending);
+        let mut ns = self.namespace();
+        while !pending.is_empty() {
+            let before = pending.len();
+            let mut left = vec![];
+            for p in pending {
+                match ns.resolve(p.from.unwrap_or(n), &p.path) {
+                    Ok(mut r) if !self.is_image(r.inst) => {
+                        r.read_only |= p.read_only;
+                        let decl = MountDecl { at: p.at.clone(), target: r.inst, path: r.path.clone(), read_only: r.read_only };
+                        if p.export {
+                            ns.expose_resolved(p.node, &p.at, r);
+                            push_mount(&mut self.nodes[p.node].exports, decl, p.pos, "what the image exports")?;
+                        } else {
+                            ns.mount_resolved(p.node, &p.at, r);
+                            let whose = format!("`{}`'s view", self.nodes[p.node].name);
+                            push_mount(&mut self.nodes[p.node].mounts, decl, p.pos, &whose)?;
+                            self.nodes[p.node].written.push(p.pos);
+                        }
+                    }
+                    _ => left.push(p),
+                }
+            }
+            if left.len() == before {
+                let p = &left[0];
+                let whose = match p.from {
+                    Some(i) => format!("`{}`'s", self.nodes[i].name),
+                    None => "the image's".into(),
+                };
+                bail!("{}: nothing is at `{}` in {whose} view", p.pos, p.path);
+            }
+            pending = left;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<Program> {
+        let n = self.nodes.len();
+        for node in &mut self.nodes {
+            let mut both: Vec<(Pos, MountDecl)> = node.written.drain(..).zip(node.mounts.drain(..)).collect();
+            both.sort_by_key(|(p, _)| (p.line, p.col));
+            node.mounts = both.into_iter().map(|(_, m)| m).collect();
+        }
+        let ns = self.namespace();
+        let messages = all_messages(&self.sets)?;
+
+        // Every interface: the objects', then each image's, which serves
+        // what its exports lead to, always objects.
+        let mut interfaces: BTreeMap<String, Object> = BTreeMap::new();
+        let mut type_names = vec![];
+        for node in &self.nodes {
+            let o = match &node.ty {
+                TypeRef::Builtin(name) => builtin(name).expect("only the runtime's are Builtin"),
+                TypeRef::Wasm { object, .. } => object.clone(),
+                TypeRef::Image(u) => Object {
+                    name: format!("image {}", node.name),
+                    doc: String::new(),
+                    traits: vec![],
+                    guide: None,
+                    needs: self.units[*u].scope.needs.clone(),
+                    serves: vec![],
+                    origin: None,
+                },
+            };
+            type_names.push(o.name.clone());
+            interfaces.insert(o.name.clone(), o);
+        }
+        for (i, node) in self.nodes.iter().enumerate() {
+            if matches!(node.ty, TypeRef::Image(_)) {
+                let serves = node.exports.iter().flat_map(|e| served(&interfaces, &type_names, e)).collect();
+                interfaces.get_mut(&type_names[i]).expect("just made").serves = serves;
+            }
+        }
+
+        // Every view against what its owner needs.
+        for (i, node) in self.nodes.iter().enumerate() {
+            let obj = &interfaces[&type_names[i]];
+            let at = node.decl.as_ref().map(|d| d.name.pos).unwrap_or(Pos { line: 0, col: 0 });
+            self.check_view(obj, &node.name, at, &node.mounts, &interfaces, &type_names)?;
+        }
+
+        // Every startup request, as the operator, against what it reaches.
+        // The root's needs are configured by its writes of their roots.
+        let mut startup = vec![];
+        let mut configs: Vec<Vec<(Pos, Arg)>> = vec![vec![]; n];
+        for r in std::mem::take(&mut self.requests) {
+            let req = &r.request;
+            let full = ns::clean(&req.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", req.path.pos, req.path.path))?;
+            let view = r.image.unwrap_or(n);
+            let to = ns.resolve(view, &full).map_err(|_| anyhow!("{}: nothing is mounted at `{full}` in the image's view", req.path.pos))?;
+            if to.read_only && !req.verb.is_safe() {
+                bail!("{}: `{full}` is read-only in the image's view, so it can't take `{}`", req.verb_pos, req.verb);
+            }
+            let body = match &req.body {
+                Some(b) => Some(self.request_arg(&r, b)?),
+                None => None,
+            };
+            let configured = matches!(&self.nodes[to.inst].ty, TypeRef::Builtin(b) if CONFIGURED.contains(&b.as_str()));
+            if configured && req.verb == Verb::Write && to.path == "/" {
+                configs[to.inst].push((req.verb_pos, body.ok_or_else(|| anyhow!("{}: a config needs text", req.verb_pos))?));
+                continue;
+            }
+            let name = self.nodes[to.inst].name.clone();
+            check_request(req, &to.path, &name, &interfaces[&type_names[to.inst]], body.as_ref(), &self.slots)?;
+            startup.push(Startup { image: r.image, verb: req.verb, path: full, body });
+        }
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            let TypeRef::Builtin(b) = &node.ty else { continue };
+            let Some(what) = config_what(b) else { continue };
+            let needs = format!("{} needs exactly one config: `write` its root with {what}", node.name);
+            let [(pos, arg)] = configs[i].as_slice() else { bail!(needs) };
+            if !payload::fits("text/*", arg_type(&self.slots, arg)) {
+                bail!("{pos}: {needs}");
+            }
+            node.config = Some(arg.clone());
+        }
+
+        let instances = self
+            .nodes
+            .into_iter()
+            .zip(type_names)
+            .map(|(node, type_name)| {
+                let kind = match node.ty {
+                    TypeRef::Builtin(b) => {
+                        let includes = node.decl.as_ref().map(|d| d.includes.clone()).unwrap_or_default();
+                        builtin_kind(&b, &includes)?
+                    }
+                    TypeRef::Wasm { object, module, .. } => Kind::Wasm { type_name: object.name, module },
+                    TypeRef::Image(_) => Kind::Image { exports: node.exports },
+                };
+                let dir = self.units[node.unit].rel.to_string_lossy().into_owned();
+                Ok(Instance { name: node.name, type_name, kind, dir, config: node.config, mounts: node.mounts })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Program { messages, interfaces, slots: self.slots, instances, view: self.view, startup, sources: vec![] })
+    }
+
+    /// The payload a startup request carries: a literal, or a slot of its image.
+    fn request_arg(&self, r: &Request, literal: &Literal) -> Result<Arg> {
+        if let Literal::Message(b) = literal
+            && b.fields.is_none()
+            && let Some(arg) = r.slots.get(&b.type_name.name)
+        {
+            return Ok(arg.clone());
+        }
+        body_arg(&self.units[r.unit].scope.messages, &[], literal)
+    }
+
+    /// `mounts`, the view of the instance `name`, against what `obj` needs
+    /// there, and each need for one mount point in particular against them.
+    fn check_view(
+        &self,
+        obj: &Object,
+        name: &str,
+        pos: Pos,
+        mounts: &[MountDecl],
+        interfaces: &BTreeMap<String, Object>,
+        type_names: &[String],
+    ) -> Result<()> {
+        for m in mounts {
+            let Some(need) = obj.need(&m.at) else { continue };
+            let target = &self.nodes[m.target].name;
+            let Some(full) = interfaces.get(&type_names[m.target]) else { continue };
+            let mut served = full.clone();
+            served.serves = below(full, &m.path, "/");
+            for e in &need.entries {
+                for r in &e.requests {
+                    if m.read_only && !r.verb.is_safe() {
+                        bail!("`{name}` needs `{} {r}` at `{}`, but `{target}` is mounted there read-only", e.path, m.at);
+                    }
+                    if !serves_need(&served, need, e, r) {
+                        let shown: Vec<String> =
+                            served.serves.iter().filter(|s| s.path.overlaps(&e.path)).map(|s| format!("`{s}`")).collect();
+                        let has = if shown.is_empty() { "nothing there".to_string() } else { shown.join(", ") };
+                        bail!("`{name}` needs `{} {r}` at `{}`, and `{target}` serves {has}", e.path, m.at);
+                    }
+                }
+            }
+        }
+        for need in obj.needs.iter().filter(|n| n.at.is_literal()) {
+            if !mounts.iter().any(|m| need.at.matches(&m.at)) {
+                bail!("{pos}: `{name}` needs something mounted at `{}`", need.at);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What an image's instance serves through export `e`: what its target
+/// serves below the exported path, put where the export puts it. Its
+/// target is an object, whose interface is already known.
+fn served(interfaces: &BTreeMap<String, Object>, type_names: &[String], e: &MountDecl) -> Vec<iface::Entry> {
+    let Some(target) = type_names.get(e.target).and_then(|t| interfaces.get(t)) else { return vec![] };
+    below(target, &e.path, &e.at)
+}
+
+/// What `obj` serves below `path`, put under the mount point `at`.
+fn below(obj: &Object, path: &str, at: &str) -> Vec<iface::Entry> {
+    obj.serves
+        .iter()
+        .filter_map(|e| {
+            let rel = e.path.below(path)?;
+            Some(iface::Entry { path: Pattern::under(at, &rel), doc: e.doc.clone(), requests: e.requests.clone() })
+        })
+        .collect()
+}
+
+fn slot_kind(scope: &BTreeMap<String, MessageType>, slot: &SlotDecl) -> Result<SlotKind> {
+    Ok(match slot {
+        SlotDecl::Message(body) => {
+            let (type_name, defaults) = body_fields(scope, body, false)?;
+            SlotKind::Message { type_name, defaults }
+        }
+        SlotDecl::Payload { ty, default } => SlotKind::Payload { ty: content_type(ty)?, default: default.clone() },
+    })
+}
+
+fn kind_type(kind: &SlotKind) -> &str {
+    match kind {
+        SlotKind::Message { type_name, .. } => type_name,
+        SlotKind::Payload { ty, .. } => ty,
+    }
+}
+
+fn clean_mount_point(p: &image::Path) -> Result<String> {
+    ns::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
+}
+
+fn mount_decl(at: &image::Path, target: usize, read_only: bool) -> Result<MountDecl> {
+    Ok(MountDecl { at: clean_mount_point(at)?, target, path: "/".into(), read_only })
+}
+
+/// Adds `decl` to `mounts`, which `whose` names in errors.
+fn push_mount(mounts: &mut Vec<MountDecl>, decl: MountDecl, pos: Pos, whose: &str) -> Result<()> {
+    if mounts.iter().any(|prev| prev.at == decl.at) {
+        bail!("{pos}: `{}` is already mounted in {whose}", decl.at);
+    }
+    mounts.push(decl);
     Ok(())
+}
+
+/// A startup request of `path` in instance `name`'s served tree, against
+/// what `obj` serves there.
+fn check_request(r: &image::Request, path: &str, name: &str, obj: &Object, body: Option<&Arg>, slots: &[Slot]) -> Result<()> {
+    let body_type = body.map(|b| arg_type(slots, b));
+    let Some(entry) = obj.serving(path) else {
+        bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
+    };
+    let given = match body_type {
+        Some(t) => format!("{} {t}", r.verb),
+        None => r.verb.to_string(),
+    };
+    match entry.takes(r.verb, body_type) {
+        Ok(_) => Ok(()),
+        Err(Status::NotSupported) => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
+        Err(_) => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
+    }
 }
 
 /// Whether `served` meets request `r` of entry `want` in block `need`: an
@@ -565,24 +913,32 @@ fn serves_need(served: &Object, need: &iface::Need, want: &iface::Entry, r: &ifa
 }
 
 /// A summary of each instance's view and the most it can ever reach, for
-/// `--check`. `about` may say more about an instance, on a line of its own.
-pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String {
-    let mounts: Vec<Vec<(usize, bool)>> =
-        p.instances.iter().map(|i| i.mounts.iter().map(|m| (m.target, m.read_only)).collect()).collect();
+/// `--check`. `about` may say more about an instance, on a line of its own;
+/// `skip` leaves one out. Instances of images aren't shown, only what is
+/// in them.
+pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>, skip: &dyn Fn(usize) -> bool) -> String {
+    // Mounting an image's instance reaches what it exports, and nothing
+    // else of its view, so reach goes through its exports.
+    let mounts: Vec<Vec<(usize, bool)>> = p
+        .instances
+        .iter()
+        .map(|i| {
+            let edges = match &i.kind {
+                Kind::Image { exports } => exports.as_slice(),
+                _ => &i.mounts,
+            };
+            edges.iter().map(|m| (m.target, m.read_only)).collect()
+        })
+        .collect();
     let reach = ns::reach(&mounts);
-    let width = p.instances.iter().map(|i| i.name.len()).max().unwrap_or(0);
-    let sees = |mounts: &[MountDecl]| -> String {
-        let sees: Vec<String> = mounts
-            .iter()
-            .map(|m| format!("{} → {}{}", m.at, p.instances[m.target].name, if m.read_only { " ro" } else { "" }))
-            .collect();
-        sees.join(", ")
+    let shown = |i: usize| !skip(i) && !matches!(p.instances[i].kind, Kind::Image { .. });
+    let width = (0..p.instances.len()).filter(|&i| shown(i)).map(|i| p.instances[i].name.len()).max().unwrap_or(0);
+    let target = |m: &MountDecl| {
+        let name = &p.instances[m.target].name;
+        if m.path == "/" { name.clone() } else { format!("{name}{}", m.path) }
     };
     let mut out = String::new();
-    if !p.view.is_empty() {
-        writeln!(out, "the image sees {}\n", sees(&p.view)).unwrap();
-    }
-    for (i, inst) in p.instances.iter().enumerate() {
+    for (i, inst) in p.instances.iter().enumerate().filter(|(i, _)| shown(*i)) {
         let mut name = inst.name.as_str();
         if let Some(about) = about(i) {
             writeln!(out, "{name:width$}  {about}").unwrap();
@@ -594,9 +950,12 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
             }
             continue;
         }
-        writeln!(out, "{name:width$}  sees {}", sees(&inst.mounts)).unwrap();
+        let sees: Vec<String> =
+            inst.mounts.iter().map(|m| format!("{} → {}{}", m.at, target(m), if m.read_only { " ro" } else { "" })).collect();
+        writeln!(out, "{name:width$}  sees {}", sees.join(", ")).unwrap();
         let reaches: Vec<String> = reach[i]
             .iter()
+            .filter(|(t, _)| !matches!(p.instances[**t].kind, Kind::Image { .. }))
             .map(|(&t, r)| {
                 let mode = if r.read_only { "ro" } else { "rw" };
                 match r.via {
@@ -610,28 +969,19 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>) -> String 
     out
 }
 
-/// The interface of the built-in type `name`, if it is one: one of the traits
-/// the runtime implements, as an object serving the trait's tree, or
-/// Packed.Files. One of the traits `imported` is run in memory, and
-/// serves its other side too.
-fn builtin(name: &str, imported: bool) -> Option<Object> {
+/// The interface of the runtime's object `name`, if it is one: one of the
+/// traits it implements on the host, as an object serving the trait's tree,
+/// or one of its objects in memory.
+fn builtin(name: &str) -> Option<Object> {
     let env = iface::env();
-    if name == PACKED {
-        return env.object(PACKED).cloned();
+    if IN_MEMORY.contains(&name) {
+        return env.object(name).cloned();
     }
-    let mut o = env.traits.get(name).filter(|_| NATIVE.contains(&name)).map(Trait::as_object)?;
-    if imported {
-        o.name = format!("Memory.{name}");
-        if let Some((_, Some(other))) = MEMORY.iter().find(|(t, _)| *t == name) {
-            o.serves.extend(env.traits[*other].entries.iter().cloned());
-            o.traits.push(other.to_string());
-        }
-    }
-    Some(o)
+    env.traits.get(name).filter(|_| NATIVE.contains(&name)).map(Trait::as_object)
 }
 
-/// What the runtime's object `name` is configured with, whether it runs on
-/// the host or in memory, for errors; `None` if it takes no config.
+/// What the runtime's object `name` is configured with, for errors; `None`
+/// if it takes no config.
 fn config_what(name: &str) -> Option<&'static str> {
     match name {
         LISTENER => Some("the address to listen on, e.g. `\"127.0.0.1:8080\"`"),
@@ -640,21 +990,20 @@ fn config_what(name: &str) -> Option<&'static str> {
     }
 }
 
-
-/// How the runtime implements the built-in type `name`. A `Packed.Files`
-/// serves its `includes`.
+/// How the runtime implements its object `name`. A `PackedFiles` serves its
+/// `includes`.
 fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
     Ok(match name {
         CONSOLE => Kind::Console,
         LISTENER => Kind::Tcp,
         FILES => Kind::Files,
+        MEMORY_CONSOLE => Kind::MemoryConsole,
+        MEMORY_LISTENER => Kind::MemoryListener,
         PACKED => {
             let mut decls = vec![];
             for inc in includes {
                 let at = match &inc.at {
-                    Some(p) => Some(
-                        ns::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))?,
-                    ),
+                    Some(p) => Some(clean_mount_point(p)?),
                     None => None,
                 };
                 decls.push(IncludeDecl { source: inc.source.clone(), at });
@@ -814,21 +1163,35 @@ mod tests {
         format!("object {name} {{ serves {{ /** {} }} }}", anything())
     }
 
-    /// Checks `img` as /check/test.oth, beside MESSAGES in messages.oth. Any
-    /// instance type it doesn't import is imported for it at the top: from
-    /// env if it is the runtime's, and otherwise from ./<Type>.oth, which
-    /// has its module beside it, with the header in `modules` or else a
-    /// permissive one. A `Ghost` has no module.
-    fn check_with(img: &str, modules: &[(&str, &str)]) -> Result<Program> {
+    /// Checks `img` as /check/test.oth, beside MESSAGES in messages.oth and
+    /// `files`. Any instance type it doesn't import is imported for it at
+    /// the top: from env if it is the runtime's, and otherwise from
+    /// ./<Type>.oth, which has its module beside it, with the header in
+    /// `modules` or else a permissive one. A `Ghost` has no module.
+    fn check_all(img: &str, modules: &[(&str, &str)], files: &[(&str, &str)]) -> Result<Program> {
         let dir = PathBuf::from("/check");
         let mut loader = Loader::default();
         loader.files.insert(dir.join("messages.oth"), MESSAGES.into());
+        for (name, src) in files {
+            loader.files.insert(dir.join(name), src.as_bytes().to_vec());
+        }
         let parsed = image::parse(img)?;
-        let mut imported: Vec<String> =
-            parsed.header.imports.iter().flat_map(|i| i.names.iter().map(|n| n.local.name.clone())).collect();
+        let mut imported: Vec<String> = parsed
+            .header
+            .imports
+            .iter()
+            .flat_map(|i| i.names.iter().map(|n| n.local.name.clone()).chain(i.default.iter().map(|d| d.name.clone())))
+            .collect();
         let (mut prelude, mut from_env) = (String::new(), vec![]);
-        for inst in &parsed.instances {
-            let ty = inst.type_name.name.clone();
+        let mut names: Vec<String> = parsed.instances.iter().map(|i| i.type_name.name.clone()).collect();
+        for n in &parsed.header.needs {
+            if let [e] = n.entries.as_slice()
+                && let [iface::Item::Named(id)] = e.items.as_slice()
+            {
+                names.push(id.name.clone());
+            }
+        }
+        for ty in names {
             if imported.contains(&ty) {
                 continue;
             }
@@ -858,6 +1221,10 @@ mod tests {
         load_with(&dir.join("test.oth"), &mut loader)
     }
 
+    fn check_with(img: &str, modules: &[(&str, &str)]) -> Result<Program> {
+        check_all(img, modules, &[])
+    }
+
     fn check_src(img: &str) -> Result<Program> {
         check_with(img, &[])
     }
@@ -870,19 +1237,27 @@ mod tests {
         format!("{:#}", check_with(img, modules).unwrap_err())
     }
 
+    fn names(p: &Program) -> Vec<&str> {
+        p.instances.iter().map(|i| i.name.as_str()).collect()
+    }
+
     const HEADER: &str = r#"
         import { Greeting, Config, Ping, Blob } from "./messages.oth"
-        instance cons : Console
+        instance cons : MemoryConsole
     "#;
+
+    fn mount(at: &str, target: usize, read_only: bool) -> MountDecl {
+        MountDecl { at: at.into(), target, path: "/".into(), read_only }
+    }
 
     #[test]
     fn accepts_hello_world() {
-        let p = check_src(&format!("{HEADER} instance echo : Echo {{ mount /dev/cons cons }}")).unwrap();
-        assert_eq!(p.instances.len(), 2);
+        let p = check_src("needs /dev/cons Console  instance echo : Echo { bind /dev/cons /dev/cons }").unwrap();
+        assert_eq!(names(&p), ["/dev/cons", "echo"], "the root's needs come first, named for their mount points");
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into(), module: "Echo.wasm".into() });
-        assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
-        assert!(p.messages.contains_key("Greeting"));
+        assert_eq!(p.instances[1].mounts, [mount("/dev/cons", 0, false)]);
+        assert_eq!(p.view, [mount("/dev/cons", 0, false)]);
     }
 
     #[test]
@@ -892,11 +1267,21 @@ mod tests {
         assert!(e.contains("`/x/../y` is not a clean absolute path"), "{e}");
         let e = err(&format!("{HEADER} instance a : A {{ mount /c cons mount /c/ cons }}"));
         assert!(e.contains("`/c` is already mounted"), "{e}");
-        let e = err(&format!("{HEADER} instance net : Console {{ mount /c cons }}"));
-        assert!(e.contains("only serves"), "{e}");
+        let e = err(&format!("{HEADER} instance m : MemoryConsole {{ mount /c cons }}"));
+        assert!(e.contains("MemoryConsole has no view to mount into; it only serves"), "{e}");
         // Forward references are fine: views are built once every instance exists.
         let p = check_src(&format!("{HEADER} instance a : A {{ mount /b b readonly }} instance b : B")).unwrap();
-        assert_eq!(p.instances[1].mounts[0], MountDecl { at: "/b".into(), target: 2, read_only: true });
+        assert_eq!(p.instances[1].mounts[0], mount("/b", 2, true));
+        let e = err(&format!("{HEADER} instance a : A {{ bind /x /nowhere }}"));
+        assert!(e.contains("nothing is at `/nowhere` in the image's view"), "{e}");
+    }
+
+    #[test]
+    fn binds_give_what_a_path_means_in_the_images_view() {
+        let p = check_src(&format!("{HEADER} instance b : B  mount /b b  instance a : A {{ bind /x /b/sub readonly  mount /c cons }}")).unwrap();
+        assert_eq!(p.instances[2].mounts, [MountDecl { at: "/x".into(), target: 1, path: "/sub".into(), read_only: true }, mount("/c", 0, false)]);
+        let d = describe(&p, &|_| None, &|_| false);
+        assert!(d.contains("a     sees /x → b/sub ro, /c → cons\n"), "{d}");
     }
 
     #[test]
@@ -908,7 +1293,7 @@ mod tests {
         .unwrap();
         let s = &p.startup;
         assert_eq!(s.len(), 3);
-        assert_eq!((s[0].verb, s[0].path.as_str()), (Verb::Write, "/e/config"));
+        assert_eq!((s[0].image, s[0].verb, s[0].path.as_str()), (None, Verb::Write, "/e/config"));
         let body = s[0].body.as_ref().unwrap().message().unwrap();
         assert_eq!(body.fields.get_i32("count").unwrap(), 3);
         assert_eq!(body.fields.get_f64("ratio").unwrap(), 2.0);
@@ -946,8 +1331,7 @@ mod tests {
     #[test]
     fn requests_resolve_in_the_images_view() {
         let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  write /x Ping  write /e/out \"hi\"")).unwrap();
-        let view = [MountDecl { at: "/".into(), target: 1, read_only: false }, MountDecl { at: "/e/out".into(), target: 0, read_only: false }];
-        assert_eq!(p.view, view);
+        assert_eq!(p.view, [mount("/", 1, false), mount("/e/out", 0, false)]);
         let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, ["/x", "/e/out"], "kept as written, and resolved again when the image runs");
 
@@ -969,60 +1353,59 @@ mod tests {
     }
 
     #[test]
-    fn environment_objects_take_config_from_the_image() {
-        let p = check_src(
-            r#"instance net : Listener mount /net net write /net "127.0.0.1:0"
-            instance fs : Files mount /fs fs write /fs "public""#,
-        )
-        .unwrap();
+    fn the_root_needs_the_runtimes_objects_and_configures_them() {
+        let p = check_src(r#"needs /net Listener  write /net "127.0.0.1:0"  needs /fs Files  write /fs "public""#).unwrap();
+        assert_eq!(names(&p), ["/net", "/fs"]);
         assert_eq!(p.instances[0].kind, Kind::Tcp);
         assert_eq!(p.instances[0].config.as_ref().unwrap().text().unwrap(), "127.0.0.1:0");
         assert_eq!(p.instances[1].kind, Kind::Files);
         assert!(p.startup.is_empty(), "config isn't a request");
 
-        let e = err("instance net : Listener");
-        assert!(e.contains("Listener needs exactly one config: mount it in the image's view and `write` its root with the address to listen on, e.g. `\"127.0.0.1:8080\"`"), "{e}");
-        let e = err(r#"instance net : Listener mount /net net write /net "a" write /net "b""#);
+        let e = err("needs /net Listener");
+        assert!(e.contains("/net needs exactly one config: `write` its root with the address to listen on, e.g. `\"127.0.0.1:8080\"`"), "{e}");
+        let e = err(r#"needs /net Listener  write /net "a"  write /net "b""#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(&format!(r#"{HEADER} instance net : Listener mount /net net write /net Ping"#));
+        let e = err(&format!(r#"{HEADER} needs /net Listener  write /net Ping"#));
         assert!(e.contains("exactly one config"), "it takes text: {e}");
-        let p = check_src(r#"instance c : Console mount /c c write /c "printed""#).unwrap();
+        let p = check_src(r#"needs /c Console  write /c "printed""#).unwrap();
         assert_eq!(p.startup.len(), 1, "a Console takes no config, so writing it prints");
-        let e = err(r#"instance net : Listener mount /net net write /net "a" write /net/x "b""#);
-        assert!(e.contains("`net` doesn't take `write` at `/x`"), "{e}");
+        let e = err(r#"needs /net Listener  write /net "a"  write /net/x "b""#);
+        assert!(e.contains("`/net` doesn't take `write` at `/x`"), "{e}");
+
+        let e = err("needs /x FileTree");
+        assert!(e.contains("each names one of its traits: Console, Listener, Files"), "{e}");
+        let e = err("needs /x { / read }");
+        assert!(e.contains("each names one of its traits"), "{e}");
+        let e = err("instance c : Console");
+        assert!(e.contains("no image declares the runtime's Console: the image being run gets one by needing it"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown object `Environment.Stdin`"), "{e}");
         let e = err("instance net : Environment.Tcp");
-        assert!(e.contains("the runtime's objects are declared by their traits: `Listener`, imported from env"), "{e}");
-        let e = format!("{:#}", load_with(Path::new("/l/test.oth"), &mut {
-            let mut l = Loader::default();
-            l.files.insert("/l/test.oth".into(), b"instance net : Listener".to_vec());
-            l
-        }).unwrap_err());
-        assert!(e.contains("`Listener` is the runtime's; import it first: `import { Listener } from env`"), "{e}");
+        assert!(e.contains("the runtime's objects have new names: `Listener`, imported from env"), "{e}");
         let e = err("instance t : FileTree");
-        assert!(e.contains("`FileTree` is a shape the runtime has no implementation of; it runs Console, Listener, Files, and Packed.Files"), "{e}");
+        assert!(e.contains("`FileTree` is a shape, not an object; of the runtime's, an image can declare PackedFiles, MemoryConsole, MemoryListener"), "{e}");
     }
 
     #[test]
     fn the_configured_objects_take_text_at_their_root() {
         for name in CONFIGURED {
             assert!(config_what(name).is_some(), "{name}");
-            let root = builtin(name, false).unwrap().serves.into_iter().find(|e| e.path.as_str() == "/").unwrap();
+            let root = builtin(name).unwrap().serves.into_iter().find(|e| e.path.as_str() == "/").unwrap();
             assert!(root.takes(Verb::Write, Some("text/plain")).is_ok_and(|r| r.operator), "{name}: {root}");
         }
         assert_eq!(config_what(CONSOLE), None);
         assert_eq!(config_what(PACKED), None);
-        for name in NATIVE.iter().chain([&PACKED]) {
+        for name in NATIVE.iter().chain(IN_MEMORY) {
             assert!(iface::env().traits.contains_key(*name) || iface::env().object(name).is_some(), "env declares {name}");
             assert!(builtin_kind(name, &[]).is_ok(), "the runtime implements {name}");
+            assert!(builtin(name).is_some(), "{name}");
         }
     }
 
     #[test]
     fn packed_files_take_includes_and_nothing_else() {
         let p = check_src(
-            r#"instance files : Packed.Files { include "public/" include "a.txt" at /b//c/ }
+            r#"instance files : PackedFiles { include "public/" include "a.txt" at /b//c/ }
             instance site : Site { mount /files files }"#,
         )
         .unwrap();
@@ -1033,31 +1416,29 @@ mod tests {
         assert_eq!(p.instances[0].kind, Kind::Packed { includes: want.to_vec() });
 
         let e = err(r#"instance s : Site { include "x" }"#);
-        assert!(e.contains("`include` packs files into a Packed.Files instance, and `s` is a Site"), "{e}");
-        let e = err(r#"instance f : Packed.Files { include "x" at /../y }"#);
+        assert!(e.contains("`include` packs files into a PackedFiles instance, and `s` is a Site"), "{e}");
+        let e = err(r#"instance f : PackedFiles { include "x" at /../y }"#);
         assert!(e.contains("not a clean absolute path"), "{e}");
-        let e = err(r#"instance f : Packed.Files mount /f f write /f ".""#);
+        let e = err(r#"instance f : PackedFiles mount /f f write /f ".""#);
         assert!(e.contains("`f` doesn't take `write` at `/`"), "it takes no config: {e}");
-        let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
-        assert!(e.contains("only serves"), "{e}");
-        let e = err(r#"instance f : Packed.Dirs"#);
-        assert!(e.contains("unknown object `Packed.Dirs`"), "{e}");
+        let e = err(r#"instance f : Packed.Files"#);
+        assert!(e.contains("the runtime's objects have new names: `PackedFiles`"), "{e}");
     }
 
     #[test]
-    fn slots_stand_in_for_messages() {
+    fn slots_stand_in_for_payloads() {
         let p = check_src(&format!(
             r#"{HEADER}
             require listen : text/plain
             require config : Config {{ name: "x", count: 3 }}
-            instance net : Listener mount /net net write /net listen
+            needs /net Listener  write /net listen
             instance e : Echo mount /e e write /e/config config"#
         ))
         .unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
         let SlotKind::Message { defaults, .. } = &p.slots[1].kind else { panic!() };
         assert_eq!(*defaults, bson::doc! { "name": "x", "count": 3 }, "defaults may be partial");
-        assert_eq!(p.instances[1].config, Some(Arg::Slot(0)));
+        assert_eq!(p.instances[0].config, Some(Arg::Slot(0)));
         assert_eq!(p.startup[0].body, Some(Arg::Slot(1)));
 
         let inst = |decls: &str, request: &str| format!("{HEADER} {decls} instance e : Echo mount /e e {request}");
@@ -1071,9 +1452,7 @@ mod tests {
         assert!(e.contains("`Greeting` has no field `nope`"), "{e}");
         let e = err(&inst("require g : Nope", ""));
         assert!(e.contains("unknown message type `Nope`"), "{e}");
-        let e = err(&inst("require g : Greeting", "write /e g { text: \"x\" }"));
-        assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
-        let e = err(&format!("{HEADER} require t : Ping instance net : Listener mount /net net write /net t"));
+        let e = err(&format!("{HEADER} require t : Ping needs /net Listener write /net t"));
         assert!(e.contains("needs exactly one config"), "{e}");
     }
 
@@ -1088,7 +1467,6 @@ mod tests {
         .unwrap();
         assert!(p.messages.contains_key("Greeting"));
         assert_eq!(p.interfaces["Greeter"].serves[0].path.as_str(), "/greeting");
-        assert!(p.interfaces.contains_key("Greeter"));
 
         // A module's types are in the program without being imported, but the image can't write them.
         let p = check_with("instance g : Greeter", &[("Greeter", greeter)]).unwrap();
@@ -1155,8 +1533,8 @@ mod tests {
         assert!(e.contains("doesn't take `write text/html` at `/plain`"), "{e}");
         let e = err_with(r#"instance t : T mount /t t write /t/plain text/ "x""#, &[("T", texts)]);
         assert!(e.contains("`text/` isn't a well-formed content type"), "{e}");
-        let e = err(r#"instance net : Listener mount /net net write /net "a" read /net/a/b"#);
-        assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
+        let e = err(r#"needs /net Listener  write /net "a"  read /net/a/b"#);
+        assert!(e.contains("`/net` serves nothing at `/a/b`"), "the runtime's objects have headers too: {e}");
     }
 
     #[test]
@@ -1169,9 +1547,9 @@ mod tests {
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
         let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write text/plain` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
-        let files = r#"instance f : Files mount /f f write /f ".""#;
-        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
-        assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `f` serves `/ operator write text/plain, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
+        let files = r#"needs /f Files  write /f ".""#;
+        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ bind /dev/cons /f }}"), &modules);
+        assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `/f` serves `/ operator write text/plain, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
     }
 
     #[test]
@@ -1188,8 +1566,8 @@ mod tests {
         let site = "object Site { serves { /hits read -> text/plain  /** read -> text/html, stat } }";
         let strict = "object Strict { needs /** { /** read -> text/html } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
-        let net = r#"instance net : Listener mount /net net write /net "127.0.0.1:0""#;
-        let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
+        let net = r#"needs /net Listener  write /net "127.0.0.1:0""#;
+        let img = format!("{net} instance site : Site instance http : Http {{ bind /net/tcp /net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
         // /hits answers a read with text/plain, where Strict needs text/html everywhere.
@@ -1197,22 +1575,114 @@ mod tests {
         assert!(e.contains("`s` needs `/** read -> text/html` at `/www`, and `site` serves `/hits read -> text/plain`"), "{e}");
     }
 
+    /// An image with an instance of A, which needs /out and serves `/x`
+    /// and `/y`, exporting `/x` alone.
+    const SITE: &str = r#"
+        import { A } from "./A.oth"
+        require greeting : text/plain = "hi"
+        require name : text/plain
+        needs /out { / write text/plain }
+        instance a : A { bind /out /out }
+        mount /a a
+        write /a/x greeting
+        write /a/y name
+        export /a/x at /exported
+    "#;
+    const A: &str = "object A { needs /out { / write text/plain }  serves { /x write text/plain  /y write text/plain  /z read } }";
+
+    fn with_site(img: &str) -> Result<Program> {
+        let b = "object B { needs /web { /exported write text/plain } }";
+        check_all(&format!(r#"import Site from "./site.oth" {img}"#), &[("A", A), ("B", b)], &[("site.oth", SITE)])
+    }
+
+    #[test]
+    fn an_image_is_an_object_made_of_objects() {
+        let p = with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  instance b : B { mount /web web }"#)
+            .unwrap();
+        assert_eq!(names(&p), ["cons", "web", "b", "web.a"], "its instances are named under its own");
+        let (web, a) = (1, 3);
+        assert_eq!(p.instances[web].mounts, [mount("/out", 0, false), mount("/a", a, false)], "its view: its need, then its own mounts");
+        let Kind::Image { exports } = &p.instances[web].kind else { panic!("{:?}", p.instances[web].kind) };
+        assert_eq!(*exports, [MountDecl { at: "/exported".into(), target: a, path: "/x".into(), read_only: false }]);
+        assert_eq!(p.instances[a].mounts, [mount("/out", 0, false)], "a bind through the need, to what the parent mounted there");
+        let served: Vec<String> = p.interfaces[&p.instances[web].type_name].serves.iter().map(|e| e.to_string()).collect();
+        assert_eq!(served, ["/exported write text/plain"], "it serves what it exports, and nothing else");
+
+        // Its requests come first, resolved in its own view, with its slots.
+        let s: Vec<(Option<usize>, &str, String)> =
+            p.startup.iter().map(|s| (s.image, s.path.as_str(), s.body.as_ref().unwrap().text().unwrap())).collect();
+        assert_eq!(s, [(Some(web), "/a/x", "hi".into()), (Some(web), "/a/y", "x".into())]);
+        let d = describe(&p, &|_| None, &|_| false);
+        assert!(d.contains("b      sees /web → web\n       can reach at most: cons rw (via web), web.a rw (via web)\n"), "{d}");
+    }
+
+    #[test]
+    fn an_image_is_held_to_what_it_needs_and_exports() {
+        let e = format!("{:#}", with_site(r#"instance web : Site { name = "x" }"#).unwrap_err());
+        assert!(e.contains("`web` needs something mounted at `/out`"), "{e}");
+        let c = "object C { needs /web { /y write text/plain } }";
+        let e = format!(
+            "{:#}",
+            check_all(
+                r#"import Site from "./site.oth" instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  instance c : C { mount /web web }"#,
+                &[("A", A), ("C", c)],
+                &[("site.oth", SITE)]
+            )
+            .unwrap_err()
+        );
+        assert!(e.contains("`c` needs `/y write text/plain` at `/web`, and `web` serves nothing there"), "only what it exports: {e}");
+        let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons }"#).unwrap_err());
+        assert!(e.contains("`web` needs a value for its slot `name`: `name = ...` in its block"), "{e}");
+        let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x"  nope = "y" }"#).unwrap_err());
+        assert!(e.contains("`Site` has no slot `nope`"), "{e}");
+        let e = format!("{:#}", with_site(r#"import { Ping } from "./messages.oth" instance cons : MemoryConsole  instance web : Site { mount /out cons  name = Ping }"#).unwrap_err());
+        assert!(e.contains("`web`'s slot `name` is a text/plain, and isn't given one"), "{e}");
+        let e = format!("{:#}", with_site(r#"instance a : A { name = "x" }"#).unwrap_err());
+        assert!(e.contains("`a` is a A, which has no slots; only an image's instance takes values"), "{e}");
+    }
+
+    #[test]
+    fn an_image_takes_its_slots_from_the_root() {
+        let p = with_site(r#"require who : text/plain  instance cons : MemoryConsole  instance web : Site { mount /out cons  name = who }"#).unwrap();
+        assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["who"], "only the root's are for whoever runs it");
+        assert_eq!(p.startup[1].body, Some(Arg::Slot(0)));
+    }
+
+    #[test]
+    fn binds_and_exports_resolve_through_other_images() {
+        let p = with_site(
+            r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  mount /web web
+               instance c : C { bind /e /web/exported }"#,
+        )
+        .unwrap();
+        let c = p.instances.iter().position(|i| i.name == "c").unwrap();
+        let a = p.instances.iter().position(|i| i.name == "web.a").unwrap();
+        assert_eq!(p.instances[c].mounts, [MountDecl { at: "/e".into(), target: a, path: "/x".into(), read_only: false }]);
+    }
+
+    #[test]
+    fn images_are_imported_by_a_name() {
+        let e = err(r#"import "./site.oth""#);
+        assert!(e.contains("an image is no longer imported whole: import it by a name, `import Site from \"...\"`"), "{e}");
+        let loops = "import Me from \"./loop.oth\" instance me : Me";
+        let e = format!("{:#}", check_all(loops, &[], &[("loop.oth", loops)]).unwrap_err());
+        assert!(e.contains("images instantiate each other in a loop"), "{e}");
+    }
+
     #[test]
     fn describes_views_and_reach() {
         let p = check_src(
-            r#"instance cons : Console
-            instance files : Files mount /files files write /files "."
+            r#"needs /cons Console
+            instance files : PackedFiles
             instance site : Site { mount /files files readonly }
-            instance http : Http { mount /www site  mount /dev/cons cons }"#,
+            instance http : Http { mount /www site  bind /dev/cons /cons }"#,
         )
         .unwrap();
         assert_eq!(
-            describe(&p, &|_| None),
-            "the image sees /files → files\n\n\
-             cons   sees nothing\n\
-             files  sees nothing\n\
+            describe(&p, &|_| None, &|i| p.instances[i].name.starts_with('/')),
+            "files  sees nothing\n\
              site   sees /files → files ro\n       can reach at most: files ro\n\
-             http   sees /www → site, /dev/cons → cons\n       can reach at most: cons rw, files ro (via site), site rw\n"
+             http   sees /www → site, /dev/cons → /cons\n       can reach at most: /cons rw, files ro (via site), site rw\n"
         );
     }
 }

@@ -118,6 +118,49 @@ impl Pattern {
         go(&self.segs, &other.segs)
     }
 
+    /// What this pattern matches below the clean path `path`, relative to
+    /// it: `/{name}` for `/hosts/{name}` below `/hosts`, `""` for the path
+    /// itself, and `/**` wherever a `**` takes over. `None` if it matches
+    /// nothing below `path`.
+    pub fn below(&self, path: &str) -> Option<String> {
+        let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').filter(|s| !s.is_empty()).collect();
+        if path.is_empty() && self.text == "/" {
+            return Some(String::new());
+        }
+        let mut segs = &self.segs[..];
+        for seg in &path {
+            match segs.first() {
+                Some(Seg::Rest) => return Some("/**".into()),
+                Some(Seg::Lit(l)) if l == seg => segs = &segs[1..],
+                Some(Seg::Name) => segs = &segs[1..],
+                _ => return None,
+            }
+        }
+        let rest: Vec<String> = segs
+            .iter()
+            .map(|s| match s {
+                Seg::Lit(l) => l.clone(),
+                Seg::Name => "{x}".into(),
+                Seg::Rest => "**".into(),
+            })
+            .collect();
+        // Keep the names as written, which the text has and the segments don't.
+        let written: Vec<&str> = self.text.strip_prefix('/').unwrap_or(&self.text).split('/').collect();
+        let rest: Vec<String> = rest.iter().zip(&written[written.len() - rest.len()..]).map(|(_, w)| w.to_string()).collect();
+        Some(if rest.is_empty() { String::new() } else { format!("/{}", rest.join("/")) })
+    }
+
+    /// `rel`, a pattern [`below`](Pattern::below) another path, put under
+    /// the mount point `at` instead.
+    pub fn under(at: &str, rel: &str) -> Pattern {
+        let text = match (at, rel) {
+            ("/", "") => "/".to_string(),
+            ("/", rel) => rel.to_string(),
+            (at, rel) => format!("{}{rel}", at.trim_end_matches('/')),
+        };
+        Pattern::parse(&text).expect("a pattern under a mount point is a pattern")
+    }
+
     /// Whether some path matches both.
     pub fn overlaps(&self, other: &Pattern) -> bool {
         fn go(p: &[Seg], q: &[Seg]) -> bool {
@@ -163,6 +206,24 @@ impl From<Pattern> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patterns_move_below_one_path_and_under_another() {
+        let below = |p: &str, path: &str| Pattern::parse(p).unwrap().below(path);
+        assert_eq!(below("/hosts/{name}", "/hosts").as_deref(), Some("/{name}"));
+        assert_eq!(below("/hosts", "/hosts").as_deref(), Some(""));
+        assert_eq!(below("/hosts/", "/hosts").as_deref(), Some("/"));
+        assert_eq!(below("/**", "/a/b").as_deref(), Some("/**"));
+        assert_eq!(below("/{conn}/data", "/7").as_deref(), Some("/data"));
+        assert_eq!(below("/x", "/"), Some("/x".into()));
+        assert_eq!(below("/", "/").as_deref(), Some(""));
+        assert_eq!(below("/hits", "/hosts"), None);
+        assert_eq!(Pattern::under("/web", "/{name}").as_str(), "/web/{name}");
+        assert_eq!(Pattern::under("/web", "").as_str(), "/web");
+        assert_eq!(Pattern::under("/web/", "/").as_str(), "/web/");
+        assert_eq!(Pattern::under("/", "").as_str(), "/");
+        assert_eq!(Pattern::under("/", "/x").as_str(), "/x");
+    }
 
     fn p(s: &str) -> Pattern {
         Pattern::parse(s).unwrap()

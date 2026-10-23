@@ -227,9 +227,8 @@ mod tests {
         require listen : text/plain = "127.0.0.1:8080"
         require info : Info { kind: "file" }
         require host : text/plain = "localhost"
-        instance net : Listener
+        needs /net Listener
         instance a : A
-        mount /net net
         mount /a a
         write /net listen
         write /a/info info
@@ -335,7 +334,7 @@ mod tests {
 
     #[test]
     fn an_image_without_slots_needs_nothing() {
-        let mut p = program("instance cons : Console");
+        let mut p = program("needs /cons Console");
         bind(&mut p, &[]).unwrap();
         let e = bind(&mut p, &[text("--set", "x", "y", "z")]).unwrap_err().to_string();
         assert!(e.contains("there is no slot `x`"), "{e}");
