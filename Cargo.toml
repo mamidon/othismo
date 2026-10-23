@@ -17,6 +17,7 @@ image = { path = "crates/image" }
 runtime = { path = "crates/runtime" }
 compiler = { path = "crates/compiler" }
 codegen = { path = "crates/codegen" }
+shell = { path = "crates/shell" }
 anyhow = "1.0.104"
 bson = { version = "3.1.0", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -1217,6 +1217,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "format",
+ "format-bson",
+ "image",
+ "protocol",
+ "runtime",
+ "syntax",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
