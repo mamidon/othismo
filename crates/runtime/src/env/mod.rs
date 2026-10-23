@@ -33,6 +33,19 @@ pub struct Event {
     pub what: What,
 }
 
+/// What the runtime's loop waits for: an event from outside, or a command
+/// from the local operator (see [`crate::operator`]).
+pub enum Incoming {
+    Event(Event),
+    Command(crate::operator::Command),
+}
+
+impl From<Event> for Incoming {
+    fn from(e: Event) -> Incoming {
+        Incoming::Event(e)
+    }
+}
+
 pub enum What {
     Line(String),
     Eof,
@@ -102,7 +115,7 @@ impl EnvObject {
     }
 
     /// Starts listening for outside events. Called once the image is set up.
-    pub fn start(&mut self, me: usize, events: &Sender<Event>) {
+    pub fn start(&mut self, me: usize, events: &Sender<Incoming>) {
         if let EnvObject::Tcp(t) = self {
             t.start(me, events);
         }

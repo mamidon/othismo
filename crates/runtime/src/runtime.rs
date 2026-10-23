@@ -21,7 +21,8 @@
 
 use image::program::{Kind, MountDecl, Program};
 use image::pack::Pack;
-use crate::env::{self, EnvObject, Event, Reply};
+use crate::env::{self, EnvObject, Incoming, Reply};
+use crate::operator::{Command, How, InstanceInfo, Link, Notice, Snapshot};
 use image::header as iface;
 use protocol::ns::{self, Namespace, Resolved, Status, Verb};
 use protocol::payload::Payload;
@@ -30,7 +31,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use wasmtime::{Caller, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
 
 /// The outside world's stdin/stdout, as seen by the environmental objects.
@@ -83,6 +84,9 @@ enum Requester {
     Image(String),
     /// A request made with [`Runtime::ask`]. Replies are kept for it.
     Asked,
+    /// A request the local operator made from a point of view (see
+    /// [`crate::operator`]): with the operator flag from an image only.
+    Operator { id: u64, operator: bool },
     /// Ticket 0 means no answer is wanted.
     Wasm { inst: usize, ticket: u32 },
 }
@@ -91,7 +95,11 @@ impl Requester {
     /// Whether whoever runs the image made the request: an object never
     /// does, and a request it forwards keeps its first sender's flag.
     fn is_operator(&self) -> bool {
-        !matches!(self, Requester::Wasm { .. })
+        match self {
+            Requester::Wasm { .. } => false,
+            Requester::Operator { operator, .. } => *operator,
+            Requester::Image(_) | Requester::Asked => true,
+        }
     }
 }
 
@@ -137,6 +145,10 @@ struct Shared {
     /// `(caller, ticket) -> (server, req)`, for cancelling.
     calls: HashMap<(usize, u32), (usize, u32)>,
     next_ticket: Vec<u32>,
+    /// The local operator's requests: `id -> (server, req)`, for cancelling.
+    operated: HashMap<u64, (usize, u32)>,
+    /// Where the operator's answers go, when there is an operator.
+    notify: Option<Box<dyn FnMut(Notice)>>,
 }
 
 impl Shared {
@@ -180,10 +192,14 @@ impl Shared {
         };
         self.next_req[r.inst] += 1;
         let req = self.next_req[r.inst];
-        if let Requester::Wasm { inst, ticket } = caller
-            && ticket != 0
-        {
-            self.calls.insert((inst, ticket), (r.inst, req));
+        match caller {
+            Requester::Wasm { inst, ticket } if ticket != 0 => {
+                self.calls.insert((inst, ticket), (r.inst, req));
+            }
+            Requester::Operator { id, .. } => {
+                self.operated.insert(id, (r.inst, req));
+            }
+            _ => {}
         }
         self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false, promise });
         self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, operator, path: r.path, body });
@@ -198,6 +214,14 @@ impl Shared {
                 }
             }
             Requester::Asked => self.asked.push(Answered { status, body, detail, done }),
+            Requester::Operator { id, .. } => {
+                if done {
+                    self.operated.remove(&id);
+                }
+                if let Some(notify) = &mut self.notify {
+                    notify(Notice::Answer { id, answer: Answered { status, body, detail, done } });
+                }
+            }
             Requester::Wasm { ticket: 0, .. } => {}
             Requester::Wasm { inst, ticket } => {
                 if done {
@@ -242,6 +266,20 @@ impl Shared {
         let to = self.resolve(server, path, p.verb);
         self.request(p.caller, to, p.verb, p.body);
         Ok(())
+    }
+
+    /// The operator gives up on its request `id`, which ends at once.
+    fn cancel_operated(&mut self, id: u64) {
+        if let Some((server, req)) = self.operated.remove(&id)
+            && let Some(p) = self.requests.get_mut(&(server, req))
+        {
+            p.cancelled = true;
+            self.queue.push_back(Delivery::Cancel { to: server, req });
+        }
+        if let Some(notify) = &mut self.notify {
+            let answer = Answered { status: Status::Ok, body: None, detail: String::new(), done: true };
+            notify(Notice::Answer { id, answer });
+        }
     }
 
     /// `caller` gives up on the call it was given `ticket` for.
@@ -341,6 +379,8 @@ impl<'p> Runtime<'p> {
             next_req: vec![0; n],
             calls: HashMap::new(),
             next_ticket: vec![0; n],
+            operated: HashMap::new(),
+            notify: None,
         }));
 
         let engine = Engine::default();
@@ -424,12 +464,73 @@ impl<'p> Runtime<'p> {
         Ok(std::mem::take(&mut self.shared.borrow_mut().asked))
     }
 
+    /// Runs the image for the local operator holding the other end of
+    /// `inbox` (see [`crate::operator`]): starts it, then the outside world,
+    /// and serves the operator's commands between events, until it sends
+    /// [`Command::Stop`] or goes away and nothing else can arrive.
+    /// Answers and snapshots go to `notify`.
+    pub fn run_operated(mut self, inbox: crate::operator::Inbox, notify: impl FnMut(Notice) + 'static) -> Result<()> {
+        self.shared.borrow_mut().notify = Some(Box::new(notify));
+        self.start()?;
+        self.serve_outside(inbox.tx, inbox.rx)
+    }
+
+    /// The image as it is now: its instances, and every view.
+    pub fn snapshot(&self) -> Snapshot {
+        let shared = self.shared.borrow();
+        let p = self.program;
+        let link = |decls: &[image::program::MountDecl], m: &ns::Mount| {
+            let how = match decls.iter().find(|d| d.at == m.at && d.resolved() == m.target) {
+                Some(d) if d.bound => How::Bind,
+                Some(_) => How::Mount,
+                None => How::Runtime,
+            };
+            Link { at: m.at.clone(), target: m.target.clone(), how }
+        };
+        let instances = p
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(i, inst)| {
+                let exports = match &inst.kind {
+                    Kind::Image { exports } => exports.as_slice(),
+                    _ => &[],
+                };
+                let exposed = shared.ns.exposed(i).iter().map(|m| {
+                    // What an image exports is passed on, never held.
+                    let mut l = link(exports, m);
+                    if l.how == How::Mount {
+                        l.how = How::Bind;
+                    }
+                    l
+                });
+                InstanceInfo {
+                    name: inst.name.clone(),
+                    type_name: inst.type_name.clone(),
+                    kind: inst.kind.clone(),
+                    interface: shared.interfaces[i].clone(),
+                    view: shared.ns.view(i).iter().map(|m| link(&inst.mounts, m)).collect(),
+                    exposed: exposed.collect(),
+                    served: shared.next_req[i],
+                    pending: shared.requests.keys().filter(|(server, _)| *server == i).count(),
+                }
+            })
+            .collect();
+        let root = shared.ns.view(p.instances.len()).iter().map(|m| link(&p.view, m)).collect();
+        Snapshot { instances, root, messages: p.messages.clone() }
+    }
+
     /// Starts the outside world, and delivers what it sends until nothing
     /// more can arrive.
-    fn outside(mut self) -> Result<()> {
+    fn outside(self) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.serve_outside(tx, rx)
+    }
 
-        // Then the outside world. Stdin is read only if something watches it.
-        let (tx, rx) = mpsc::channel::<Event>();
+    /// Starts the outside world, which sends on `tx`, and delivers what
+    /// arrives on `rx` until every sender has gone or the operator stops it.
+    fn serve_outside(mut self, tx: Sender<Incoming>, rx: Receiver<Incoming>) -> Result<()> {
+        // Stdin is read only if something watches it.
         let consoles: Vec<usize> = (0..self.objects.len())
             .filter(|&i| matches!(&self.objects[i], Object::Env(EnvObject::Console(c)) if c.is_watched()))
             .collect();
@@ -443,13 +544,53 @@ impl<'p> Runtime<'p> {
         }
         // Once every source thread has finished, `rx` disconnects and we're done.
         drop(tx);
-        for ev in rx {
-            let Object::Env(e) = &mut self.objects[ev.to] else { unreachable!("events only come from env objects") };
-            let replies = e.on_event(ev.what);
-            self.send_replies(ev.to, replies)?;
+        for incoming in rx {
+            match incoming {
+                Incoming::Event(ev) => {
+                    let Object::Env(e) = &mut self.objects[ev.to] else { unreachable!("events only come from env objects") };
+                    let replies = e.on_event(ev.what);
+                    self.send_replies(ev.to, replies)?;
+                }
+                Incoming::Command(Command::Stop) => break,
+                Incoming::Command(c) => self.command(c),
+            }
             self.drain()?;
         }
         Ok(())
+    }
+
+    /// Carries out one of the local operator's commands, other than stopping.
+    fn command(&mut self, c: Command) {
+        match c {
+            Command::Request { id, from, verb, path, body } => {
+                let n = self.program.instances.len();
+                // From an image, a request is the operator's, resolved in its
+                // view like a startup request; from an object, it is made as
+                // the object would make it.
+                let image = match from {
+                    None => Some(n),
+                    Some(i) if matches!(self.program.instances.get(i).map(|i| &i.kind), Some(Kind::Image { .. })) => Some(i),
+                    Some(_) => None,
+                };
+                let mut shared = self.shared.borrow_mut();
+                let to = match (image, from) {
+                    (Some(view), _) => shared.ns.resolve(view, &path).and_then(|r| {
+                        if r.read_only && !verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
+                    }),
+                    (None, Some(i)) if i < n => shared.resolve(i, &path, verb),
+                    (None, _) => Err(Status::Invalid),
+                };
+                shared.request(Requester::Operator { id, operator: image.is_some() }, to, verb, body);
+            }
+            Command::Cancel { id } => self.shared.borrow_mut().cancel_operated(id),
+            Command::Snapshot => {
+                let snapshot = self.snapshot();
+                if let Some(notify) = &mut self.shared.borrow_mut().notify {
+                    notify(Notice::Snapshot(snapshot));
+                }
+            }
+            Command::Stop => {}
+        }
     }
 
     fn failed(&self, inst: usize, doing: &str, e: impl std::fmt::Display) -> anyhow::Error {

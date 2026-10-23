@@ -4,6 +4,7 @@
 //! no `.oth` files and no payloads.
 
 pub mod env;
+pub mod operator;
 pub mod render;
 pub mod runtime;
 pub mod suite;
