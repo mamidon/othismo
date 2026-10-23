@@ -1,10 +1,9 @@
 //! A runtime for images: declarative graphs of sandboxed AssemblyScript
 //! objects that reach each other only through the paths in their namespaces.
 
-pub mod bindings;
-pub mod doc;
 pub mod pack;
 
+pub use ::codegen::{bindings, doc};
 pub use ::compiler::{check, iface};
 pub use ::image::{slots, tree};
 pub use ::runtime::{env, render, runtime, suite};

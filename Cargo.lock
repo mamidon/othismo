@@ -145,6 +145,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codegen"
+version = "0.1.0"
+dependencies = [
+ "compiler",
+ "format",
+ "format-bson",
+ "protocol",
+]
+
+[[package]]
 name = "compiler"
 version = "0.1.0"
 dependencies = [
@@ -874,6 +884,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bson",
+ "codegen",
  "compiler",
  "format",
  "format-bson",

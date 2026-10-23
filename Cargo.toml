@@ -16,6 +16,7 @@ format-bson = { path = "crates/format-bson" }
 image = { path = "crates/image" }
 runtime = { path = "crates/runtime" }
 compiler = { path = "crates/compiler" }
+codegen = { path = "crates/codegen" }
 anyhow = "1.0.104"
 bson = { version = "3.1.0", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -36,6 +37,7 @@ format-bson.workspace = true
 image.workspace = true
 runtime.workspace = true
 compiler.workspace = true
+codegen.workspace = true
 anyhow.workspace = true
 bson.workspace = true
 serde.workspace = true

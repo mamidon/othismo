@@ -3,8 +3,8 @@
 //! client for each of its needs, whose methods make the requests they list.
 //! A schema file's bindings are its format's to generate.
 
-use crate::iface::{self, Entry, Header};
-use crate::ns::Verb;
+use compiler::iface::{self, Entry, Header};
+use protocol::ns::Verb;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn the_runtimes_bindings_are_up_to_date() {
-        assert!(env("./index") == include_str!("../as/env.ts"), "as/env.ts is stale; run `task bindings`");
+        assert!(env("./index") == include_str!("../../../as/env.ts"), "as/env.ts is stale; run `task bindings`");
     }
 
     #[test]

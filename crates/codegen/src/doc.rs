@@ -1,8 +1,8 @@
 //! Reference documentation generated from headers, as Markdown: what
 //! `othismo doc` prints, and what the site's reference pages are made of.
 
-use crate::check;
-use crate::iface::{self, Entry, Object};
+use compiler::check;
+use compiler::iface::{self, Entry, Object};
 use format::{AllSchemas, Formats};
 use std::fmt::Write;
 
@@ -109,6 +109,10 @@ mod tests {
     use format::Format;
     use format_bson::{BSON, Bson};
 
+    fn formats() -> Formats {
+        Formats::new(vec![Box::new(Bson)])
+    }
+
     fn header(src: &str) -> iface::Header {
         let file = iface::parse(src).unwrap();
         iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| Ok("# The Guide\n\nAll about it.".into())).unwrap()
@@ -142,7 +146,7 @@ mod tests {
     fn documents_an_object_from_its_header() {
         let h = header(SITE);
         let schemas = AllSchemas::from([(BSON.to_string(), Bson.parse(HITS, &mut |_| unreachable!()).unwrap())]);
-        let out = object(&h.objects[0], &crate::formats(), &schemas);
+        let out = object(&h.objects[0], &formats(), &schemas);
         assert!(out.starts_with("# Site\n\nServes a site.\n\nFrom its files.\n\n## Reference\n\n### Serves\n\n"), "{out}");
         assert!(out.contains("| `/hits` | `read -> application/bson` | How many, so far. |\n| `/**` | `read -> */*` |  |\n"), "{out}");
         assert!(out.contains("### Needs\n\n#### `/files`\n\nThe files.\n\n| Path | Requests | |"), "{out}");
@@ -152,7 +156,7 @@ mod tests {
     #[test]
     fn a_guide_replaces_the_comment() {
         let h = header(r#"object Big { guide "./Big.md" }"#);
-        assert_eq!(object(&h.objects[0], &crate::formats(), &AllSchemas::new()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
+        assert_eq!(object(&h.objects[0], &formats(), &AllSchemas::new()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
     }
 
     #[test]
