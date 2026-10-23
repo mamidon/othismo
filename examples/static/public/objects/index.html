@@ -298,7 +298,7 @@ from that header.</p>
 <p>What a module sends and receives in its payloads is described by its
 <strong>schemas</strong>, in a <code>schemas</code> block of its header for the payload&#39;s content
 type. The block&#39;s body is in that format&#39;s own language; Othismo reads only
-as far as its closing brace. For BSON it declares message types:</p>
+as far as its closing brace. For BSON it declares message types, and enums:</p>
 <pre><code class="language-text">## Greets every name typed on the console…
 export object Greeter {
   needs /dev/cons { /  watch -&gt; text/plain*, write text/plain }
