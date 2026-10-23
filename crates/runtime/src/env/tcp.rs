@@ -1,6 +1,6 @@
 //! `Listener`, run as a TCP listener and the connections it accepts.
 
-use super::{Event, Reply, What};
+use super::{Event, Incoming, Reply, What};
 use protocol::ns::{Status, Verb};
 use protocol::payload::{OCTETS, Payload};
 use anyhow::{Context, Result};
@@ -83,7 +83,7 @@ impl Tcp {
     }
 
     /// Starts accepting connections, on a thread of its own.
-    pub(super) fn start(&mut self, me: usize, events: &Sender<Event>) {
+    pub(super) fn start(&mut self, me: usize, events: &Sender<Incoming>) {
         if let Some(listener) = self.listener.take() {
             let events = events.clone();
             std::thread::spawn(move || accept_loop(listener, me, events));
@@ -281,7 +281,7 @@ impl MemoryListener {
     }
 }
 
-fn accept_loop(listener: TcpListener, to: usize, events: Sender<Event>) {
+fn accept_loop(listener: TcpListener, to: usize, events: Sender<Incoming>) {
     for (conn, stream) in (1u32..).zip(listener.incoming()) {
         let stream = match stream {
             Ok(s) => s,
@@ -294,7 +294,7 @@ fn accept_loop(listener: TcpListener, to: usize, events: Sender<Event>) {
         let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
         let Ok(reader) = stream.try_clone() else { continue };
         // Accepted is sent before the reader starts, so it arrives first.
-        if events.send(Event { to, what: What::Accepted { conn, stream } }).is_err() {
+        if events.send(Event { to, what: What::Accepted { conn, stream } }.into()).is_err() {
             return;
         }
         let events = events.clone();
@@ -302,19 +302,19 @@ fn accept_loop(listener: TcpListener, to: usize, events: Sender<Event>) {
     }
 }
 
-fn read_loop(mut stream: TcpStream, to: usize, conn: u32, events: Sender<Event>) {
+fn read_loop(mut stream: TcpStream, to: usize, conn: u32, events: Sender<Incoming>) {
     let mut buf = vec![0; 64 * 1024];
     loop {
         match stream.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                if events.send(Event { to, what: What::Data { conn, data: buf[..n].to_vec() } }).is_err() {
+                if events.send(Event { to, what: What::Data { conn, data: buf[..n].to_vec() } }.into()).is_err() {
                     return;
                 }
             }
         }
     }
-    let _ = events.send(Event { to, what: What::Closed { conn } });
+    let _ = events.send(Event { to, what: What::Closed { conn } }.into());
 }
 
 #[cfg(test)]

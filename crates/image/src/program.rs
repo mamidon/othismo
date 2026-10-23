@@ -68,6 +68,10 @@ pub struct MountDecl {
     #[serde(default = "root")]
     pub path: String,
     pub read_only: bool,
+    /// Made by a `bind`: what something else already holds, passed on.
+    /// Otherwise it is a `mount`, and the target is held here.
+    #[serde(default)]
+    pub bound: bool,
 }
 
 fn root() -> String {

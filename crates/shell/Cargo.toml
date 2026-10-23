@@ -1,0 +1,17 @@
+[package]
+name = "shell"
+description = "The local operator's interactive shell: look around a running image from any point of view, and make requests of it"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+syntax.workspace = true
+format.workspace = true
+image.workspace = true
+runtime.workspace = true
+anyhow.workspace = true
+ratatui.workspace = true
+
+[dev-dependencies]
+format-bson.workspace = true

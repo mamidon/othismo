@@ -235,6 +235,16 @@ impl Namespace {
         put(&mut self.exposed[inst], at.into(), target);
     }
 
+    /// `inst`'s view as it is now, mount point by mount point.
+    pub fn view(&self, inst: usize) -> &[Mount] {
+        &self.views[inst]
+    }
+
+    /// What `inst` has spliced into its served tree as it is now.
+    pub fn exposed(&self, inst: usize) -> &[Mount] {
+        &self.exposed[inst]
+    }
+
     /// Resolves `path` in `inst`'s view.
     pub fn resolve(&self, inst: usize, path: &str) -> Result<Resolved, Status> {
         let path = clean(path)?;
