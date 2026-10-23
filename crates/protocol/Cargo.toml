@@ -1,0 +1,8 @@
+[package]
+name = "protocol"
+description = "Othismo's fixed layers: the namespace, the protocol's verbs and errors, payloads and path patterns"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true

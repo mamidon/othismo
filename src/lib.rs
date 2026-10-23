@@ -9,13 +9,12 @@ pub mod format;
 pub mod iface;
 pub mod image;
 pub mod messages;
-pub mod ns;
 pub mod pack;
-pub mod pattern;
-pub mod payload;
 pub mod render;
 pub mod runtime;
 pub mod slots;
 pub mod suite;
 pub mod tree;
 pub mod wire;
+
+pub use protocol::{ns, pattern, payload};

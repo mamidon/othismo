@@ -25,10 +25,10 @@ tasks:
       - cargo run -- {{.CLI_ARGS}}
 
   test:
-    desc: Compile every example's objects, then cargo test
+    desc: Compile every example's objects, then test every crate
     deps: [wasm]
     cmds:
-      - cargo test {{.CLI_ARGS}}
+      - cargo test --workspace {{.CLI_ARGS}}
 
   test:e2e:
     desc: Compile every example's objects, then run each examples/*/*.test.oth with othismo test
@@ -47,6 +47,7 @@ tasks:
       - docs/*.md
       - as/env/*.oth
       - src/doc.rs
+      - crates/**/*.rs
       - examples/static/site.mjs
     cmds:
       - node examples/static/site.mjs
@@ -123,6 +124,7 @@ tasks:
     sources:
       - as/env/*.oth
       - src/**/*.rs
+      - crates/**/*.rs
     generates:
       - as/env.ts
     cmds:
@@ -148,6 +150,7 @@ tasks:
       # What embed writes into each module: the header format and env's types.
       - as/env/*.oth
       - src/iface.rs
+      - crates/**/*.rs
       - examples/{{.NAME}}/scripts/*.oth
       - examples/{{.NAME}}/scripts/*.messages
       - examples/{{.NAME}}/scripts/*.md
