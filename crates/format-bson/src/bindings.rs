@@ -7,9 +7,14 @@ use format::Bindings;
 use std::fmt::Write;
 
 /// The classes for `types`, each of which `schemas` has, in that order.
-/// `library` is where `Message`, `Reader` and `Writer` are imported from.
+/// `library` is the SDK, `"othismo"`; `Message`, `Reader` and `Writer` are
+/// imported from its `bson`. Each class has what every format's do, for
+/// the server bases and clients: `fromPayload`, the message in a payload
+/// if it is one of this type, and `toPayload`.
 pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bindings {
-    let imports = format!("import {{ Message, Reader, Writer, registerMessage }} from \"{library}\"\n");
+    let imports = format!(
+        "import {{ Payload }} from \"{library}\"\nimport {{ Message, Reader, Writer, bson, registerMessage }} from \"{library}/bson\"\n"
+    );
     let mut code = String::new();
     for name in types {
         let ty = &schemas.types[name];
@@ -36,7 +41,11 @@ fn class(out: &mut String, ty: &MessageType) {
         out.push_str("  }\n");
     }
     let gap = if ty.fields.is_empty() { "" } else { "\n" };
-    writeln!(out, "{gap}  typeName(): string {{ return \"{name}\" }}").unwrap();
+    writeln!(out, "{gap}  /** The `{name}` in `p`, or null if it holds none. */").unwrap();
+    writeln!(out, "  static fromPayload(p: Payload | null): {name} | null {{").unwrap();
+    writeln!(out, "    const m = bson.decode(p)\n    return m instanceof {name} ? changetype<{name}>(m) : null\n  }}").unwrap();
+    writeln!(out, "  toPayload(): Payload {{ return bson.payload(this) }}\n").unwrap();
+    writeln!(out, "  typeName(): string {{ return \"{name}\" }}").unwrap();
     let writes: Vec<String> = ty.fields.iter().map(|(f, t)| write_call(f, *t)).collect();
     match writes.as_slice() {
         [] => out.push_str("  encode(w: Writer): void {}\n"),
@@ -138,8 +147,8 @@ mod tests {
             message Ping {}
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
-        let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo/bson");
-        assert_eq!(imports, "import { Message, Reader, Writer, registerMessage } from \"othismo/bson\"\n");
+        let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
+        assert_eq!(imports, "import { Payload } from \"othismo\"\nimport { Message, Reader, Writer, bson, registerMessage } from \"othismo/bson\"\n");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */
@@ -151,6 +160,13 @@ export class Greeting extends Message {
     this.prefix = prefix
     this.excited = excited
   }
+
+  /** The `Greeting` in `p`, or null if it holds none. */
+  static fromPayload(p: Payload | null): Greeting | null {
+    const m = bson.decode(p)
+    return m instanceof Greeting ? changetype<Greeting>(m) : null
+  }
+  toPayload(): Payload { return bson.payload(this) }
 
   typeName(): string { return "Greeting" }
   encode(w: Writer): void {
@@ -164,6 +180,7 @@ registerMessage("Greeting", (r: Reader): Message => new Greeting(r.string("prefi
         assert!(out.contains("/**\n * Two lines\n *\n * of docs.\n */\nexport class Odd"), "{out}");
         assert!(out.contains("w.i32(\"a\", <i32>this.a)"), "{out}");
         assert!(out.contains("new Odd(<u8>r.i64(\"a\"), <f32>r.f64(\"b\"), <u64>r.i64(\"c\"), r.bytes(\"d\"))"), "{out}");
-        assert!(out.contains("export class Ping extends Message {\n  typeName(): string { return \"Ping\" }\n  encode(w: Writer): void {}\n}"), "{out}");
+        assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");
+        assert!(out.contains("  typeName(): string { return \"Ping\" }\n  encode(w: Writer): void {}\n}"), "{out}");
     }
 }

@@ -61,7 +61,10 @@ pub trait Format: Send + Sync {
     fn declared(&self, schemas: &Schemas) -> Vec<String>;
     /// AssemblyScript bindings for `types`, which `schemas` has, or `None`
     /// for none. `library` is the SDK, `"othismo"`, which the format's own
-    /// library is found under.
+    /// library is found under. Each type is a class with
+    /// `static fromPayload(p: Payload | null): T | null`, the value in a
+    /// payload if it holds one of that type, and `toPayload(): Payload`,
+    /// which the generated server bases and clients use.
     fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings>;
     /// A reference for the types a block declares, as Markdown under
     /// headings at level `h`.

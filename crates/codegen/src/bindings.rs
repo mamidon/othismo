@@ -30,14 +30,33 @@ fn doc(out: &mut String, indent: &str, text: &str) {
 // ---------------------------------------------------------------------------
 // From a header
 
-/// The bindings for a `.oth` file, whose header is `header` and whose
-/// blocks' schemas are `schemas`, each with its format: a server base for
-/// each object it declares, a client for each of their needs, and a class
-/// for each type its blocks declare. `source` names the file in the
+/// The bindings for a `.oth` file, whose header is `header`, with
+/// `schemas`, each with its format, holding every type it declares or
+/// imports: a server base for each object it declares, a client for each
+/// of their needs, and a class for each type its blocks declare and each
+/// one its objects take or answer. `source` names the file in the
 /// generated comment; `library` and `env` are where the SDK and the
 /// runtime's clients are imported from. `None` if there is nothing to bind.
 pub fn namespace(header: &Header, schemas: &[(&dyn Format, Schemas)], source: &str, library: &str, env: &str) -> Option<String> {
-    let types: Vec<_> = schemas.iter().filter_map(|(f, s)| f.bindings(s, &f.declared(s), library)).collect();
+    let mut used: Vec<&str> = vec![];
+    for o in &header.objects {
+        let entries = o.serves.iter().chain(o.needs.iter().flat_map(|n| &n.entries));
+        for r in entries.flat_map(|e| &e.requests) {
+            used.extend(r.message.iter().chain(r.answer.iter().flat_map(|a| &a.message)).map(String::as_str));
+        }
+    }
+    let types: Vec<_> = schemas
+        .iter()
+        .filter_map(|(f, s)| {
+            let mut types = f.declared(s);
+            for u in &used {
+                if header.types.get(*u).is_some_and(|t| t == f.content_type()) && !types.iter().any(|t| t == u) {
+                    types.push(u.to_string());
+                }
+            }
+            f.bindings(s, &types, library)
+        })
+        .collect();
     if header.objects.is_empty() && types.is_empty() {
         return None;
     }
@@ -110,11 +129,14 @@ pub fn env(library: &str) -> String {
 }
 
 /// What a method takes besides the request: no payload, text of one type,
-/// a payload of one type, or whatever comes.
+/// a payload of one type, a message of one type, or whatever comes.
 enum Takes {
     Nothing,
     Text(String),
     Payload(String),
+    /// A message type's class, which every format's bindings give
+    /// `fromPayload` and `toPayload`.
+    Message(String),
     Anything,
 }
 
@@ -149,18 +171,29 @@ fn methods(entries: &[Entry]) -> Vec<(&Entry, Vec<Method>)> {
                     verbs.push(r.verb);
                 }
             }
-            let methods = verbs
-                .into_iter()
-                .map(|verb| {
-                    let reqs: Vec<&iface::Request> = e.requests.iter().filter(|r| r.verb == verb).collect();
-                    let bodies: BTreeSet<Option<&str>> = reqs.iter().map(|r| r.body.as_deref()).collect();
-                    let takes = match bodies.into_iter().collect::<Vec<_>>().as_slice() {
-                        [None] => Takes::Nothing,
-                        [Some(t)] if is_text(t) => Takes::Text(t.to_string()),
-                        [Some(t)] => Takes::Payload(t.to_string()),
-                        _ => Takes::Anything,
-                    };
-                    let mut name = format!("{}{stem}", verb.keyword());
+            let mut methods = vec![];
+            for verb in verbs {
+                let reqs: Vec<&iface::Request> = e.requests.iter().filter(|r| r.verb == verb).collect();
+                let bodies: BTreeSet<(Option<&str>, Option<&str>)> = reqs.iter().map(|r| (r.body.as_deref(), r.message.as_deref())).collect();
+                let bodies: Vec<_> = bodies.into_iter().collect();
+                // Each message a verb takes is a method of its own, or one
+                // method takes whatever comes.
+                let takes: Vec<(Takes, Option<&str>)> = if bodies.len() > 1 && bodies.iter().all(|(_, m)| m.is_some()) {
+                    bodies.iter().map(|(_, m)| (Takes::Message(m.unwrap().to_string()), *m)).collect()
+                } else {
+                    vec![(
+                        match bodies.as_slice() {
+                            [(None, _)] => Takes::Nothing,
+                            [(Some(_), Some(m))] => Takes::Message(m.to_string()),
+                            [(Some(t), None)] if is_text(t) => Takes::Text(t.to_string()),
+                            [(Some(t), None)] => Takes::Payload(t.to_string()),
+                            _ => Takes::Anything,
+                        },
+                        None,
+                    )]
+                };
+                for (takes, own) in takes {
+                    let mut name = format!("{}{stem}{}", verb.keyword(), own.unwrap_or_default());
                     if !names.insert(name.clone()) {
                         let mut n = 2;
                         while !names.insert(format!("{name}{n}")) {
@@ -168,11 +201,12 @@ fn methods(entries: &[Entry]) -> Vec<(&Entry, Vec<Method>)> {
                         }
                         name = format!("{name}{n}");
                     }
-                    let what: Vec<String> = reqs.iter().map(|r| format!("`{} {r}`", e.path)).collect();
+                    let what: Vec<String> =
+                        reqs.iter().filter(|r| own.is_none() || r.message.as_deref() == own).map(|r| format!("`{} {r}`", e.path)).collect();
                     let doc = if e.doc.is_empty() { what.join(", ") } else { format!("{}\n\n{}", e.doc, what.join(", ")) };
-                    Method { name, verb, params: params.clone(), rel: rel.clone(), takes, doc }
-                })
-                .collect();
+                    methods.push(Method { name, verb, params: params.clone(), rel: rel.clone(), takes, doc });
+                }
+            }
             (e, methods)
         })
         .collect()
@@ -235,6 +269,7 @@ fn server(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
                 Takes::Nothing => {}
                 Takes::Text(_) => args.push("body: string".into()),
                 Takes::Payload(_) => args.push("body: Payload".into()),
+                Takes::Message(t) => args.push(format!("body: {t}")),
                 Takes::Anything => args.push("body: Payload | null".into()),
             }
             doc(out, "  ", &m.doc);
@@ -245,6 +280,8 @@ fn server(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
     for (i, (e, methods)) in all.iter().enumerate() {
         writeln!(out, "    const m{i} = route(\"{}\", req.path)", e.path).unwrap();
         writeln!(out, "    if (m{i} !== null) {{").unwrap();
+        // A verb that takes messages tries each type, then fails.
+        let mut expected: Vec<(Verb, Vec<String>)> = vec![];
         for m in methods {
             let mut args: Vec<String> = vec!["req".into()];
             args.extend((0..m.params.len()).map(|k| format!("m{i}![{k}]")));
@@ -261,12 +298,29 @@ fn server(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
                         args.join(", ")
                     )
                 }
+                Takes::Message(t) => {
+                    args.push("body".into());
+                    match expected.iter_mut().find(|(v, _)| *v == m.verb) {
+                        Some((_, types)) => types.push(t.clone()),
+                        None => expected.push((m.verb, vec![t.clone()])),
+                    }
+                    writeln!(
+                        out,
+                        "      if (req.verb == Verb.{verb}) {{ const body = {t}.fromPayload(req.body); if (body !== null) {{ this.{}({}); return }} }}",
+                        m.name,
+                        args.join(", ")
+                    )
+                }
                 Takes::Anything => {
                     args.push("req.body".into());
                     writeln!(out, "      if (req.verb == Verb.{verb}) {{ this.{}({}); return }}", m.name, args.join(", "))
                 }
             }
             .unwrap();
+        }
+        for (v, types) in expected {
+            let types: Vec<String> = types.iter().map(|t| format!("a {t}")).collect();
+            writeln!(out, "      if (req.verb == Verb.{}) {{ req.fail(Errno.Invalid, \"expected {}\"); return }}", verb(v), types.join(" or ")).unwrap();
         }
         out.push_str("      req.fail(Errno.NotSupported)\n      return\n    }\n");
     }
@@ -296,6 +350,10 @@ fn client(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
                 Takes::Payload(_) => {
                     args.push("body: Payload".into());
                     "body".into()
+                }
+                Takes::Message(t) => {
+                    args.push(format!("body: {t}"));
+                    "body.toPayload()".into()
                 }
                 Takes::Anything => {
                     args.push("body: Payload | null".into());
@@ -363,6 +421,7 @@ fn first_paragraph(doc: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn the_runtimes_bindings_are_up_to_date() {
@@ -413,5 +472,33 @@ mod tests {
         assert_eq!(path_parts("/{conn}/data"), ("Data".into(), vec!["conn".into()], "\"/\" + conn + \"/data\"".into()));
         assert_eq!(path_parts("/hosts/"), ("HostsIndex".into(), vec![], "\"/hosts/\"".into()));
         assert_eq!(path_parts("/"), ("".into(), vec![], "\"\"".into()));
+    }
+
+    #[test]
+    fn messages_are_decoded_and_encoded_for_the_module() {
+        use compiler::iface::Loader;
+        use format::Formats;
+        let mut loader = Loader::new(Formats::new(vec![Box::new(format_bson::Bson)]));
+        let types = "export schemas application/bson { message Hello { name: string } message Reset {} message Unused {} }";
+        let b = "import { Hello, Reset } from \"./Types.oth\"
+            export object B {
+              needs /peer { /hello write Hello  /count read -> Count }
+              serves { /x write Hello, write Reset  /count read -> Count }
+            }
+            export schemas application/bson { message Count { n: u32 } }";
+        loader.files.insert("/b/Types.oth".into(), types.into());
+        loader.files.insert("/b/B.oth".into(), b.into());
+        let header = loader.header(Path::new("/b/B.oth")).unwrap();
+        let bson = &format_bson::Bson;
+        let mut all = loader.schemas(bson, Path::new("/b/B.oth")).unwrap();
+        bson.merge(&mut all, &mut Default::default(), &loader.schemas(bson, Path::new("/b/Types.oth")).unwrap(), "Types.oth").unwrap();
+        let out = namespace(&header, &[(bson as &dyn Format, all)], "B.oth", "othismo", "othismo/env").unwrap();
+        let classes: Vec<&str> = out.lines().filter_map(|l| l.strip_prefix("export class ")).collect();
+        assert_eq!(classes, ["Count extends Message {", "Hello extends Message {", "Reset extends Message {", "BServer extends Server {", "PeerClient {"]);
+        assert!(!out.contains("class Unused"), "only the types it uses are generated");
+        assert!(out.contains("  writeXHello(req: Request, body: Hello): void { req.fail(Errno.NotSupported) }"), "{out}");
+        assert!(out.contains("const body = Reset.fromPayload(req.body); if (body !== null) { this.writeXReset(req, body); return }"), "{out}");
+        assert!(out.contains("if (req.verb == Verb.Write) { req.fail(Errno.Invalid, \"expected a Hello or a Reset\"); return }"), "{out}");
+        assert!(out.contains("  writeHello(body: Hello, then: Then | null = null): Call {\n    return ns.call(Verb.Write, under(this.at, \"/hello\"), body.toPayload(), then)"), "{out}");
     }
 }

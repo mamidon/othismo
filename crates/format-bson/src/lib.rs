@@ -115,7 +115,8 @@ impl Bson {
         for (name, ty) in &more.types {
             match all.types.get(name) {
                 Some(prev) if prev.fields != ty.fields => {
-                    bail!("`{name}` is declared one way by {} and another by {origin}; an image can't use both", from[name])
+                    let before = from.get(name).map_or("another file", String::as_str);
+                    bail!("`{name}` is declared one way by {before} and another by {origin}; an image can't use both")
                 }
                 Some(_) => {}
                 None => {
@@ -225,7 +226,7 @@ impl Format for Bson {
     }
 
     fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings> {
-        (!types.is_empty()).then(|| bindings::assemblyscript(&Bson::messages(schemas), types, &format!("{library}/bson")))
+        (!types.is_empty()).then(|| bindings::assemblyscript(&Bson::messages(schemas), types, library))
     }
 
     fn document(&self, schemas: &Schemas, h: &str) -> String {

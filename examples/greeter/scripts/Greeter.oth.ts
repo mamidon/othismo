@@ -1,7 +1,8 @@
 // Generated from Greeter.oth by `othismo bindings`. Edit the header, not this file.
 
 import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
-import { Message, Reader, Writer, registerMessage } from "othismo/bson"
+import { Payload } from "othismo"
+import { Message, Reader, Writer, bson, registerMessage } from "othismo/bson"
 
 /** Configures a Greeter; sent once at startup by the image. */
 export class Greeting extends Message {
@@ -15,6 +16,13 @@ export class Greeting extends Message {
     this.prefix = prefix
     this.excited = excited
   }
+
+  /** The `Greeting` in `p`, or null if it holds none. */
+  static fromPayload(p: Payload | null): Greeting | null {
+    const m = bson.decode(p)
+    return m instanceof Greeting ? changetype<Greeting>(m) : null
+  }
+  toPayload(): Payload { return bson.payload(this) }
 
   typeName(): string { return "Greeting" }
   encode(w: Writer): void {
@@ -35,12 +43,13 @@ export class GreeterServer extends Server {
    *
    * `/greeting write Greeting`
    */
-  writeGreeting(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }
+  writeGreeting(req: Request, body: Greeting): void { req.fail(Errno.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/greeting", req.path)
     if (m0 !== null) {
-      if (req.verb == Verb.Write) { const body = payloadOf(req, "application/bson"); if (body !== null) this.writeGreeting(req, body!); return }
+      if (req.verb == Verb.Write) { const body = Greeting.fromPayload(req.body); if (body !== null) { this.writeGreeting(req, body); return } }
+      if (req.verb == Verb.Write) { req.fail(Errno.Invalid, "expected a Greeting"); return }
       req.fail(Errno.NotSupported)
       return
     }
