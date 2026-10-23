@@ -68,7 +68,8 @@ impl fmt::Display for Verb {
     }
 }
 
-/// The outcome carried by every reply.
+/// The outcome carried by every reply: `Ok`, or an error, whose number is
+/// its errno (see `docs/protocol.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Ok,
@@ -81,9 +82,10 @@ pub enum Status {
     Invalid,
     Io,
     Forbidden,
+    UnsupportedType,
 }
 
-const STATUSES: [Status; 10] = [
+const STATUSES: [Status; 11] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -94,6 +96,7 @@ const STATUSES: [Status; 10] = [
     Status::Invalid,
     Status::Io,
     Status::Forbidden,
+    Status::UnsupportedType,
 ];
 
 impl Status {
@@ -114,6 +117,7 @@ impl Status {
             Status::Invalid => "invalid",
             Status::Io => "io",
             Status::Forbidden => "forbidden",
+            Status::UnsupportedType => "unsupported_type",
         }
     }
 }

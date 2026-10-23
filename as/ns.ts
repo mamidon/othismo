@@ -20,7 +20,11 @@ declare function host_call(verb: i32, path: usize, pathLen: i32, type: usize, ty
 
 // @ts-ignore: decorator
 @external("othismo", "reply")
-declare function host_reply(req: u32, status: i32, type: usize, typeLen: i32, body: usize, bodyLen: i32, done: i32): void;
+declare function host_reply(req: u32, type: usize, typeLen: i32, body: usize, bodyLen: i32, done: i32): void;
+
+// @ts-ignore: decorator
+@external("othismo", "fail")
+declare function host_fail(req: u32, errno: i32, desc: usize, descLen: i32): void;
 
 // @ts-ignore: decorator
 @external("othismo", "forward")
@@ -43,7 +47,7 @@ declare function host_unmount(at: usize, atLen: i32): i32;
 declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, flags: i32): i32;
 
 // ---------------------------------------------------------------------------
-// Verbs, statuses, flags (numbered as in src/ns.rs)
+// Verbs, errors, flags (numbered as in src/ns.rs)
 
 export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
 
@@ -52,7 +56,8 @@ export function isSafe(v: Verb): bool {
   return v < Verb.Write;
 }
 
-export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
+/** How a request went: Ok, or an error. Each error's number is its errno. */
+export enum Errno { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden, UnsupportedType }
 
 export enum Flag { None = 0, ReadOnly = 1 }
 
@@ -82,16 +87,21 @@ export class Request {
   ) {}
 
   /** Ok, and the last reply. */
-  reply(body: Payload | null): void { this.send(Status.Ok, body, true); }
+  reply(body: Payload | null): void { this.send(body, true); }
 
   /** Ok, with more to come. */
-  stream(body: Payload): void { this.send(Status.Ok, body, false); }
+  stream(body: Payload): void { this.send(body, false); }
 
-  /** Ok, no body, and the last reply. */
-  end(): void { this.send(Status.Ok, null, true); }
+  /** Ok, no payload, and the last reply. */
+  end(): void { this.send(null, true); }
 
-  /** A failure; the last reply. */
-  fail(status: Status): void { this.send(status, null, true); }
+  /** An error, with a description for people; the last reply. */
+  fail(errno: Errno, description: string = ""): void {
+    if (errno == Errno.Ok) abort("fail needs an error, not Ok");
+    this.finish();
+    const d = String.UTF8.encode(description);
+    host_fail(this.id, errno, changetype<usize>(d), d.byteLength);
+  }
 
   /** Hands the request to `path` in our view; its answer goes straight to the caller. */
   forward(path: string): void {
@@ -100,12 +110,12 @@ export class Request {
     host_forward(this.id, changetype<usize>(p), p.byteLength);
   }
 
-  private send(status: Status, body: Payload | null, done: bool): void {
+  private send(body: Payload | null, done: bool): void {
     if (done) this.finish();
     else if (this.finished) abort("request for " + this.path + " was already answered");
     const t = typeOf(body);
     const b = bytesOf(body);
-    host_reply(this.id, status, changetype<usize>(t), t.byteLength, changetype<usize>(b), b.byteLength, done ? 1 : 0);
+    host_reply(this.id, changetype<usize>(t), t.byteLength, changetype<usize>(b), b.byteLength, done ? 1 : 0);
   }
 
   private finish(): void {
@@ -121,7 +131,7 @@ export class Server {
   start(): void {}
 
   /** A request made of our served tree. */
-  serve(req: Request): void { req.fail(Status.NotSupported); }
+  serve(req: Request): void { req.fail(Errno.NotSupported); }
 
   /** The caller gave up on `req` (a stream, usually). It is ended for us afterwards. */
   cancel(req: Request): void {}
@@ -146,13 +156,15 @@ function bound(): Server {
 /** An answer to one of our calls. */
 export class Response {
   constructor(
-    public status: Status,
+    public status: Errno,
     public body: Payload | null,
     /** False while a stream is still open. */
     public done: bool,
+    /** An error's description, for people; "" if it has none. */
+    public description: string = "",
   ) {}
 
-  get ok(): bool { return this.status == Status.Ok; }
+  get ok(): bool { return this.status == Errno.Ok; }
 }
 
 /**
@@ -202,22 +214,22 @@ export namespace ns {
   export function invoke(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Invoke, path, body, then); }
 
   /** Makes what `source` names in our view also appear at `at`. */
-  export function bind(source: string, at: string, flags: Flag = Flag.None): Status {
+  export function bind(source: string, at: string, flags: Flag = Flag.None): Errno {
     const s = String.UTF8.encode(source);
     const a = String.UTF8.encode(at);
-    return <Status>host_bind(changetype<usize>(s), s.byteLength, changetype<usize>(a), a.byteLength, flags);
+    return <Errno>host_bind(changetype<usize>(s), s.byteLength, changetype<usize>(a), a.byteLength, flags);
   }
 
-  export function unmount(at: string): Status {
+  export function unmount(at: string): Errno {
     const a = String.UTF8.encode(at);
-    return <Status>host_unmount(changetype<usize>(a), a.byteLength);
+    return <Errno>host_unmount(changetype<usize>(a), a.byteLength);
   }
 
   /** Splices `source` (in our view) into our served tree at `at`; requests there skip our serve(). */
-  export function expose(at: string, source: string, flags: Flag = Flag.None): Status {
+  export function expose(at: string, source: string, flags: Flag = Flag.None): Errno {
     const a = String.UTF8.encode(at);
     const s = String.UTF8.encode(source);
-    return <Status>host_expose(changetype<usize>(a), a.byteLength, changetype<usize>(s), s.byteLength, flags);
+    return <Errno>host_expose(changetype<usize>(a), a.byteLength, changetype<usize>(s), s.byteLength, flags);
   }
 
   /** `root` followed by `path`, or null unless `path` is absolute with no `..` segment. */
@@ -267,12 +279,20 @@ export function rt_serve(id: u32, verb: i32, flags: i32, pathLen: i32, typeLen: 
   bound().serve(req);
 }
 
-/** An answer to one of our calls: the inbox holds the payload's type, then its bytes. */
-export function rt_answer(ticket: u32, status: i32, typeLen: i32, bodyLen: i32, done: i32): void {
+/**
+ * An answer to one of our calls. For Ok, the inbox holds the payload's type,
+ * then its bytes; for an error, its description.
+ */
+export function rt_answer(ticket: u32, errno: i32, typeLen: i32, bodyLen: i32, done: i32): void {
   if (!calls.has(ticket)) return;
   const then = calls.get(ticket);
   if (done != 0) calls.delete(ticket);
-  then.answer(new Response(<Status>status, inboxPayload(0, typeLen, bodyLen), done != 0));
+  if (errno != Errno.Ok) {
+    const description = String.UTF8.decodeUnsafe(changetype<usize>(inbox), <usize>bodyLen);
+    then.answer(new Response(<Errno>errno, null, true, description));
+    return;
+  }
+  then.answer(new Response(Errno.Ok, inboxPayload(0, typeLen, bodyLen), done != 0));
 }
 
 export function rt_start(): void {

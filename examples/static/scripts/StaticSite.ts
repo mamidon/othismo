@@ -1,4 +1,4 @@
-import { Flag, Payload, Request, Server, Status, Verb, isSafe, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Flag, Payload, Request, Server, Errno, Verb, isSafe, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -21,11 +21,11 @@ class StaticSite extends Server {
   serve(req: Request): void {
     if (req.path == "/hits") {
       if (req.verb == Verb.Read) req.reply(Payload.text(this.hits.toString() + "\n", "text/plain; charset=utf-8"))
-      else req.fail(Status.NotSupported)
+      else req.fail(Errno.NotSupported)
       return
     }
     if (!isSafe(req.verb)) {
-      req.fail(Status.ReadOnly)
+      req.fail(Errno.ReadOnly)
       return
     }
     this.hits++

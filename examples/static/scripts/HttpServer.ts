@@ -1,4 +1,4 @@
-import { OCTETS, Payload, Request, Response, Server, Stat, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { OCTETS, Payload, Request, Response, Server, Stat, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -32,7 +32,7 @@ class HttpServer extends Server {
     const body = req.body
     if (req.path == "/hosts" || req.path == "/hosts/") {
       if (req.verb != Verb.List) {
-        req.fail(Status.IsDirectory)
+        req.fail(Errno.IsDirectory)
         return
       }
       const names = this.hosts.keys()
@@ -43,7 +43,7 @@ class HttpServer extends Server {
     }
     const name = req.path.startsWith("/hosts/") ? req.path.substring(7).toLowerCase() : ""
     if (name.length == 0 || name.includes("/")) {
-      req.fail(Status.NotFound)
+      req.fail(Errno.NotFound)
     } else if (req.verb == Verb.Write && req.operator && body !== null && body.isText()) {
       this.hosts.set(name, body.asText())
       req.end()
@@ -51,13 +51,13 @@ class HttpServer extends Server {
       this.hosts.delete(name)
       req.end()
     } else if (req.verb == Verb.Write || req.verb == Verb.Remove) {
-      req.fail(req.operator ? Status.Invalid : Status.Forbidden)
+      req.fail(req.operator ? Errno.Invalid : Errno.Forbidden)
     } else if (!this.hosts.has(name)) {
-      req.fail(Status.NotFound)
+      req.fail(Errno.NotFound)
     } else if (req.verb == Verb.Read) {
       req.reply(Payload.text(this.hosts.get(name)))
     } else {
-      req.fail(Status.NotSupported)
+      req.fail(Errno.NotSupported)
     }
   }
 
@@ -202,19 +202,19 @@ class Respond extends Then {
     const body = res.body
     const stat = Stat.decode(body)
     const plain = "Content-Type: text/plain\r\n"
-    const directory = res.status == Status.IsDirectory || (stat !== null && stat.dir)
+    const directory = res.status == Errno.IsDirectory || (stat !== null && stat.dir)
     if (directory && !this.path.endsWith("/")) {
       const location = this.path + "/"
       this.send(301, "Moved Permanently", "Location: " + encodeURI(location) + "\r\n" + plain, text("301 -> " + location + "\n"))
-    } else if (directory || res.status == Status.NotFound) {
+    } else if (directory || res.status == Errno.NotFound) {
       this.send(404, "Not Found", plain, text("404 Not Found\n"))
-    } else if (res.status == Status.ReadOnly || res.status == Status.NotSupported) {
+    } else if (res.status == Errno.ReadOnly || res.status == Errno.NotSupported) {
       this.send(405, "Method Not Allowed", "Allow: GET, HEAD\r\n" + plain, text("405 Method Not Allowed\n"))
-    } else if (res.status == Status.Forbidden) {
+    } else if (res.status == Errno.Forbidden) {
       this.send(403, "Forbidden", plain, text("403 Forbidden\n"))
-    } else if (res.status == Status.Invalid) {
+    } else if (res.status == Errno.Invalid) {
       this.send(400, "Bad Request", plain, text("400 Bad Request\n"))
-    } else if (res.status != Status.Ok) {
+    } else if (res.status != Errno.Ok) {
       this.send(500, "Internal Server Error", plain, text("500 Internal Server Error\n"))
     } else if (stat !== null) {
       // HEAD: the size without the bytes.

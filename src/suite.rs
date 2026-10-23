@@ -87,7 +87,8 @@ fn run_one(pack: &Pack, options: Options, i: usize, test: &str) -> Result<(bool,
 fn outcome(answer: Option<Answered>) -> (bool, String) {
     let Some(a) = answer else { return (false, "it never answered".into()) };
     if a.status != Status::Ok {
-        return (false, format!("it answered {}", a.status));
+        let detail = if a.detail.is_empty() { String::new() } else { format!(": {}", a.detail) };
+        return (false, format!("it answered {}{detail}", a.status));
     }
     let body = a.body.filter(|b| b.ty == payload::BSON).and_then(|b| Message::decode(&b.bytes).ok());
     let Some(body) = body.filter(|b| b.type_name == "Outcome") else {
@@ -135,7 +136,7 @@ mod tests {
     use bson::doc;
 
     fn answered(status: Status, body: Option<Message>) -> Option<Answered> {
-        Some(Answered { status, body: body.map(|m| Payload::new(payload::BSON, m.encode())), done: true })
+        Some(Answered { status, body: body.map(|m| Payload::new(payload::BSON, m.encode())), detail: String::new(), done: true })
     }
 
     #[test]
@@ -145,6 +146,8 @@ mod tests {
         assert_eq!(outcome(answered(Status::Ok, Some(outcome_msg(false, "got 404")))), (false, "got 404".into()));
         assert_eq!(outcome(None), (false, "it never answered".into()));
         assert_eq!(outcome(answered(Status::NotFound, None)), (false, "it answered not_found".into()));
+        let why = Some(Answered { status: Status::Invalid, body: None, detail: "got 404".into(), done: true });
+        assert_eq!(outcome(why), (false, "it answered invalid: got 404".into()));
         assert_eq!(outcome(answered(Status::Ok, None)), (false, "it answered without an Outcome".into()));
         let text = Message { type_name: "Text".into(), fields: doc! { "text": "yes" } };
         assert_eq!(outcome(answered(Status::Ok, Some(text))), (false, "it answered without an Outcome".into()));

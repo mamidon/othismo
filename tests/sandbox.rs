@@ -14,8 +14,11 @@ const MESSAGES: &str = "message Ping {}\n";
 enum Act {
     /// Makes a request; with `expect`, the ticket is kept for `Cancel`.
     Call { verb: Verb, path: &'static str, body: Option<Payload>, expect: bool },
-    /// Replies to the request being served.
+    /// Replies to the request being served: with `status` Ok, `body` and
+    /// `done`; otherwise fails it.
     Reply { status: Status, body: Option<Payload>, done: bool },
+    /// Fails the request being served, saying why.
+    Fail(Status, &'static str),
     /// Replies to a made-up request id.
     ReplyTo(u32),
     /// Forwards the request being served.
@@ -70,7 +73,7 @@ fn reply(body: Payload) -> Act {
 }
 
 const INBOX: usize = 65536;
-const STATUSES: [Status; 10] = [
+const STATUSES: [Status; 11] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -81,6 +84,7 @@ const STATUSES: [Status; 10] = [
     Status::Invalid,
     Status::Io,
     Status::Forbidden,
+    Status::UnsupportedType,
 ];
 
 /// Builds the data segment and code for a script.
@@ -117,11 +121,16 @@ impl Wat {
                 let call = wcall("call", &[k(*verb as usize), k(p), k(pl), t, tl, b, bl, k(*expect as usize)]);
                 if *expect { format!("(global.set $ticket {call})") } else { format!("(drop {call})") }
             }
-            Act::Reply { status, body, done } => {
+            Act::Reply { status: Status::Ok, body, done } => {
                 let [t, tl, b, bl] = self.body(body);
-                wcall("reply", &[g("req"), k(*status as usize), t, tl, b, bl, k(*done as usize)])
+                wcall("reply", &[g("req"), t, tl, b, bl, k(*done as usize)])
             }
-            Act::ReplyTo(req) => wcall("reply", &[k(*req as usize), k(0), k(0), k(0), k(0), k(0), k(1)]),
+            Act::Reply { status, .. } => self.act(&Act::Fail(*status, "")),
+            Act::Fail(status, why) => {
+                let (d, dl) = self.put(why.as_bytes());
+                wcall("fail", &[g("req"), k(*status as usize), k(d), k(dl)])
+            }
+            Act::ReplyTo(req) => wcall("reply", &[k(*req as usize), k(0), k(0), k(0), k(0), k(1)]),
             Act::Forward(path) => {
                 let (p, pl) = self.put(path.as_bytes());
                 wcall("forward", &[g("req"), k(p), k(pl)])
@@ -209,7 +218,8 @@ fn script_wat(s: &Script) -> String {
     format!(
         r#"(module
           (import "othismo" "call" (func $call (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
-          (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32 i32 i32)))
+          (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32 i32)))
+          (import "othismo" "fail" (func $fail (param i32 i32 i32 i32)))
           (import "othismo" "forward" (func $forward (param i32 i32 i32)))
           (import "othismo" "cancel" (func $cancel (param i32)))
           (import "othismo" "bind" (func $bind (param i32 i32 i32 i32 i32) (result i32)))
@@ -573,6 +583,22 @@ fn unknown_request_ids_stop_the_run() {
     let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a Ping");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
+}
+
+#[test]
+fn errors_say_why() {
+    let a = Script { serve: Some(Steps::Nth(vec![vec![Act::Fail(Status::NotFound, "no such greeting")], vec![Act::Fail(Status::Ok, "")]])), ..Default::default() };
+    let f = fixture("why", &[("a", &a, "")], "");
+    let pack = othismo::pack::load(&f.image()).unwrap();
+    let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(std::io::sink()) };
+    let mut rt = othismo::runtime::Runtime::new(&pack, io, Options::default()).unwrap();
+    rt.start().unwrap();
+    let a = pack.program.instances.iter().position(|i| i.name == "a").unwrap();
+    let answers = rt.ask(a, Verb::Read, "/x", None).unwrap();
+    assert_eq!(answers.len(), 1);
+    assert_eq!((answers[0].status, answers[0].detail.as_str(), answers[0].done), (Status::NotFound, "no such greeting", true));
+    let e = format!("{:#}", rt.ask(a, Verb::Read, "/x", None).unwrap_err());
+    assert!(e.contains("fail with errno 0, which isn't an error"), "{e}");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-import { Payload, Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Payload, Request, Response, Server, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { bson } from "othismo/bson"
 import { Greeting } from "./Greeter.iface"
 
@@ -22,9 +22,9 @@ class Greeter extends Server {
   serve(req: Request): void {
     const msg = bson.decode(req.body)
     if (req.path != "/greeting") {
-      req.fail(Status.NotFound)
+      req.fail(Errno.NotFound)
     } else if (req.verb != Verb.Write || !(msg instanceof Greeting)) {
-      req.fail(Status.NotSupported)
+      req.fail(Errno.NotSupported)
     } else {
       const g = msg as Greeting
       this.prefix = g.prefix

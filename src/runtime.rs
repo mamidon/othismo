@@ -57,6 +57,7 @@ pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
     ("env", "abort"),
     ("othismo", "call"),
     ("othismo", "reply"),
+    ("othismo", "fail"),
     ("othismo", "forward"),
     ("othismo", "cancel"),
     ("othismo", "bind"),
@@ -69,6 +70,8 @@ pub const ALLOWED_IMPORTS: &[(&str, &str)] = &[
 pub struct Answered {
     pub status: Status,
     pub body: Option<Payload>,
+    /// An error's description, for people; empty if it has none.
+    pub detail: String,
     /// The last reply.
     pub done: bool,
 }
@@ -113,7 +116,7 @@ struct Promise {
 
 enum Delivery {
     Serve { to: usize, req: u32, verb: Verb, operator: bool, path: String, body: Option<Payload> },
-    Answer { to: usize, ticket: u32, status: Status, body: Option<Payload>, done: bool },
+    Answer { to: usize, ticket: u32, status: Status, body: Option<Payload>, detail: String, done: bool },
     Cancel { to: usize, req: u32 },
 }
 
@@ -158,19 +161,19 @@ impl Shared {
     fn request(&mut self, caller: Requester, to: Result<Resolved, Status>, verb: Verb, body: Option<Payload>) {
         let r = match to {
             Ok(r) => r,
-            Err(status) => return self.answer(&caller, status, None, true),
+            Err(status) => return self.answer(&caller, status, None, String::new(), true),
         };
         let operator = caller.is_operator();
         let entry = self.interfaces[r.inst].serving(&r.path);
         // Like a read-only mount, the operator's requests are off limits to
         // objects whether or not checks are on.
         if !operator && entry.is_some_and(|e| e.takes_verb(verb, false) == Err(Status::Forbidden)) {
-            return self.answer(&caller, Status::Forbidden, None, true);
+            return self.answer(&caller, Status::Forbidden, None, String::new(), true);
         }
         let promise = if self.checks {
             match entry.ok_or(Status::NotFound).and_then(|e| e.takes_verb(verb, operator).map(|_| e.streams(verb))) {
                 Ok(stream) => Some(Promise { what: format!("{verb} {}", r.path), stream }),
-                Err(status) => return self.answer(&caller, status, None, true),
+                Err(status) => return self.answer(&caller, status, None, String::new(), true),
             }
         } else {
             None
@@ -186,26 +189,28 @@ impl Shared {
         self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, operator, path: r.path, body });
     }
 
-    fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, done: bool) {
+    fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, detail: String, done: bool) {
         match *caller {
             Requester::Image(ref what) => {
                 if status != Status::Ok {
-                    eprintln!("warning: startup request `{what}` failed: {status}");
+                    let detail = if detail.is_empty() { String::new() } else { format!(": {detail}") };
+                    eprintln!("warning: startup request `{what}` failed: {status}{detail}");
                 }
             }
-            Requester::Asked => self.asked.push(Answered { status, body, done }),
+            Requester::Asked => self.asked.push(Answered { status, body, detail, done }),
             Requester::Wasm { ticket: 0, .. } => {}
             Requester::Wasm { inst, ticket } => {
                 if done {
                     self.calls.remove(&(inst, ticket));
                 }
-                self.queue.push_back(Delivery::Answer { to: inst, ticket, status, body, done });
+                self.queue.push_back(Delivery::Answer { to: inst, ticket, status, body, detail, done });
             }
         }
     }
 
-    /// `server` replies to its request `req`.
-    fn reply(&mut self, server: usize, req: u32, status: Status, body: Option<Payload>, done: bool) -> Result<()> {
+    /// `server` replies to its request `req`. An error is always the last
+    /// reply, and may carry a description but no payload.
+    fn reply(&mut self, server: usize, req: u32, status: Status, body: Option<Payload>, detail: String, done: bool) -> Result<()> {
         let Some(p) = self.requests.get(&(server, req)) else {
             bail!("instance `{}` replied to unknown request {req}", self.names[server]);
         };
@@ -221,7 +226,7 @@ impl Shared {
             self.requests.remove(&(server, req));
         }
         if !cancelled {
-            self.answer(&caller, status, body, done);
+            self.answer(&caller, status, body, detail, done);
         }
         Ok(())
     }
@@ -458,9 +463,13 @@ impl<'p> Runtime<'p> {
                     }
                 }
             }
-            Delivery::Answer { to, ticket, status, body, done } => {
+            Delivery::Answer { to, ticket, status, body, detail, done } => {
                 let Object::Wasm(obj) = &mut self.objects[to] else { unreachable!("only Wasm objects make calls") };
-                let (ty, body) = body.map(|b| (b.ty, b.bytes)).unwrap_or_default();
+                // An error's description takes the place of a payload.
+                let (ty, body) = match body {
+                    Some(b) => (b.ty, b.bytes),
+                    None => (String::new(), detail.into_bytes()),
+                };
                 let mut bytes = ty.as_bytes().to_vec();
                 bytes.extend_from_slice(&body);
                 let args = (ticket as i32, status as i32, ty.len() as i32, body.len() as i32, done as i32);
@@ -486,7 +495,7 @@ impl<'p> Runtime<'p> {
     fn send_replies(&mut self, from: usize, replies: Vec<Reply>) -> Result<()> {
         let mut shared = self.shared.borrow_mut();
         for r in replies {
-            shared.reply(from, r.req, r.status, r.body, r.done)?;
+            shared.reply(from, r.req, r.status, r.body, String::new(), r.done)?;
         }
         Ok(())
     }
@@ -612,20 +621,23 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
     linker.func_wrap(
         "othismo",
         "reply",
-        |mut caller: Caller<'_, HostState>,
-         req: i32,
-         status: i32,
-         ty: i32,
-         ty_len: i32,
-         body: i32,
-         body_len: i32,
-         done: i32|
-         -> HostResult<()> {
+        |mut caller: Caller<'_, HostState>, req: i32, ty: i32, ty_len: i32, body: i32, body_len: i32, done: i32| -> HostResult<()> {
             let me = caller.data().me;
             let body = read_body(&mut caller, ty, ty_len, body, body_len)?;
-            let status = Status::from_i32(status).ok_or_else(|| wasmtime::format_err!("reply with unknown status {status}"))?;
             let mut shared = caller.data().shared.borrow_mut();
-            shared.reply(me, req as u32, status, body, done != 0).map_err(host_err)
+            shared.reply(me, req as u32, Status::Ok, body, String::new(), done != 0).map_err(host_err)
+        },
+    )?;
+    linker.func_wrap(
+        "othismo",
+        "fail",
+        |mut caller: Caller<'_, HostState>, req: i32, errno: i32, desc: i32, desc_len: i32| -> HostResult<()> {
+            let me = caller.data().me;
+            let detail = String::from_utf8_lossy(&read_bytes(&mut caller, desc, desc_len)?).into_owned();
+            let status = Status::from_i32(errno).filter(|s| *s != Status::Ok);
+            let status = status.ok_or_else(|| wasmtime::format_err!("fail with errno {errno}, which isn't an error"))?;
+            let mut shared = caller.data().shared.borrow_mut();
+            shared.reply(me, req as u32, status, None, detail, true).map_err(host_err)
         },
     )?;
     linker.func_wrap(

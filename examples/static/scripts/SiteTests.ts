@@ -1,4 +1,4 @@
-import { OCTETS, Payload, Request, Response, Server, Stat, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { OCTETS, Payload, Request, Response, Server, Stat, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { bson } from "othismo/bson"
 import { Outcome } from "othismo/env"
 
@@ -39,10 +39,10 @@ class SiteTests extends Server {
         ns.create("/net/dial", new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
         return
       }
-      req.fail(Status.NotFound)
+      req.fail(Errno.NotFound)
       return
     }
-    req.fail(Status.NotSupported)
+    req.fail(Errno.NotSupported)
   }
 }
 
