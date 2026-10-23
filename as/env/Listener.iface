@@ -1,17 +1,12 @@
-## Configures a Tcp listener.
-message Listen {
-  ## The address to listen on, e.g. "127.0.0.1:8080".
-  address: string
-}
-
 ## A stream of bytes each way.
 protocol Connection { watch -> application/octet-stream*, write application/octet-stream }
 
 ## A listener, and the connections it accepts. The runtime runs it as a TCP
 ## listener on the address the image configures it with.
 trait Listener {
-  ## Configured by the image only, with a `Listen`.
-  /                control application/bson
+  ## Configured by the image only, with the address to listen on, e.g.
+  ## "127.0.0.1:8080".
+  /                operator write text/plain
   ## The bound address, e.g. "127.0.0.1:8080".
   /address         read -> text/plain
   ## The name of every connection accepted, as it is.

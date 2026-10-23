@@ -25,9 +25,8 @@ object HttpServer {
     ## The hosts it serves.
     /hosts          list
     /hosts/         list
-    ## Control with a `Text` holding a path in its view to serve the host
-    ## from there, or with no payload to stop serving it. `*` stands for
-    ## any host not listed.
-    /hosts/{name}   control application/bson, control, read -> text/plain
+    ## Write a path in its view to serve the host from there, or remove it
+    ## to stop serving it. `*` stands for any host not listed.
+    /hosts/{name}   operator write text/plain, operator remove, read -> text/plain
   }
 }

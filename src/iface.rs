@@ -124,9 +124,12 @@ pub struct Entry {
     pub requests: Vec<Request>,
 }
 
-/// `<verb> [content type] [-> content type[*]]`
+/// `[operator] <verb> [content type] [-> content type[*]]`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
+    /// Only whoever runs the image may make it.
+    #[serde(default)]
+    pub operator: bool,
     pub verb: Verb,
     /// The content type of the payload it takes, if it takes one.
     pub body: Option<String>,
@@ -187,10 +190,15 @@ impl Entry {
         with_verb.find(|r| body_fits(r.body.as_deref(), body)).ok_or(Status::Invalid)
     }
 
-    /// Whether the entry takes `verb` at all: all the runtime asks, since
-    /// it never looks at payloads.
-    pub fn takes_verb(&self, verb: Verb) -> Result<(), Status> {
-        if self.requests.iter().any(|r| r.verb == verb) { Ok(()) } else { Err(Status::NotSupported) }
+    /// Whether the entry takes `verb` from a sender that is the operator or
+    /// not: all the runtime asks, since it never looks at payloads.
+    /// `Forbidden` if only the operator may make it.
+    pub fn takes_verb(&self, verb: Verb, operator: bool) -> Result<(), Status> {
+        let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
+        if with_verb.peek().is_none() {
+            return Err(Status::NotSupported);
+        }
+        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::Forbidden) }
     }
 
     /// Whether `verb` may be answered more than once here.
@@ -221,7 +229,8 @@ impl Request {
             (Some(s), Some(n)) => payload::fits(&n.ty, &s.ty) && s.stream == n.stream,
             _ => false,
         };
-        self.verb == need.verb && body_fits(self.body.as_deref(), need.body.as_deref()) && answer
+        let operator = !self.operator || need.operator;
+        self.verb == need.verb && operator && body_fits(self.body.as_deref(), need.body.as_deref()) && answer
     }
 
     /// Whether the verb's answer is set by the protocol: `stat` and `list`
@@ -244,6 +253,9 @@ impl fmt::Display for Entry {
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.operator {
+            f.write_str("operator ")?;
+        }
         write!(f, "{}", self.verb)?;
         if let Some(b) = &self.body {
             write!(f, " {b}")?;
@@ -443,6 +455,7 @@ pub struct EntryDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestDecl {
+    pub operator: bool,
     pub verb: Verb,
     pub pos: Pos,
     pub body: Option<Ident>,
@@ -617,7 +630,14 @@ impl Parser {
     /// A request, which starts with a verb, or a protocol's or trait's name.
     fn item(&mut self) -> Result<Item> {
         match self.peek() {
-            Tok::Ident(w) if Verb::from_keyword(w).is_none() => Ok(Item::Named(self.ident("protocol or trait name", false)?)),
+            Tok::Ident(w) if w == "control" => bail!(
+                "{}: `control` is gone: mark a request only whoever runs the image may make with `operator`, \
+                 e.g. `operator write text/plain`",
+                self.pos()
+            ),
+            Tok::Ident(w) if w != OPERATOR && Verb::from_keyword(w).is_none() => {
+                Ok(Item::Named(self.ident("protocol or trait name", false)?))
+            }
             _ => Ok(Item::Request(self.request()?)),
         }
     }
@@ -632,6 +652,10 @@ impl Parser {
     }
 
     fn request(&mut self) -> Result<RequestDecl> {
+        let operator = self.is_kw(OPERATOR);
+        if operator {
+            self.next();
+        }
         let (tok, pos) = self.next();
         let verb = match &tok {
             Tok::Ident(w) => Verb::from_keyword(w),
@@ -657,9 +681,12 @@ impl Parser {
         } else {
             None
         };
-        Ok(RequestDecl { verb, pos, body, answer })
+        Ok(RequestDecl { operator, verb, pos, body, answer })
     }
 }
+
+/// Marks a request only whoever runs the image may make.
+const OPERATOR: &str = "operator";
 
 // ---------------------------------------------------------------------------
 // Resolving
@@ -765,7 +792,14 @@ pub fn resolve(
             if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
                 bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
             }
-            needs.push(Need { at, doc: n.doc.clone(), entries: shapes.entries(&n.entries)? });
+            // An object can't make the operator's requests, so a need never
+            // includes them, even where it names a trait that serves some.
+            let mut entries = shapes.entries(&n.entries)?;
+            for e in &mut entries {
+                e.requests.retain(|r| !r.operator);
+            }
+            entries.retain(|e| !e.requests.is_empty());
+            needs.push(Need { at, doc: n.doc.clone(), entries });
         }
         let mut serves = shapes.entries(&o.serves)?;
         for t in &o.traits {
@@ -846,7 +880,7 @@ impl Shapes<'_> {
                 },
             };
             for req in reqs {
-                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body) {
+                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body && prev.operator == req.operator) {
                     Some((prev, prev_written)) if *prev_written && written => bail!("{pos}: {at} takes `{req}` twice"),
                     Some((prev, _)) if *prev == req => {}
                     Some((prev, _)) => bail!("{pos}: {at} takes `{prev}` and `{req}`, which disagree"),
@@ -862,14 +896,14 @@ impl Shapes<'_> {
             if r.body.is_some() || r.answer.is_some() {
                 bail!("{}: `{}` takes nothing and answers {}; write it bare", r.pos, r.verb, if implied.stream { "a stream of stat records" } else { "a stat record" });
             }
-            return Ok(Request { verb: r.verb, body: None, answer: Some(implied) });
+            return Ok(Request { operator: r.operator, verb: r.verb, body: None, answer: Some(implied) });
         }
         let body = r.body.as_ref().map(content_type).transpose()?;
         let answer = match &r.answer {
             Some((id, stream)) => Some(Answer { ty: content_type(id)?, stream: *stream }),
             None => None,
         };
-        Ok(Request { verb: r.verb, body, answer })
+        Ok(Request { operator: r.operator, verb: r.verb, body, answer })
     }
 
     /// The entries `decls` stand for, with each trait's tree put at its path.
@@ -1136,6 +1170,13 @@ mod tests {
     }
 
     #[test]
+    fn needs_leave_out_the_operators_requests() {
+        let h = resolve_str("trait T { / operator write text/plain  /x operator remove, read } object A { needs /t T }").unwrap();
+        let entries: Vec<String> = h.objects[0].needs[0].entries.iter().map(|e| e.to_string()).collect();
+        assert_eq!(entries, ["/x read"]);
+    }
+
+    #[test]
     fn guides_are_read_in() {
         let h = resolve_str(r#"object A { guide "./A.md" }"#).unwrap();
         assert_eq!(h.objects[0].guide.as_deref(), Some("the guide in ./A.md"));
@@ -1178,18 +1219,22 @@ mod tests {
 
     #[test]
     fn requests_take_payloads_by_content_type() {
-        let h = resolve_str("object A { serves { /h control text/plain, control, read -> */**, write */*, create text/* -> Stat } }").unwrap();
+        let h = resolve_str("object A { serves { /h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat } }").unwrap();
         let e = &h.objects[0].serves[0];
-        assert_eq!(e.takes(Verb::Control, Some("text/plain")).unwrap().body.as_deref(), Some("text/plain"));
-        assert_eq!(e.takes(Verb::Control, None).unwrap().body, None);
-        assert_eq!(e.takes(Verb::Control, Some("application/bson")), Err(Status::Invalid));
+        assert_eq!(e.takes(Verb::Remove, Some("text/plain")).unwrap().body.as_deref(), Some("text/plain"));
+        assert_eq!(e.takes(Verb::Remove, None).unwrap().body, None);
+        assert_eq!(e.takes(Verb::Remove, Some("application/bson")), Err(Status::Invalid));
         assert_eq!(e.takes(Verb::Write, Some("image/png")).unwrap().body.as_deref(), Some(ANY));
         assert_eq!(e.takes(Verb::Write, None), Err(Status::Invalid));
         assert_eq!(e.takes(Verb::Create, Some("text/html")).unwrap().answer.as_ref().unwrap().ty, STAT);
         assert_eq!(e.takes(Verb::Stat, None), Err(Status::NotSupported));
-        assert_eq!(e.takes_verb(Verb::Read), Ok(()));
+        assert_eq!(e.takes_verb(Verb::Read, false), Ok(()));
+        assert_eq!(e.takes_verb(Verb::Remove, false), Err(Status::Forbidden), "only the operator may remove");
+        assert_eq!(e.takes_verb(Verb::Remove, true), Ok(()));
+        assert_eq!(e.takes_verb(Verb::Stat, true), Err(Status::NotSupported));
         assert!(e.streams(Verb::Read) && !e.streams(Verb::Write));
-        assert_eq!(e.to_string(), "/h control text/plain, control, read -> */**, write */*, create text/* -> Stat");
+        assert_eq!(e.to_string(), "/h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat");
+        assert!(err("object A { serves { /h control text/plain } }").contains("`control` is gone"));
     }
 
     #[test]
@@ -1211,6 +1256,7 @@ mod tests {
         assert!(!r("write text/plain").meets(&r("write")));
         assert!(!r("read").meets(&r("stat")));
         assert!(r("list").meets(&r("list")));
+        assert!(!r("operator write */*").meets(&r("write text/plain")), "an object's need is never met by the operator's request");
     }
 
     #[test]

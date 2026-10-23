@@ -95,16 +95,16 @@ impl EnvObject {
             Kind::Console if inst.in_memory => EnvObject::MemoryConsole(MemoryConsole::default()),
             Kind::Console => EnvObject::Console(Console::default()),
             Kind::Tcp if inst.in_memory => EnvObject::MemoryListener(MemoryListener::default()),
-            Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config_str(inst, "address")?)?),
+            Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config(inst)?)?),
             Kind::Files if inst.in_memory => {
-                let root = config_str(inst, "path")?;
+                let root = config(inst)?;
                 let snapshot = IncludeDecl { source: format!("{}/", root.trim_end_matches('/')), at: None };
                 let (mut tree, mut blobs) = (Tree::default(), BTreeMap::new());
                 tree.include(&dir, &snapshot, &mut |bytes| pack::add(&mut blobs, bytes))
                     .with_context(|| format!("taking a snapshot of {}", dir.join(&root).display()))?;
                 EnvObject::Packed(Packed::new(tree, blobs))
             }
-            Kind::Files => EnvObject::Files(Files::open(dir.join(config_str(inst, "path")?))?),
+            Kind::Files => EnvObject::Files(Files::open(dir.join(config(inst)?))?),
             Kind::Packed { .. } => {
                 let tree = pack.trees.get(&inst.name).context("its files are missing")?.clone();
                 EnvObject::Packed(Packed::new(tree, pack.blobs.clone()))
@@ -121,9 +121,10 @@ impl EnvObject {
 
     /// Serves request `req`. `out` is for printing.
     pub fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
-        // Their config is taken from the image's `control /` before they are
-        // made; changing it while they run isn't supported yet.
-        if verb == Verb::Control {
+        // Their config is taken from the image's write of their root before
+        // they are made; changing it while they run isn't supported yet.
+        let configured = matches!(self, EnvObject::Tcp(_) | EnvObject::Files(_) | EnvObject::MemoryListener(_));
+        if configured && verb == Verb::Write && path == "/" {
             return Ok(vec![Reply::fail(req, Status::NotSupported)]);
         }
         Ok(match self {
@@ -168,8 +169,7 @@ impl EnvObject {
     }
 }
 
-/// A string field of an environment object's config.
-fn config_str(inst: &Instance, field: &str) -> Result<String> {
-    let config = inst.config.as_ref().context("no config")?.message()?;
-    Ok(config.fields.get_str(field).with_context(|| format!("config has no `{field}`"))?.to_string())
+/// An environment object's config, which is text.
+fn config(inst: &Instance) -> Result<String> {
+    inst.config.as_ref().context("no config")?.text()
 }

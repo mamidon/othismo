@@ -1,6 +1,4 @@
 import { OCTETS, Payload, Request, Response, Server, Stat, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
-import { bson } from "othismo/bson"
-import { Text } from "othismo/env"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -15,9 +13,9 @@ const MAX_BODY: i32 = 1024 * 1024
  * view) plus the URL path. The answer becomes the response. Other methods are
  * refused, as its header only needs reads. It knows nothing about files.
  *
- * Its own tree is /hosts/<name>, which only the operator sets: control it
- * with a Text holding a path in our view to serve that host from there, or
- * with no payload to stop serving it. `*` is used for any host not listed. Every
+ * Its own tree is /hosts/<name>, which only the operator sets: write it a
+ * path in our view to serve that host from there, or remove it to stop
+ * serving it. `*` is used for any host not listed. Every
  * response is logged to /dev/cons. One request per connection; every
  * response closes it.
  */
@@ -46,17 +44,14 @@ class HttpServer extends Server {
     const name = req.path.startsWith("/hosts/") ? req.path.substring(7).toLowerCase() : ""
     if (name.length == 0 || name.includes("/")) {
       req.fail(Status.NotFound)
-    } else if (req.verb == Verb.Control && body === null) {
+    } else if (req.verb == Verb.Write && req.operator && body !== null && body.isText()) {
+      this.hosts.set(name, body.asText())
+      req.end()
+    } else if (req.verb == Verb.Remove && req.operator) {
       this.hosts.delete(name)
       req.end()
-    } else if (req.verb == Verb.Control) {
-      const msg = bson.decode(body)
-      if (!(msg instanceof Text)) {
-        req.fail(Status.Invalid)
-        return
-      }
-      this.hosts.set(name, (msg as Text).text)
-      req.end()
+    } else if (req.verb == Verb.Write || req.verb == Verb.Remove) {
+      req.fail(req.operator ? Status.Invalid : Status.Forbidden)
     } else if (!this.hosts.has(name)) {
       req.fail(Status.NotFound)
     } else if (req.verb == Verb.Read) {

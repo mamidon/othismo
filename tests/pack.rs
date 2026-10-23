@@ -244,27 +244,27 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
     let f = Fixture::new("pack_slots");
     f.file(
         "test.img",
-        r#"require listen : Listen { address: "127.0.0.1:8080" }
-        require root : FilesRoot
+        r#"require listen : text/plain = "127.0.0.1:8080"
+        require root : text/plain
         instance net   : Listener
         instance files : Files
         mount /net net
         mount /files files
-        control /net listen
-        control /files root
+        write /net listen
+        write /files root
         instance cons  : Console"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
     let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
     let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &[]).unwrap_err());
-    assert!(e.ends_with("root.path: required, not provided"), "{e}");
+    assert!(e.ends_with("root: required, not provided"), "{e}");
 
-    let given = Given { origin: "--set".into(), slot: "root".into(), field: Some("path".into()), value: GivenValue::Text("www".into()) };
+    let given = Given { origin: "--set".into(), slot: "root".into(), field: None, value: GivenValue::Text("www".into()) };
     slots::bind(&mut opened.program, &[given]).unwrap();
     assert_eq!(
         pack::describe(&opened),
-        "slot listen : Listen { address: \"127.0.0.1:8080\" (default) }\n\
-         slot root : FilesRoot { path: \"www\" (--set) }\n\
+        "slot listen : text/plain = \"127.0.0.1:8080\" (default)\n\
+         slot root : text/plain = \"www\" (--set)\n\
          \n\
          the image sees /net → net, /files → files\n\
          \n\
@@ -280,14 +280,14 @@ fn the_cli_layers_value_files_then_set() {
     f.file(
         "test.img",
         r#"import { Info } from "./info.iface"
-        require listen : Listen { address: "127.0.0.1:8080" }
+        require listen : text/plain = "127.0.0.1:8080"
         require info : Info
         instance net : Listener
         mount /net net
-        control /net listen"#,
+        write /net listen"#,
     )
     .file("info.iface", "message Info { kind: string, size: i64, mime: string }")
-    .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
+    .file("a.vals", "listen = \"a\"\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");
     let check = |extra: &[&str]| {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_othismo"))
@@ -299,9 +299,9 @@ fn the_cli_layers_value_files_then_set() {
             .unwrap();
         (out.status.code(), String::from_utf8(out.stdout).unwrap() + &String::from_utf8(out.stderr).unwrap())
     };
-    let (code, out) = check(&["--set", "listen.address=0.0.0.0:0", "--with", "a.vals", "--with", "b.vals"]);
+    let (code, out) = check(&["--set", "listen=0.0.0.0:0", "--with", "a.vals", "--with", "b.vals"]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.starts_with("slot listen : Listen { address: \"0.0.0.0:0\" (--set) }\n"), "{out}");
+    assert!(out.starts_with("slot listen : text/plain = \"0.0.0.0:0\" (--set)\n"), "{out}");
     assert!(out.contains("slot info : Info { kind: \"file\" (a.vals:2:8), size: 2 (b.vals:1:8), mime: \"\" (a.vals:2:31) }"), "{out}");
 
     let (code, out) = check(&[]);

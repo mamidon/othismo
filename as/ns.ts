@@ -45,8 +45,7 @@ declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, fla
 // ---------------------------------------------------------------------------
 // Verbs, statuses, flags (numbered as in src/ns.rs)
 
-/** Control is the operator's verb: the image may send it, objects can't. */
-export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
+export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
 
 /** Safe verbs never change anything; read-only mounts let only these through. */
 export function isSafe(v: Verb): bool {
@@ -56,6 +55,9 @@ export function isSafe(v: Verb): bool {
 export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
 
 export enum Flag { None = 0, ReadOnly = 1 }
+
+/** A request's flags, as `rt_serve` passes them. */
+const OPERATOR: i32 = 1;
 
 // ---------------------------------------------------------------------------
 // Serving
@@ -75,6 +77,8 @@ export class Request {
     /** Relative to our root, e.g. "/index.html". */
     public path: string,
     public body: Payload | null,
+    /** Whoever runs the image made it: its startup requests, never an object. */
+    public operator: bool = false,
   ) {}
 
   /** Ok, and the last reply. */
@@ -256,9 +260,9 @@ export function rt_inbox(len: i32): usize {
 }
 
 /** A request for us: the inbox holds the path, the payload's type, then its bytes. */
-export function rt_serve(id: u32, verb: i32, pathLen: i32, typeLen: i32, bodyLen: i32): void {
+export function rt_serve(id: u32, verb: i32, flags: i32, pathLen: i32, typeLen: i32, bodyLen: i32): void {
   const path = String.UTF8.decodeUnsafe(changetype<usize>(inbox), <usize>pathLen);
-  const req = new Request(id, <Verb>verb, path, inboxPayload(pathLen, typeLen, bodyLen));
+  const req = new Request(id, <Verb>verb, path, inboxPayload(pathLen, typeLen, bodyLen), (flags & OPERATOR) != 0);
   open.set(id, req);
   bound().serve(req);
 }

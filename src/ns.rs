@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// What a request asks for. Safe verbs never change anything. `Control` is
-/// the operator's: the image sends it, objects can't.
+/// What a request asks for. Safe verbs never change anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verb {
     Read,
@@ -22,10 +21,9 @@ pub enum Verb {
     Create,
     Remove,
     Invoke,
-    Control,
 }
 
-pub const VERBS: [Verb; 9] = [
+pub const VERBS: [Verb; 8] = [
     Verb::Read,
     Verb::Stat,
     Verb::List,
@@ -34,7 +32,6 @@ pub const VERBS: [Verb; 9] = [
     Verb::Create,
     Verb::Remove,
     Verb::Invoke,
-    Verb::Control,
 ];
 
 impl Verb {
@@ -57,7 +54,6 @@ impl Verb {
             Verb::Create => "create",
             Verb::Remove => "remove",
             Verb::Invoke => "invoke",
-            Verb::Control => "control",
         }
     }
 
@@ -130,6 +126,11 @@ impl fmt::Display for Status {
 
 /// `Flag.ReadOnly` in the SDK: only safe verbs pass.
 pub const READ_ONLY: i32 = 1;
+
+/// A request's flag saying whoever runs the image made it: its startup
+/// requests, and those an image makes of what it instantiates. No object
+/// can set it.
+pub const OPERATOR: i32 = 1;
 
 /// Normalizes an absolute path: collapses `//` and `.` segments and keeps a
 /// trailing `/`. Relative paths, `..` segments and NUL bytes are `Invalid`.
@@ -501,8 +502,8 @@ mod tests {
             assert_eq!(Verb::from_i32(i as i32), Some(*v));
             assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
         }
-        assert_eq!(Verb::from_i32(9), None);
+        assert_eq!(Verb::from_i32(8), None);
         assert_eq!(Status::from_i32(-1), None);
-        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Control.is_safe());
+        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Invoke.is_safe());
     }
 }

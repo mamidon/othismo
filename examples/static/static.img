@@ -2,8 +2,8 @@
 # listener, and the console for the access log. The site's files are packed
 # into the image when it is built.
 
-# Where to listen. Deploy with e.g. `--set listen.address=0.0.0.0:80`.
-require listen : Listen { address: "127.0.0.1:8080" }
+# Where to listen. Deploy with e.g. `--set listen=0.0.0.0:80`.
+require listen : text/plain = "127.0.0.1:8080"
 
 # HTTP in, namespace requests out. It reaches the files only through the site.
 instance http : HttpServer {
@@ -25,6 +25,6 @@ instance files : Packed.Files { include "./public/" }
 mount /net  net
 mount /http http
 
-control /net listen
-control /http/hosts/* Text { text: "/www" }
-control /http/hosts/files.localhost Text { text: "/www/static" }
+write /net listen
+write /http/hosts/* "/www"
+write /http/hosts/files.localhost "/www/static"

@@ -264,7 +264,9 @@ The `needs` side is the stronger promise. Mounts say what an object has been
 given; its `needs` say the most it can ask of each. An object given the
 console to write a log can't watch it for input unless its header says so.
 
-Enforcement is on by default; `--no-checks` turns it off.
+Enforcement is on by default; `--no-checks` turns it off. The operator rule
+stays on, as the read-only rule does: they decide what an object can reach,
+not just what its header says.
 
 ### Documentation
 

@@ -7,17 +7,16 @@ image mounts where its hosts point.
 ## Hosts
 
 Each host name it answers for has a root, a path in its view, which only
-the image sets, with `control`. With `http` mounted at `/http` in the
-image's view:
+whoever runs the image sets, by writing it. With `http` mounted at `/http`
+in the image's view:
 
 ```text
-control /http/hosts/* Text { text: "/www" }
-control /http/hosts/files.localhost Text { text: "/www/static" }
+write /http/hosts/* "/www"
+write /http/hosts/files.localhost "/www/static"
 ```
 
-`*` stands for any host not listed. A `control` with no payload stops
-serving that host. `list /hosts` lists them, and `read /hosts/<name>`
-answers its root.
+`*` stands for any host not listed. Removing a host stops serving it.
+`list /hosts` lists them, and `read /hosts/<name>` answers its root.
 
 ## Requests
 

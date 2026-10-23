@@ -172,7 +172,7 @@ mod tests {
     fn documents_the_built_in_objects() {
         let out = env();
         assert!(out.starts_with("# Built-in objects\n\n"), "{out}");
-        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Listen`"] {
+        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Outcome`"] {
             assert!(out.contains(&format!("{o}\n")), "{o}: {out}");
         }
         assert!(out.contains("| `Connection` | `watch -> application/octet-stream*`, `write application/octet-stream` |"), "{out}");

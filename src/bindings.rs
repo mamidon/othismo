@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn generates_a_class_per_declared_message() {
         let src = r#"
-            import { Text } from env
+            import { Outcome } from env
             ## Configures a Greeter.
             message Greeting {
               ## Put before each name.
@@ -150,7 +150,7 @@ mod tests {
         let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
         let out = assemblyscript(&header, "G.iface", "othismo/bson");
         assert!(out.starts_with("// Generated from G.iface by `othismo bindings`."), "{out}");
-        assert!(!out.contains("class Text"), "imported types have their own bindings");
+        assert!(!out.contains("class Outcome"), "imported types have their own bindings");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */

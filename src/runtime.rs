@@ -84,6 +84,14 @@ enum Requester {
     Wasm { inst: usize, ticket: u32 },
 }
 
+impl Requester {
+    /// Whether whoever runs the image made the request: an object never
+    /// does, and a request it forwards keeps its first sender's flag.
+    fn is_operator(&self) -> bool {
+        !matches!(self, Requester::Wasm { .. })
+    }
+}
+
 /// A request being served.
 struct Pending {
     caller: Requester,
@@ -104,7 +112,7 @@ struct Promise {
 }
 
 enum Delivery {
-    Serve { to: usize, req: u32, verb: Verb, path: String, body: Option<Payload> },
+    Serve { to: usize, req: u32, verb: Verb, operator: bool, path: String, body: Option<Payload> },
     Answer { to: usize, ticket: u32, status: Status, body: Option<Payload>, done: bool },
     Cancel { to: usize, req: u32 },
 }
@@ -140,7 +148,7 @@ impl Shared {
         if self.checks {
             let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NotFound)?;
             let need = self.interfaces[inst].need(&at).ok_or(Status::NotFound)?;
-            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb)?;
+            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
         }
         Ok(r)
     }
@@ -152,9 +160,15 @@ impl Shared {
             Ok(r) => r,
             Err(status) => return self.answer(&caller, status, None, true),
         };
+        let operator = caller.is_operator();
+        let entry = self.interfaces[r.inst].serving(&r.path);
+        // Like a read-only mount, the operator's requests are off limits to
+        // objects whether or not checks are on.
+        if !operator && entry.is_some_and(|e| e.takes_verb(verb, false) == Err(Status::Forbidden)) {
+            return self.answer(&caller, Status::Forbidden, None, true);
+        }
         let promise = if self.checks {
-            let entry = self.interfaces[r.inst].serving(&r.path).ok_or(Status::NotFound);
-            match entry.and_then(|e| e.takes_verb(verb).map(|_| e.streams(verb))) {
+            match entry.ok_or(Status::NotFound).and_then(|e| e.takes_verb(verb, operator).map(|_| e.streams(verb))) {
                 Ok(stream) => Some(Promise { what: format!("{verb} {}", r.path), stream }),
                 Err(status) => return self.answer(&caller, status, None, true),
             }
@@ -169,7 +183,7 @@ impl Shared {
             self.calls.insert((inst, ticket), (r.inst, req));
         }
         self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false, promise });
-        self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, path: r.path, body });
+        self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, operator, path: r.path, body });
     }
 
     fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, done: bool) {
@@ -244,7 +258,7 @@ struct WasmObject {
     store: Store<HostState>,
     memory: Memory,
     inbox: TypedFunc<i32, i32>,
-    serve: TypedFunc<(i32, i32, i32, i32, i32), ()>,
+    serve: TypedFunc<(i32, i32, i32, i32, i32, i32), ()>,
     answer: TypedFunc<(i32, i32, i32, i32, i32), ()>,
     start: TypedFunc<(), ()>,
     /// Optional: a module that never streams needn't hear about cancels.
@@ -424,7 +438,7 @@ impl<'p> Runtime<'p> {
 
     fn deliver(&mut self, d: Delivery) -> Result<()> {
         match d {
-            Delivery::Serve { to, req, verb, path, body } => {
+            Delivery::Serve { to, req, verb, operator, path, body } => {
                 let doing = format!("serving `{} {path}`", verb.keyword());
                 match &mut self.objects[to] {
                     Object::Env(e) => {
@@ -437,7 +451,8 @@ impl<'p> Runtime<'p> {
                         let mut bytes = path.as_bytes().to_vec();
                         bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
-                        let args = (req as i32, verb as i32, path.len() as i32, ty.len() as i32, body.len() as i32);
+                        let flags = if operator { ns::OPERATOR } else { 0 };
+                        let args = (req as i32, verb as i32, flags, path.len() as i32, ty.len() as i32, body.len() as i32);
                         let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.serve.call(&mut obj.store, args)?));
                         res.map_err(|e| self.failed(to, &doing, e))?;
                     }
@@ -509,7 +524,7 @@ fn instantiate(
             .ok_or_else(|| anyhow!("instance `{name}`: module must export {func}{sig}"))
     };
     let inbox = export("rt_inbox", "(i32) -> i32")?;
-    let serve = export("rt_serve", "(i32, i32, i32, i32, i32)")?;
+    let serve = export("rt_serve", "(i32, i32, i32, i32, i32, i32)")?;
     let answer = export("rt_answer", "(i32, i32, i32, i32, i32)")?;
     let start = export("rt_start", "()")?;
     let typed = |e: wasmtime::Error, func: &str| anyhow!("instance `{name}`: {func} has the wrong signature: {e}");
@@ -586,9 +601,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             } else {
                 0
             };
-            // Only the operator controls; an object's control never leaves it.
             let to = match path {
-                _ if verb == Verb::Control => Err(Status::Forbidden),
                 None => Err(Status::Invalid),
                 Some(p) => shared.resolve(me, &p, verb),
             };

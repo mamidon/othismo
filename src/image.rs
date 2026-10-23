@@ -468,6 +468,11 @@ impl Parser {
                     image.mounts.push(self.mount()?);
                 }
                 Tok::Ident(kw) if Verb::from_keyword(&kw).is_some() => image.requests.push(self.startup_request()?),
+                Tok::Ident(kw) if kw == "control" => bail!(
+                    "{}: `control` is gone: the image's requests are all the operator's, so write the request with its \
+                     own verb, such as `write`",
+                    self.pos()
+                ),
                 other => {
                     bail!("{}: expected `import`, `require`, `instance`, `mount` or a verb, found {other}", self.pos())
                 }
@@ -699,7 +704,7 @@ mod tests {
 
             instance cons : Console
             instance net : Listener
-            control /net Listen { address: "127.0.0.1:0" }
+            write /net Listen { address: "127.0.0.1:0" }
             instance echo : Echo {
               mount /dev/cons cons
               mount /net/tcp net readonly
@@ -724,7 +729,7 @@ mod tests {
 
         let reqs = &img.requests;
         let verbs: Vec<_> = reqs.iter().map(|r| r.verb).collect();
-        assert_eq!(verbs, [Verb::Control, Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
+        assert_eq!(verbs, [Verb::Write, Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
         let msg = |r: &Request| match r.body.as_ref().unwrap() {
             Literal::Message(b) => b.clone(),
             other => panic!("{other:?}"),
@@ -767,7 +772,7 @@ mod tests {
             r#"require listen : Listen { address: "127.0.0.1:8080" }
             require admin : Text
             instance net : Listener
-            control /net listen"#,
+            write /net listen"#,
         )
         .unwrap();
         let msg = |r: &Require| match &r.slot {
@@ -908,10 +913,12 @@ mod tests {
         assert!(e.contains("expected a path"), "{e}");
         let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
         assert!(e.contains("expected `mount`, `include` or `}`"), "{e}");
-        let e = parse("instance http : H { control /hosts/* Text }").unwrap_err().to_string();
-        assert!(e.contains("requests are made at the top level, in the image's view; mount `http` there, e.g. `mount /http http`, and then `control /http/hosts/* ...`"), "{e}");
-        let e = parse("instance net : T { control / listen }").unwrap_err().to_string();
-        assert!(e.contains("`control /net ...`"), "{e}");
+        let e = parse("instance http : H { write /hosts/* Text }").unwrap_err().to_string();
+        assert!(e.contains("requests are made at the top level, in the image's view; mount `http` there, e.g. `mount /http http`, and then `write /http/hosts/* ...`"), "{e}");
+        let e = parse("instance net : T { write / listen }").unwrap_err().to_string();
+        assert!(e.contains("`write /net ...`"), "{e}");
+        let e = parse("control /net listen").unwrap_err().to_string();
+        assert!(e.contains("`control` is gone"), "{e}");
         let e = parse("frobnicate /x").unwrap_err().to_string();
         assert!(e.contains("or a verb"), "{e}");
     }

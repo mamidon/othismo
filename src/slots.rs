@@ -221,16 +221,16 @@ mod tests {
 
     const IMAGE: &str = r#"
         import { Info } from A
-        require listen : Listen { address: "127.0.0.1:8080" }
+        require listen : text/plain = "127.0.0.1:8080"
         require info : Info { kind: "file" }
         require host : text/plain = "localhost"
         instance net : Listener
         instance a : A
         mount /net net
         mount /a a
-        control /net listen
+        write /net listen
         write /a/info info
-        write /a/x Text { text: "literal" }
+        write /a/x "literal"
         write /a/host host
     "#;
 
@@ -250,19 +250,19 @@ mod tests {
     fn later_values_win_field_by_field() {
         let mut p = program(IMAGE);
         let values = [
-            given("a.vals:2:3", "listen", Some("address"), GivenValue::Literal(Value::Str("0.0.0.0:80".into()))),
-            text("--set", "info", "size", "42"),
+            given("a.vals:2:3", "listen", None, GivenValue::Literal(Value::Str("0.0.0.0:80".into()))),
+            text("--set", "info", "size", "1"),
             text("--set", "info", "mime", "text/plain"),
-            text("--set", "listen", "address", "0.0.0.0:8080"),
+            whole("--set", "listen", "0.0.0.0:8080"),
+            text("--set", "info", "size", "42"),
         ];
         bind(&mut p, &values).unwrap();
 
-        let config = p.instances[0].config.as_ref().unwrap().message().unwrap();
-        assert_eq!(config.fields, bson::doc! { "address": "0.0.0.0:8080" });
+        assert_eq!(p.instances[0].config.as_ref().unwrap().text().unwrap(), "0.0.0.0:8080");
         let info = p.startup[0].body.as_ref().unwrap().message().unwrap();
         assert_eq!(info.fields, bson::doc! { "kind": "file", "size": 42i64, "mime": "text/plain" }, "in declared order");
         let origins = |i: usize| p.slots[i].origins.iter().map(|(f, o)| format!("{f}={o}")).collect::<Vec<_>>();
-        assert_eq!(origins(0), ["address=--set"]);
+        assert_eq!(origins(0), ["=--set"]);
         assert_eq!(origins(1), ["kind=default", "size=--set", "mime=--set"]);
         assert_eq!(p.startup[2].body.as_ref().unwrap().text().unwrap(), "localhost", "a default");
     }
@@ -285,7 +285,7 @@ mod tests {
         let mut p = program(IMAGE);
         let values = [
             text("--set", "lisen", "address", "x"),
-            text("--set", "listen", "port", "80"),
+            text("--set", "info", "port", "80"),
             text("--set", "info", "size", "big"),
             given("v.vals:1:8", "info", Some("kind"), GivenValue::Literal(Value::Int(1))),
             text("--set", "host", "name", "x"),
@@ -297,7 +297,7 @@ mod tests {
             e,
             "the image's slots can't be filled:\n  \
              --set: there is no slot `lisen`\n  \
-             --set: listen.port: `Listen` has no field `port`\n  \
+             --set: info.port: `Info` has no field `port`\n  \
              --set: info.size: `big` is not a valid i64\n  \
              v.vals:1:8: info.kind: `Info.kind` is string, but was given Int(1)\n  \
              --set: host.name: `host` is a text/plain payload, given whole: `host=...`\n  \

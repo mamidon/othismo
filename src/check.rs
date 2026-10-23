@@ -30,9 +30,9 @@ pub const PACKED: &str = "Packed.Files";
 /// to drive it from the other side.
 const MEMORY: &[(&str, Option<&str>)] = &[(CONSOLE, Some("Terminal")), (LISTENER, Some("Dialer")), (FILES, None)];
 
-/// The message each of the runtime's objects is configured with, by a
-/// `control` of its root.
-const CONFIG: &[(&str, &str)] = &[(LISTENER, "Listen"), (FILES, "FilesRoot")];
+/// The runtime's objects that are configured, by the image's write of their
+/// root, with text saying what each one is.
+const CONFIGURED: &[&str] = &[LISTENER, FILES];
 
 /// What the runtime's objects were called when images named them directly.
 const RENAMED: &[(&str, &str)] =
@@ -172,10 +172,10 @@ pub enum Kind {
     /// `instance x : Name` runs `scripts/Name.wasm`.
     Wasm { type_name: String },
     Console,
-    /// Listens on the address in its `Listen` config.
+    /// Listens on the address its config gives.
     Tcp,
-    /// Serves files under the path in its `FilesRoot` config. A relative
-    /// path is relative to the image.
+    /// Serves files under the directory its config gives. A relative path
+    /// is relative to the image.
     Files,
     /// Serves the files its includes packed into the image, in order.
     Packed { includes: Vec<IncludeDecl> },
@@ -355,7 +355,11 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
         addressed.push((to.inst, to.path, full));
     }
-    let is_config = |to: usize, verb: Verb| verb == Verb::Control && builtin(&img.instances[to].type_name.name, false).is_some();
+    // A configurable built-in object's config is the image's write of its
+    // root, taken before the object is made rather than sent as a request.
+    let is_config = |to: usize, verb: Verb, path: &str| {
+        verb == Verb::Write && path == "/" && CONFIGURED.contains(&img.instances[to].type_name.name.as_str())
+    };
 
     let mut instances = vec![];
     for (i, inst) in img.instances.iter().enumerate() {
@@ -370,41 +374,27 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         {
             bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, ty.name);
         }
-        // A built-in object's config is the image's `control` of it, taken
-        // before the object is made rather than sent as a request.
-        let controls: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, _)| is_config(i, r.verb)).collect();
+        let configs: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, path)| is_config(i, r.verb, path)).collect();
         let kind = match builtin(&ty.name, inst.imported) {
             Some(builtin) => {
                 let name = builtin.name.as_str();
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
-                if let Some((c, path)) = controls.iter().find(|(_, path)| *path != "/") {
-                    bail!("{}: {name} is configured at its root, and `{}` is `{path}` in it", c.path.pos, c.path.path);
+                if let Some(what) = config_what(&ty.name) {
+                    let needs = || {
+                        err_at(
+                            &inst.name,
+                            format!("{name} needs exactly one config: mount it in the image's view and `write` its root with {what}"),
+                        )
+                    };
+                    let [(c, _)] = configs.as_slice() else { bail!(needs()) };
+                    let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
+                    if !payload::fits("text/*", arg_type(&slots, &arg)) {
+                        bail!(needs());
+                    }
+                    config = Some(arg);
                 }
-                let config_type = config_type(&ty.name);
-                let needs = || {
-                    let t = config_type.unwrap();
-                    err_at(
-                        &inst.name,
-                        format!("{name} needs exactly one config message: mount it in the image's view and `control` its root with a {t}"),
-                    )
-                };
-                config = match (config_type, controls.as_slice()) {
-                    (None, []) => None,
-                    (None, [(c, _), ..]) if name == PACKED => {
-                        bail!("{}: {PACKED} takes no config; `include` the files it serves", c.verb_pos)
-                    }
-                    (None, [(c, _), ..]) => bail!("{}: {name} takes no config", c.verb_pos),
-                    (Some(t), [(c, _)]) => {
-                        let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
-                        if arg_message(&slots, &arg) != Some(t) {
-                            bail!(needs());
-                        }
-                        Some(arg)
-                    }
-                    (Some(_), _) => bail!(needs()),
-                };
                 builtin_kind(&ty.name, &inst.includes)?
             }
             None if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) => {
@@ -437,8 +427,8 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     }
 
     let mut startup = vec![];
-    for (r, (to, _, full)) in img.requests.iter().zip(&addressed) {
-        if is_config(*to, r.verb) {
+    for (r, (to, path, full)) in img.requests.iter().zip(&addressed) {
+        if is_config(*to, r.verb, path) {
             continue;
         }
         let body = r.body.as_ref().map(|b| body_arg(&messages_in_scope, &slots, b)).transpose()?;
@@ -631,10 +621,14 @@ fn run_as(inst: &image::Instance) -> String {
     }
 }
 
-/// The config message the runtime's object `name` takes, if any, whether
-/// it runs on the host or in memory.
-fn config_type(name: &str) -> Option<&'static str> {
-    CONFIG.iter().find(|(n, _)| *n == name).map(|(_, ty)| *ty)
+/// What the runtime's object `name` is configured with, whether it runs on
+/// the host or in memory, for errors; `None` if it takes no config.
+fn config_what(name: &str) -> Option<&'static str> {
+    match name {
+        LISTENER => Some("the address to listen on, e.g. `\"127.0.0.1:8080\"`"),
+        FILES => Some("the directory to serve, e.g. `\"public\"`"),
+        _ => None,
+    }
 }
 
 
@@ -789,18 +783,6 @@ fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
     }
 }
 
-/// The message type `arg` carries, if it carries a message.
-fn arg_message<'a>(slots: &'a [Slot], arg: &'a Arg) -> Option<&'a str> {
-    match arg {
-        Arg::Message(m) => Some(&m.type_name),
-        Arg::Payload(_) => None,
-        Arg::Slot(i) => match &slots[*i].kind {
-            SlotKind::Message { type_name, .. } => Some(type_name),
-            SlotKind::Payload { .. } => None,
-        },
-    }
-}
-
 /// The content type an image writes, which must be well-formed.
 fn content_type(id: &Ident) -> Result<String> {
     if !payload::valid(&id.name) {
@@ -928,7 +910,7 @@ mod tests {
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
         assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
-        assert!(p.messages.contains_key("Text"), "runtime types are always in scope");
+        assert!(p.messages.contains_key("Outcome"), "runtime types are always in scope");
         assert!(p.messages.contains_key("Greeting"));
     }
 
@@ -990,7 +972,7 @@ mod tests {
 
     #[test]
     fn requests_resolve_in_the_images_view() {
-        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out Text {{ text: \"hi\" }}")).unwrap();
+        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out \"hi\"")).unwrap();
         let view = [MountDecl { at: "/".into(), target: 1, read_only: false }, MountDecl { at: "/e/out".into(), target: 0, read_only: false }];
         assert_eq!(p.view, view);
         let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
@@ -1016,24 +998,25 @@ mod tests {
     #[test]
     fn environment_objects_take_config_from_the_image() {
         let p = check_src(
-            r#"instance net : Listener mount /net net control /net Listen { address: "127.0.0.1:0" }
-            instance fs : Files mount /fs fs control /fs FilesRoot { path: "public" }"#,
+            r#"instance net : Listener mount /net net write /net "127.0.0.1:0"
+            instance fs : Files mount /fs fs write /fs "public""#,
         )
         .unwrap();
         assert_eq!(p.instances[0].kind, Kind::Tcp);
-        let config = p.instances[0].config.as_ref().unwrap().message().unwrap();
-        assert_eq!(config.fields.get_str("address").unwrap(), "127.0.0.1:0");
+        assert_eq!(p.instances[0].config.as_ref().unwrap().text().unwrap(), "127.0.0.1:0");
         assert_eq!(p.instances[1].kind, Kind::Files);
         assert!(p.startup.is_empty(), "config isn't a request");
 
         let e = err("instance net : Listener");
-        assert!(e.contains("needs exactly one config message: mount it in the image's view and `control` its root with a Listen"), "{e}");
-        let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } control /net Listen { address: "b" }"#);
+        assert!(e.contains("Listener needs exactly one config: mount it in the image's view and `write` its root with the address to listen on, e.g. `\"127.0.0.1:8080\"`"), "{e}");
+        let e = err(r#"instance net : Listener mount /net net write /net "a" write /net "b""#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(r#"instance c : Console mount /c c control /c Listen { address: "a" }"#);
-        assert!(e.contains("takes no config"), "{e}");
-        let e = err(r#"instance net : Listener mount /net net control /net/x Listen { address: "a" }"#);
-        assert!(e.contains("Listener is configured at its root, and `/net/x` is `/x` in it"), "{e}");
+        let e = err(&format!(r#"{HEADER} instance net : Listener mount /net net write /net Ping"#));
+        assert!(e.contains("exactly one config"), "it takes text: {e}");
+        let p = check_src(r#"instance c : Console mount /c c write /c "printed""#).unwrap();
+        assert_eq!(p.startup.len(), 1, "a Console takes no config, so writing it prints");
+        let e = err(r#"instance net : Listener mount /net net write /net "a" write /net/x "b""#);
+        assert!(e.contains("`net` doesn't take `write` at `/x`"), "{e}");
         let e = err("instance c : Environment.Stdin");
         assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
         let e = err("instance net : Environment.Tcp");
@@ -1043,12 +1026,14 @@ mod tests {
     }
 
     #[test]
-    fn config_types_come_from_the_runtimes_header() {
-        let config = |name: &str| config_type(name).map(str::to_string);
-        assert_eq!(config(LISTENER).as_deref(), Some("Listen"));
-        assert_eq!(config(FILES).as_deref(), Some("FilesRoot"));
-        assert_eq!(config(CONSOLE), None);
-        assert_eq!(config(PACKED), None);
+    fn the_configured_objects_take_text_at_their_root() {
+        for name in CONFIGURED {
+            assert!(config_what(name).is_some(), "{name}");
+            let root = builtin(name, false).unwrap().serves.into_iter().find(|e| e.path.as_str() == "/").unwrap();
+            assert!(root.takes(Verb::Write, Some("text/plain")).is_ok_and(|r| r.operator), "{name}: {root}");
+        }
+        assert_eq!(config_what(CONSOLE), None);
+        assert_eq!(config_what(PACKED), None);
         for name in NATIVE.iter().chain([&PACKED]) {
             assert!(iface::env().traits.contains_key(*name) || iface::env().object(name).is_some(), "env declares {name}");
             assert!(builtin_kind(name, &[]).is_ok(), "the runtime implements {name}");
@@ -1072,8 +1057,8 @@ mod tests {
         assert!(e.contains("`include` packs files into a Packed.Files instance, and `s` is a Site"), "{e}");
         let e = err(r#"instance f : Packed.Files { include "x" at /../y }"#);
         assert!(e.contains("not a clean absolute path"), "{e}");
-        let e = err(r#"instance f : Packed.Files mount /f f control /f FilesRoot { path: "." }"#);
-        assert!(e.contains("takes no config"), "{e}");
+        let e = err(r#"instance f : Packed.Files mount /f f write /f ".""#);
+        assert!(e.contains("`f` doesn't take `write` at `/`"), "it takes no config: {e}");
         let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
         assert!(e.contains("only serves"), "{e}");
         let e = err(r#"instance f : Packed.Dirs"#);
@@ -1084,9 +1069,9 @@ mod tests {
     fn slots_stand_in_for_messages() {
         let p = check_src(&format!(
             r#"{HEADER}
-            require listen : Listen
+            require listen : text/plain
             require config : Config {{ name: "x", count: 3 }}
-            instance net : Listener mount /net net control /net listen
+            instance net : Listener mount /net net write /net listen
             instance e : Echo mount /e e write /e/config config"#
         ))
         .unwrap();
@@ -1109,24 +1094,24 @@ mod tests {
         assert!(e.contains("unknown message type `Nope`"), "{e}");
         let e = err(&inst("require g : Greeting", "write /e g { text: \"x\" }"));
         assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
-        let e = err("require t : Text instance net : Listener mount /net net control /net t");
-        assert!(e.contains("needs exactly one config message"), "{e}");
+        let e = err(&format!("{HEADER} require t : Ping instance net : Listener mount /net net write /net t"));
+        assert!(e.contains("needs exactly one config"), "{e}");
     }
 
     #[test]
     fn runtime_types_can_only_be_redeclared_exactly() {
         let dir = std::env::temp_dir().join(format!("othismo_envshape_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("m.iface"), "message Listen { port: i32 }\nmessage Line { text: string }").unwrap();
+        std::fs::write(dir.join("m.iface"), "message Outcome { passed: i32 }\nmessage Line { text: string }").unwrap();
         let mut none = |_: &str| -> Result<Header> { bail!("no modules") };
-        let ok = image::parse(r#"import { Line } from "./m" import { Text } from env"#).unwrap();
+        let ok = image::parse(r#"import { Line } from "./m" import { Outcome } from env"#).unwrap();
         assert!(check(&ok, &dir, &mut none).is_ok());
-        let bad = image::parse(r#"import { Listen } from "./m.iface""#).unwrap();
+        let bad = image::parse(r#"import { Outcome } from "./m.iface""#).unwrap();
         let e = format!("{:#}", check(&bad, &dir, &mut none).unwrap_err());
         let missing = image::parse(r#"import { Nope } from env"#).unwrap();
         let e2 = format!("{:#}", check(&missing, &dir, &mut none).unwrap_err());
         std::fs::remove_dir_all(&dir).ok();
-        assert!(e.contains("`Listen` is a runtime type and must be declared as { address: string }"), "{e}");
+        assert!(e.contains("`Outcome` is a runtime type and must be declared as { passed: bool, detail: string }"), "{e}");
         assert!(e2.contains("env has no message type `Nope`"), "{e2}");
     }
 
@@ -1169,8 +1154,8 @@ mod tests {
 
     #[test]
     fn startup_requests_must_be_served() {
-        let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} control application/bson, control } }";
-        let ok = r#"instance g : G mount /g g write /g/greeting Text { text: "hi" } control /g/hosts/* Text { text: "/www" } control /g/hosts/a"#;
+        let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} operator write text/plain, operator remove } }";
+        let ok = r#"import { Greeting } from "./messages.iface" instance g : G mount /g g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
         let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
@@ -1179,7 +1164,7 @@ mod tests {
         let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let only_text = "object G { serves { /greeting write text/plain } }";
-        let e = err_with(r#"instance g : G mount /g g write /g/greeting Text { text: "x" }"#, &[("G", only_text)]);
+        let e = err_with(r#"import { Greeting } from "./messages.iface" instance g : G mount /g g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
         assert!(e.contains("doesn't take `write application/bson` at `/greeting`"), "{e}");
         let texts = "object T { serves { /plain write text/plain  /any write text/* } }";
         let ok = r#"require t : text/plain = "x" instance t : T mount /t t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;
@@ -1188,7 +1173,7 @@ mod tests {
         assert!(e.contains("doesn't take `write text/html` at `/plain`"), "{e}");
         let e = err_with(r#"instance t : T mount /t t write /t/plain text/ "x""#, &[("T", texts)]);
         assert!(e.contains("`text/` isn't a well-formed content type"), "{e}");
-        let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } read /net/a/b"#);
+        let e = err(r#"instance net : Listener mount /net net write /net "a" read /net/a/b"#);
         assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
     }
 
@@ -1202,9 +1187,9 @@ mod tests {
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
         let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write text/plain` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
-        let files = r#"instance f : Files mount /f f control /f FilesRoot { path: "." }"#;
+        let files = r#"instance f : Files mount /f f write /f ".""#;
         let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ mount /dev/cons f }}"), &modules);
-        assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `f` serves `/ control application/bson, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
+        assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `f` serves `/ operator write text/plain, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
     }
 
     #[test]
@@ -1221,7 +1206,7 @@ mod tests {
         let site = "object Site { serves { /hits read -> text/plain  /** read -> text/html, stat } }";
         let strict = "object Strict { needs /** { /** read -> text/html } }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
-        let net = r#"instance net : Listener mount /net net control /net Listen { address: "127.0.0.1:0" }"#;
+        let net = r#"instance net : Listener mount /net net write /net "127.0.0.1:0""#;
         let img = format!("{net} instance site : Site instance http : Http {{ mount /net/tcp net  mount /www site  mount /other site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
@@ -1234,7 +1219,7 @@ mod tests {
     fn describes_views_and_reach() {
         let p = check_src(
             r#"instance cons : Console
-            instance files : Files mount /files files control /files FilesRoot { path: "." }
+            instance files : Files mount /files files write /files "."
             instance site : Site { mount /files files readonly }
             instance http : Http { mount /www site  mount /dev/cons cons }"#,
         )

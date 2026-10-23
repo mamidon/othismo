@@ -229,12 +229,12 @@ fn script_wat(s: &Script) -> String {
           (global $an (mut i32) (i32.const 0))
           (func (export "rt_inbox") (param i32) (result i32) (i32.const {INBOX}))
           (func (export "rt_start") {start})
-          (func (export "rt_serve") (param i32 i32 i32 i32 i32)
+          (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32)
             (global.set $req (local.get 0))
-            (global.set $tptr (i32.add (i32.const {INBOX}) (local.get 2)))
-            (global.set $tlen (local.get 3))
-            (global.set $bptr (i32.add (global.get $tptr) (local.get 3)))
-            (global.set $blen (local.get 4))
+            (global.set $tptr (i32.add (i32.const {INBOX}) (local.get 3)))
+            (global.set $tlen (local.get 4))
+            (global.set $bptr (i32.add (global.get $tptr) (local.get 4)))
+            (global.set $blen (local.get 5))
             {serve}
             (global.set $sn (i32.add (global.get $sn) (i32.const 1))))
           (func (export "rt_answer") (param i32 i32 i32 i32 i32)
@@ -286,7 +286,7 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
                     let reqs: Vec<String> = e
                         .requests
                         .iter()
-                        .filter(|r| r.verb != Verb::Control && (!ro || r.verb.is_safe()))
+                        .filter(|r| !r.operator && (!ro || r.verb.is_safe()))
                         .map(|r| r.to_string())
                         .collect();
                     (!reqs.is_empty()).then(|| format!("{} {}", e.path, reqs.join(", ")))
@@ -345,7 +345,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  invoke /a Ping  invoke /a/again Ping");
+    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  write /a Ping  write /a/again Ping");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -377,9 +377,14 @@ fn read_only_mounts_refuse_unsafe_verbs() {
 }
 
 #[test]
-fn only_the_image_controls() {
+fn only_the_image_makes_operator_requests() {
+    // b serves /y to the operator alone. a can see b, and binds it where its
+    // needs let it write anything, but that doesn't make it the operator.
     let a = Script {
-        start: vec![Act::Call { verb: Verb::Control, path: "/b/x", body: Some(text("x")), expect: true }],
+        start: vec![
+            Act::Bind { src: "/b", at: "/raw", read_only: false },
+            Act::Call { verb: Verb::Write, path: "/raw/y", body: Some(text("x")), expect: true },
+        ],
         answer: Some(Steps::Each(vec![Act::Report("/out")])),
         ..Default::default()
     };
@@ -387,8 +392,13 @@ fn only_the_image_controls() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("control", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")], "mount /b b  control /b/y Ping");
-    assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's control, never a's");
+    let a_header = "object A { needs /out { / write */* }  needs /raw/** { /** write */* } }";
+    let b_header = "object B { needs /out { / write */* }  serves { /y operator write */* } }";
+    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")];
+    let f = fixture_with("operator", &objects, "mount /b b  write /b/y Ping", &[("A", a_header), ("B", b_header)]);
+    assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's write, never a's");
+    let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
+    assert_eq!(off, "b served\nforbidden\n", "the rule holds with checks off, as read-only mounts do");
 }
 
 #[test]
@@ -534,7 +544,7 @@ fn unversioned(out: &str) -> String {
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Files  mount /files files  control /files FilesRoot { path: \"public\" }";
+    let files = "instance files : Files  mount /files files  write /files \"public\"";
     let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
@@ -560,7 +570,7 @@ fn packed_files_answer_like_files() {
 #[test]
 fn unknown_request_ids_stop_the_run() {
     let a = Script { serve: Some(Steps::Each(vec![Act::ReplyTo(7)])), ..Default::default() };
-    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  invoke /a Ping");
+    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a Ping");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
 }
@@ -676,7 +686,7 @@ fn modules_must_export_the_entry_points() {
         "scripts/S.wasm",
         module(r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#, "object S {}"),
     );
-    assert!(run_err(&f).contains("module must export rt_serve(i32, i32, i32, i32, i32)"));
+    assert!(run_err(&f).contains("module must export rt_serve(i32, i32, i32, i32, i32, i32)"));
 }
 
 #[test]
@@ -687,7 +697,7 @@ fn abort_fails_the_run_naming_the_instance() {
       (memory (export "memory") 1)
       (data (i32.const 12) "\08\00\00\00b\00o\00o\00m\00")
       (func (export "rt_inbox") (param i32) (result i32) (i32.const 4096))
-      (func (export "rt_serve") (param i32 i32 i32 i32 i32))
+      (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32))
       (func (export "rt_answer") (param i32 i32 i32 i32 i32))
       (func (export "rt_start") (call $abort (i32.const 16) (i32.const 0) (i32.const 7) (i32.const 9))))"#;
     let f = fixture("abort", &[], "instance s : S");
@@ -742,7 +752,7 @@ fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
     let f = Fixture::new("import_files");
     // The imported image is in a directory of its own, with its files there.
     std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
-    f.file("site/site.img", "instance files : Files\nmount /files files\ncontrol /files FilesRoot { path: \"public\" }\n");
+    f.file("site/site.img", "instance files : Files\nmount /files files\nwrite /files \"public\"\n");
     f.file("site/public/hello.txt", "hi");
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Files } from env object Probe { needs /f Files needs /out Console }"));
     f.file("test.img", "import \"./site/site.img\"\ninstance out : Console\ninstance probe : Probe {\n  mount /f files\n  mount /out out\n}\n");

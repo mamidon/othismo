@@ -130,10 +130,11 @@ wants to know, and the stream ends for the caller at once.
 
 The `operator` flag marks a request made by whoever runs the image: its
 startup requests, and requests an image makes of the instances inside it.
-An object can't set it; one that tries is answered `forbidden` before
-anything is resolved. A header marks a request only the operator may make
-with `operator`, as in `/hosts/{name}  operator write text/plain`, and the
-runtime answers anyone else `forbidden`.
+Objects have no way to set it: the host call they make requests with
+takes no flags. A header marks a request only the operator may make with
+`operator`, as in `/hosts/{name}  operator write text/plain`, and the
+runtime answers anyone else `forbidden`, whether or not checks are on, as
+it refuses an unsafe verb through a read-only mount.
 
 That is how an object leaves a path to whoever runs it, and how the
 runtime's own objects are configured: an operator `write` of their root.
@@ -152,7 +153,7 @@ A failed request is answered with an error, and that is its last answer.
 | 6 | `exists` | `create` of something already there |
 | 7 | `invalid` | a malformed path, or a payload the server couldn't make sense of |
 | 8 | `io` | the outside world failed |
-| 9 | `forbidden` | an operator request from an object, or a request only the operator may make |
+| 9 | `forbidden` | a request only the operator may make, from an object |
 | 10 | `unsupported_type` | the server doesn't take payloads of that content type |
 
 `errno` is what a program compares. `code` is its name, and must be the name

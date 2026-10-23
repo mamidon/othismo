@@ -7,11 +7,6 @@
 # Payloads are named by their content types. `stat` and `list` answer stat
 # records, which the protocol defines, so they are written bare.
 
-## A string value: a setting, an address, a name.
-message Text {
-  text: string
-}
-
 ## Something read whole.
 protocol File { read -> */*, stat }
 

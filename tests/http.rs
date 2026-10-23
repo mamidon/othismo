@@ -42,7 +42,7 @@ impl Server {
         }
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_othismo"))
-            .args(["--set", "listen.address=127.0.0.1:0"])
+            .args(["--set", "listen=127.0.0.1:0"])
             .arg(image)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
