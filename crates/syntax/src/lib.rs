@@ -3,4 +3,4 @@
 //! file mean is the compiler's business, not this crate's.
 
 pub mod decl;
-pub mod image;
+pub mod image_definition;

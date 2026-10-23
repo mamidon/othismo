@@ -4,11 +4,11 @@
 //! every view, bind and export is worked out before anything runs.
 
 use crate::iface::{self, Header, Loader, Object, Trait};
-use syntax::image::{self, Ident, Image, Literal, Pos};
+use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos};
 use protocol::ns::{self, Namespace, Status, Verb};
 use protocol::pattern::Pattern;
 use protocol::payload::{self, Payload};
-pub use ::image::program::*;
+pub use image::program::*;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
@@ -46,7 +46,7 @@ fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
 
 /// A `.oth` file the image uses as an image: the root, or one it instantiates.
 struct Unit {
-    image: Image,
+    image: ImageDefinition,
     /// Its directory, relative to the root's: where its relative paths
     /// (includes, a files root) start.
     rel: PathBuf,
@@ -90,7 +90,7 @@ struct Node {
     unit: usize,
     ty: TypeRef,
     /// Where it was declared, for errors; `None` for one of the root's needs.
-    decl: Option<image::Instance>,
+    decl: Option<image_definition::Instance>,
     mounts: Vec<MountDecl>,
     /// Where each of `mounts` is written, to keep them in that order.
     written: Vec<Pos>,
@@ -110,7 +110,7 @@ enum Given {
 struct Request {
     image: Option<usize>,
     unit: usize,
-    request: image::Request,
+    request: image_definition::Request,
     slots: BTreeMap<String, Given>,
 }
 
@@ -171,7 +171,7 @@ impl Builder<'_> {
         if let Some(&u) = self.unit_paths.get(path) {
             return Ok(u);
         }
-        let image = self.loader.image(path)?;
+        let image = self.loader.image_definition(path)?;
         let scope = self.loader.resolve(&image.header, path)?;
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         self.units.push(Unit { image, rel: rel.to_path_buf(), dir, scope });
@@ -223,7 +223,7 @@ impl Builder<'_> {
             let name = format!("{prefix}{}", inst.name.name);
             self.nodes.push(Node { name, unit, ty, decl: Some(inst.clone()), mounts: vec![], written: vec![], exports: vec![], config: None });
         }
-        let target = |m: &image::Mount| -> Result<usize> {
+        let target = |m: &image_definition::Mount| -> Result<usize> {
             local.get(&m.target.name).copied().ok_or_else(|| err_at(&m.target, format!("unknown instance `{}`", m.target.name)))
         };
         for inst in &img.instances {
@@ -318,7 +318,7 @@ impl Builder<'_> {
     /// The slots of `child`, an image instantiated as `inst` in `unit`,
     /// whose own slots are `slots`: each given in the instance block, or
     /// else its default.
-    fn slot_values(&mut self, unit: usize, slots: &BTreeMap<String, Given>, child: usize, inst: &image::Instance) -> Result<BTreeMap<String, Given>> {
+    fn slot_values(&mut self, unit: usize, slots: &BTreeMap<String, Given>, child: usize, inst: &image_definition::Instance) -> Result<BTreeMap<String, Given>> {
         let requires = self.units[child].image.requires.clone();
         let mut out = BTreeMap::new();
         for (name, value) in &inst.values {
@@ -404,7 +404,7 @@ impl Builder<'_> {
     fn instance_type(&mut self, unit: usize, ty: &Ident) -> Result<TypeRef> {
         let image = self.units[unit].image.header.imports.iter().find(|i| i.default.as_ref().is_some_and(|d| d.name == ty.name));
         if let Some(imp) = image {
-            let image::Source::Path(p) = &imp.from else { unreachable!("env has no image") };
+            let image_definition::Source::Path(p) = &imp.from else { unreachable!("env has no image") };
             let path = iface::join(&self.units[unit].dir, p);
             let rel = iface::join(&self.units[unit].rel, &Path::new(p).parent().unwrap_or(Path::new("")).to_string_lossy());
             return Ok(TypeRef::Image(self.unit(&path, &rel)?));
@@ -717,11 +717,11 @@ fn below(obj: &Object, path: &str, at: &str) -> Vec<iface::Entry> {
         .collect()
 }
 
-fn clean_mount_point(p: &image::Path) -> Result<String> {
+fn clean_mount_point(p: &image_definition::Path) -> Result<String> {
     ns::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
 }
 
-fn mount_decl(at: &image::Path, target: usize, read_only: bool) -> Result<MountDecl> {
+fn mount_decl(at: &image_definition::Path, target: usize, read_only: bool) -> Result<MountDecl> {
     Ok(MountDecl { at: clean_mount_point(at)?, target, path: "/".into(), read_only })
 }
 
@@ -736,7 +736,7 @@ fn push_mount(mounts: &mut Vec<MountDecl>, decl: MountDecl, pos: Pos, whose: &st
 
 /// A startup request of `path` in instance `name`'s served tree, against
 /// what `obj` serves there.
-fn check_request(r: &image::Request, path: &str, name: &str, obj: &Object, body: Option<&Arg>, slots: &[Slot]) -> Result<()> {
+fn check_request(r: &image_definition::Request, path: &str, name: &str, obj: &Object, body: Option<&Arg>, slots: &[Slot]) -> Result<()> {
     let body_type = body.map(|b| arg_type(slots, b));
     let Some(entry) = obj.serving(path) else {
         bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
@@ -794,7 +794,7 @@ fn config_what(name: &str) -> Option<&'static str> {
 
 /// How the runtime implements its object `name`. A `PackedFiles` serves its
 /// `includes`.
-fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
+fn builtin_kind(name: &str, includes: &[image_definition::Include]) -> Result<Kind> {
     Ok(match name {
         CONSOLE => Kind::Console,
         LISTENER => Kind::Tcp,
@@ -837,7 +837,7 @@ mod tests {
     use super::*;
     use format::Format;
     use format_bson::{Bson, wire};
-    use syntax::image::Value;
+    use syntax::image_definition::Value;
 
     fn formats() -> Formats {
         Formats::new(vec![Box::new(Bson)])
@@ -928,7 +928,7 @@ mod tests {
         for (name, src) in files {
             loader.files.insert(dir.join(name), src.as_bytes().to_vec());
         }
-        let parsed = image::parse(img)?;
+        let parsed = image_definition::parse(img)?;
         let mut imported: Vec<String> = parsed
             .header
             .imports

@@ -2,7 +2,7 @@
 //! and what an image needs, and the message types of a BSON schema file,
 //! which share the grammar of fields. Resolving them is the compiler's.
 
-use crate::image::{self, Ident, Import, Parser, Pos, Tok};
+use crate::image_definition::{self, Ident, Import, Parser, Pos, Tok};
 use anyhow::{Result, bail};
 use protocol::ns::Verb;
 
@@ -72,14 +72,14 @@ pub struct ObjectDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeedDecl {
-    pub at: image::Path,
+    pub at: image_definition::Path,
     pub doc: String,
     pub entries: Vec<EntryDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryDecl {
-    pub path: image::Path,
+    pub path: image_definition::Path,
     pub doc: String,
     pub items: Vec<Item>,
 }
@@ -97,7 +97,7 @@ pub struct RequestDecl {
 /// The declarations in a `.oth` file. Anything else in it is an image, which
 /// importing its declarations leaves alone.
 pub fn parse(src: &str) -> Result<File> {
-    Ok(image::parse(src)?.header)
+    Ok(image_definition::parse(src)?.header)
 }
 
 impl Parser {
@@ -210,7 +210,7 @@ impl Parser {
         let entries = match self.peek() {
             Tok::Ident(_) => {
                 let name = self.ident("trait name", false)?;
-                let path = image::Path { path: "/".into(), pos: name.pos };
+                let path = image_definition::Path { path: "/".into(), pos: name.pos };
                 vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
             }
             _ => self.entries()?,
@@ -259,7 +259,7 @@ impl Parser {
     fn content_type(&mut self, what: &str) -> Result<Ident> {
         match self.next() {
             (Tok::Type(name), pos) => Ok(Ident { name, pos }),
-            (Tok::Ident(name), pos) if !image::KEYWORDS.contains(&name.as_str()) => Ok(Ident { name, pos }),
+            (Tok::Ident(name), pos) if !image_definition::KEYWORDS.contains(&name.as_str()) => Ok(Ident { name, pos }),
             (other, pos) => bail!("{pos}: expected {what}, such as `text/plain`, found {other}"),
         }
     }

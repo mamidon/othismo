@@ -1,5 +1,5 @@
-//! Lexer, AST and parser for `.oth` files, which hold images and headers
-//! alike: declarations (message types, protocols, traits and objects, see
+//! Lexer, AST and parser for `.oth` files, which hold image definitions
+//! and headers alike: declarations (message types, protocols, traits and objects, see
 //! [`crate::iface`]) and an image's instances, views and requests.
 
 use crate::decl as iface;
@@ -20,9 +20,10 @@ impl std::fmt::Display for Pos {
 }
 
 /// A parsed `.oth` file: its declarations, which other files can import,
-/// and the image it describes, which is empty for a header.
+/// and the definition of the image it describes, which is empty for a
+/// header. What it is built into is an image (the `image` crate).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Image {
+pub struct ImageDefinition {
     /// Its imports, declarations, exported declarations and top-level
     /// `needs`.
     pub header: iface::File,
@@ -504,7 +505,7 @@ impl Parser {
         }
     }
 
-    fn file(&mut self) -> Result<Image> {
+    fn file(&mut self) -> Result<ImageDefinition> {
         let header = iface::File {
             imports: vec![],
             protocols: vec![],
@@ -514,7 +515,7 @@ impl Parser {
             needs: vec![],
         };
         let mut image =
-            Image { header, requires: vec![], instances: vec![], mounts: vec![], exports: vec![], requests: vec![] };
+            ImageDefinition { header, requires: vec![], instances: vec![], mounts: vec![], exports: vec![], requests: vec![] };
         loop {
             let doc = self.docs();
             let pos = self.pos();
@@ -880,7 +881,7 @@ impl Parser {
     }
 }
 
-pub fn parse(src: &str) -> Result<Image> {
+pub fn parse(src: &str) -> Result<ImageDefinition> {
     Parser::new(src, true)?.file()
 }
 

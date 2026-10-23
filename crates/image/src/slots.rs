@@ -5,7 +5,7 @@
 
 use crate::program::{Arg, Program, SlotValue};
 use protocol::payload::Payload;
-use syntax::image::{Ident, Pos, Value};
+use syntax::image_definition::{Ident, Pos, Value};
 use anyhow::{Context, Result, bail};
 use format::{Format, Formats, Schemas};
 use std::path::Path;
@@ -33,7 +33,7 @@ pub enum GivenValue {
 /// The values in a value file, in order: a structured value's field by field.
 pub fn read_values(path: &Path) -> Result<Vec<Given>> {
     let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let blocks = syntax::image::parse_values(&src).with_context(|| format!("parsing {}", path.display()))?;
+    let blocks = syntax::image_definition::parse_values(&src).with_context(|| format!("parsing {}", path.display()))?;
     let origin = |pos: Pos| format!("{}:{pos}", path.display());
     let mut out = vec![];
     for block in blocks {

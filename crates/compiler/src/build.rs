@@ -4,8 +4,8 @@
 
 use crate::check::{self, Kind};
 use format::Formats;
-use ::image::pack::{Pack, add, is_sealed_file, open};
-use ::image::tree::Tree;
+use image::pack::{Pack, add, is_sealed_file, open};
+use image::tree::Tree;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::path::{Component, Path};

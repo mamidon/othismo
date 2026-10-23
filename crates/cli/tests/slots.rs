@@ -3,7 +3,7 @@
 use format::Format;
 use format_bson::Bson;
 use othismo::check::{self, Arg, Program};
-use othismo::image::Value;
+use othismo::image_definition::Value;
 use othismo::payload::Payload;
 use othismo::slots::{Given, GivenValue, bind, parse_set, read_values};
 use othismo::wire;
@@ -96,7 +96,7 @@ fn payload_slots_are_given_whole() {
 fn a_whole_structured_value_merges_with_its_default() {
     let mut p = program(IMAGE);
     let tree = |src: &str| {
-        let mut parser = othismo::image::Parser::new(src, false).unwrap();
+        let mut parser = othismo::image_definition::Parser::new(src, false).unwrap();
         parser.value().unwrap()
     };
     bind(&mut p, &othismo::formats(), &[given("v.vals:1:8", "info", None, GivenValue::Literal(tree(r#"{ size: 3, mime: "" }"#)))]).unwrap();

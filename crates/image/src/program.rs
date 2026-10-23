@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::PathBuf;
-use syntax::image::Value;
+use syntax::image_definition::Value;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {

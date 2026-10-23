@@ -12,7 +12,7 @@ pub use ::image::{slots, tree};
 pub use ::runtime::{env, render, runtime, suite};
 pub use format_bson::{messages, wire};
 pub use protocol::{ns, pattern, payload};
-pub use syntax::image;
+pub use syntax::image_definition;
 
 /// The formats this othismo knows: BSON's.
 pub fn formats() -> format::Formats {

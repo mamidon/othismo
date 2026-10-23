@@ -15,7 +15,7 @@ use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use syntax::image::{Parser, Source, Tok, Value};
+use syntax::image_definition::{Parser, Source, Tok, Value};
 use wire::Message;
 
 /// The content type of a BSON payload.

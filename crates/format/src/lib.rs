@@ -12,7 +12,7 @@ use protocol::payload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use syntax::image::Value;
+use syntax::image_definition::Value;
 
 /// A format's schemas, as only the format can read them: every type a
 /// module or an image can name. Everything else carries them as they are.

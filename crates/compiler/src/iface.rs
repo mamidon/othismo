@@ -9,8 +9,8 @@
 //! its guides read in. A resolved header stands on its own, so it can
 //! travel inside a module.
 
-use syntax::image::{self, Ident, Image, Pos, Source};
-pub use ::image::header::*;
+use syntax::image_definition::{self, Ident, ImageDefinition, Pos, Source};
+pub use image::header::*;
 pub use syntax::decl::*;
 use format::{Format, Formats, Schemas};
 use protocol::pattern::Pattern;
@@ -521,7 +521,7 @@ fn content_type(id: &Ident) -> Result<String> {
     Ok(id.name.clone())
 }
 
-fn pattern(p: &image::Path) -> Result<Pattern> {
+fn pattern(p: &image_definition::Path) -> Result<Pattern> {
     Pattern::parse(&p.path).map_err(|e| anyhow::anyhow!("{}: {e}", p.pos))
 }
 
@@ -578,12 +578,12 @@ impl Loader {
     }
 
     /// The `.oth` file at `path`, parsed whole.
-    pub fn image(&mut self, path: &Path) -> Result<Image> {
+    pub fn image_definition(&mut self, path: &Path) -> Result<ImageDefinition> {
         let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
         if !self.sources.iter().any(|p| p == path) {
             self.sources.push(path.to_path_buf());
         }
-        image::parse(&src).with_context(|| format!("parsing {}", path.display()))
+        image_definition::parse(&src).with_context(|| format!("parsing {}", path.display()))
     }
 
     /// The header at `path`: a `.oth` file's declarations, or the header
@@ -611,7 +611,7 @@ impl Loader {
                     bail!("{} imports itself, through the files it imports", path.display());
                 }
                 self.loading.push(path.to_path_buf());
-                let header = self.image(path).and_then(|img| self.resolve(&img.header, path));
+                let header = self.image_definition(path).and_then(|img| self.resolve(&img.header, path));
                 self.loading.pop();
                 header?
             }

@@ -41,7 +41,7 @@ pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<
 pub fn module(wat: &str, iface: &str) -> Vec<u8> {
     let iface = if iface.contains("export object") { iface.to_string() } else { iface.replace("object ", "export object ") };
     let file = othismo::iface::parse(&iface).unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
-    let mut env = |_: &othismo::image::Source| Ok(othismo::iface::env().clone());
+    let mut env = |_: &othismo::image_definition::Source| Ok(othismo::iface::env().clone());
     let header = othismo::iface::resolve(&file, &mut env, &|_| anyhow::bail!("no guides here"))
         .unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
     othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap()

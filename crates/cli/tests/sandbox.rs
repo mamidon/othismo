@@ -357,7 +357,7 @@ fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, head
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
         img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {} }}\n", bound(members)));
     }
-    let parsed = othismo::image::parse(&img).unwrap();
+    let parsed = othismo::image_definition::parse(&img).unwrap();
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
     for (obj, script, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
