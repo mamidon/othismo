@@ -1,6 +1,6 @@
 //! `Console`, run on the host's stdin and stdout.
 
-use super::{Event, Reply, What};
+use super::{Event, Incoming, Reply, What};
 use protocol::ns::{Status, Verb};
 use protocol::payload::Payload;
 use crate::render;
@@ -102,7 +102,7 @@ impl MemoryConsole {
 
 /// Reads lines and hands them to the Console instances in turn, until EOF,
 /// which every Console is told about.
-pub fn spawn_stdin(mut input: Box<dyn BufRead + Send>, instances: Vec<usize>, events: Sender<Event>) {
+pub fn spawn_stdin(mut input: Box<dyn BufRead + Send>, instances: Vec<usize>, events: Sender<Incoming>) {
     std::thread::spawn(move || {
         for &to in instances.iter().cycle() {
             let mut line = String::new();
@@ -116,12 +116,12 @@ pub fn spawn_stdin(mut input: Box<dyn BufRead + Send>, instances: Vec<usize>, ev
             }
             let text = line.strip_suffix('\n').unwrap_or(&line);
             let text = text.strip_suffix('\r').unwrap_or(text);
-            if events.send(Event { to, what: What::Line(text.into()) }).is_err() {
+            if events.send(Event { to, what: What::Line(text.into()) }.into()).is_err() {
                 return;
             }
         }
         for &to in &instances {
-            let _ = events.send(Event { to, what: What::Eof });
+            let _ = events.send(Event { to, what: What::Eof }.into());
         }
     });
 }

@@ -7,5 +7,6 @@ edition.workspace = true
 [dependencies]
 protocol.workspace = true
 image.workspace = true
+format.workspace = true
 anyhow.workspace = true
 wasmtime.workspace = true

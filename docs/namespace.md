@@ -221,6 +221,46 @@ The checker also holds the images to their objects' interfaces (see
 [Objects](objects.md)): every mount must serve what its object needs there,
 and every startup request must be one its object serves.
 
+## The shell
+
+`othismo shell <image>` runs an image and lets whoever runs it look around
+the running image and make requests of it. Only they can: the shell runs the
+image in its own process and reaches it over an in-process channel, never a
+socket, so nothing outside the process can make a request through it.
+
+Every view has an owner, so the shell always looks from one. It starts at
+the image, which lists the **roots**: the image's own view, and every
+instance with a view that nothing mounts. Only a `mount` makes a parent; a
+`bind` or an export passes on what is already held. From a root, the shell
+steps into the views of what that view holds. The bar at the top shows the
+**route**: the shortest chain of mounts from the root entered to where it
+looks from, however it got there.
+
+```text
+ ◆ static.test.oth ›  web  ─/http→  web.http  ─/www→  web.pages
+NAME                 OBJECT     KIND    LINK   ACCESS  TYPE         SIZE      VER  INFO
+/                    web.pages
+└── ▾ files          web.files  memory  mount  ro      PackedFiles                 40 req
+    ├── ▸ docs/      web.files  dir            ro
+    └──   style.css  web.files  file           ro      text/css  10.0 KB  2f1c09e4
+web.pages $ read /files/style.css
+```
+
+A request is written as an image's startup request, `verb path [payload]`,
+and sent from the view looked from. From an image (the root, or an instance
+of one) it carries the operator flag, as the image's own requests do. From
+an object it doesn't, and the runtime holds it to the object's needs, as it
+would the object's own. The shell completes requests as they are typed: the
+verbs, the paths in the view, what servers' headers say they serve there,
+and a message's fields from its format. It says why the runtime would refuse
+a request before it is sent. Opening a path in the table lists what is
+served there, which the operator asks of the server directly, whoever the
+shell looks from. Looking changes nothing, so only safe verbs can be sent
+that way.
+
+`--plain`, or a shell without a terminal, reads commands a line at a time.
+`:help` lists the shell's own commands.
+
 ## Not yet
 
 - Union mounts (several servers at one path, tried in order, as Plan 9's
@@ -229,3 +269,7 @@ and every startup request must be one its object serves.
 - Timeouts on calls.
 - Writable Files.
 - Reconfiguring an environment object while it runs.
+- Reaching a running image's shell from elsewhere. It would have to be
+  opted into, since whoever can reach it is the image's operator.
+- The runtime answering `stat` and `list` for servers that don't, so the
+  shell can show every served tree.

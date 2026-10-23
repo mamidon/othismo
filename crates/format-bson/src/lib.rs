@@ -11,7 +11,7 @@ pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use format::{Bindings, Format, Schemas};
+use format::{Bindings, FieldDoc, Format, MessageDoc, Schemas};
 use messages::{EnumType, FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
@@ -222,6 +222,23 @@ impl Format for Bson {
         Some(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))).collect())
     }
 
+    fn describe(&self, schemas: &Schemas, ty: &str) -> Result<MessageDoc, String> {
+        let messages = Bson::messages(schemas);
+        let t = message_type(&messages, ty)?;
+        let fields = t
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| FieldDoc {
+                name: f.name.clone(),
+                ty: if f.optional { format!("{}, optional", f.ty) } else { f.ty.to_string() },
+                examples: examples(&messages, &f.ty),
+                doc: t.field_docs.get(i).cloned().unwrap_or_default(),
+            })
+            .collect();
+        Ok(MessageDoc { name: t.name.clone(), doc: t.doc.clone(), fields })
+    }
+
     /// Only message types: an enum can't be a payload.
     fn declared(&self, schemas: &Schemas) -> Vec<String> {
         let m = Bson::messages(schemas);
@@ -236,6 +253,27 @@ impl Format for Bson {
 
     fn document(&self, schemas: &Schemas, h: &str) -> String {
         Bson::document_messages(&Bson::messages(schemas), h)
+    }
+}
+
+/// Literals a field of type `t` could be given, to start from: every value
+/// of an enum, and an empty one of the rest. `any` has none, since it
+/// starts with a type's name.
+fn examples(schemas: &Messages, t: &FieldType) -> Vec<String> {
+    match t {
+        FieldType::Bool => vec!["true".into(), "false".into()],
+        FieldType::String | FieldType::Bytes => vec!["\"\"".into()],
+        FieldType::F32 | FieldType::F64 => vec!["0.0".into()],
+        FieldType::Time => vec!["\"1970-01-01T00:00:00Z\"".into()],
+        FieldType::Uuid => vec!["\"00000000-0000-0000-0000-000000000000\"".into()],
+        FieldType::Named(n) => match schemas.enums.get(n) {
+            Some(e) => e.values.iter().map(|v| json_string(v)).collect(),
+            None => vec!["{}".into()],
+        },
+        FieldType::List(_) => vec!["[]".into()],
+        FieldType::Map(_) => vec!["{}".into()],
+        FieldType::Any => vec![],
+        _ => vec!["0".into()],
     }
 }
 
@@ -423,6 +461,33 @@ mod tests {
     fn value(src: &str) -> Value {
         let mut p = Parser::new(src, false).unwrap();
         p.value().unwrap()
+    }
+
+    #[test]
+    fn a_message_type_is_described_field_by_field() {
+        let schemas = Bson.parse("## Configures it.\nmessage Greeting {\n  ## Before each name.\n  prefix: string\n  excited: bool\n  times: u8\n}", &mut |p| bail!("no {p} here")).unwrap();
+        let d = Bson.describe(&schemas, "Greeting").unwrap();
+        assert_eq!(d.doc, "Configures it.");
+        let fields: Vec<(&str, &str, Vec<&str>, &str)> =
+            d.fields.iter().map(|f| (f.name.as_str(), f.ty.as_str(), f.examples.iter().map(String::as_str).collect(), f.doc.as_str())).collect();
+        assert_eq!(fields, [
+            ("prefix", "string", vec!["\"\""], "Before each name."),
+            ("excited", "bool", vec!["true", "false"], ""),
+            ("times", "u8", vec!["0"], ""),
+        ]);
+        assert!(Bson.describe(&schemas, "Nope").is_err());
+
+        let schemas = Bson::schemas(&messages(&format!("{NESTED} {COLORS} message All {{ at: time, p?: Person, c: Color, l: [u8], m: {{u8}}, a: any }}")));
+        let d = Bson.describe(&schemas, "All").unwrap();
+        let fields: Vec<(&str, Vec<&str>)> = d.fields.iter().map(|f| (f.ty.as_str(), f.examples.iter().map(String::as_str).collect())).collect();
+        assert_eq!(fields, [
+            ("time", vec![r#""1970-01-01T00:00:00Z""#]),
+            ("Person, optional", vec!["{}"]),
+            ("Color", vec![r#""red""#, r#""green""#, r#""blue""#]),
+            ("[u8]", vec!["[]"]),
+            ("{u8}", vec!["{}"]),
+            ("any", vec![]),
+        ]);
     }
 
     const GREETING: &str = r#"

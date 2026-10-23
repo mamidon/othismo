@@ -56,6 +56,10 @@ pub trait Format: Send + Sync {
     fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String>;
     /// An encoded payload's fields, each as JSON-ish text, for `--check`.
     fn show(&self, bytes: &[u8]) -> Option<Vec<(String, String)>>;
+    /// Message type `ty`, which `schemas` must have, as a person reads it:
+    /// its documentation, and each field's, with its type. For the shell's
+    /// completion.
+    fn describe(&self, schemas: &Schemas, ty: &str) -> Result<MessageDoc, String>;
 
     /// The types `schemas` declares where they were read, in order: not
     /// those it imports.
@@ -70,6 +74,27 @@ pub trait Format: Send + Sync {
     /// A reference for the types a block declares, as Markdown under
     /// headings at level `h`.
     fn document(&self, schemas: &Schemas, h: &str) -> String;
+}
+
+/// A message type, described: see [`Format::describe`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MessageDoc {
+    pub name: String,
+    /// Markdown; empty if it has none.
+    pub doc: String,
+    pub fields: Vec<FieldDoc>,
+}
+
+/// One field of a message type: its name, its type as a schema writes it,
+/// a literal of that type to start from, and its documentation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldDoc {
+    pub name: String,
+    pub ty: String,
+    /// What the field could be given, as written in a literal: `true` and
+    /// `false` for a boolean, `""` for text, `0` for a number.
+    pub examples: Vec<String>,
+    pub doc: String,
 }
 
 /// Generated AssemblyScript: what it imports, which goes at the top of the
