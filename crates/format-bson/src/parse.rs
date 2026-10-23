@@ -1,15 +1,15 @@
 //! The BSON format's schema language, the body of a `schemas
 //! application/bson { ... }` block: `import`s from other `.oth` files'
-//! blocks, and `message` declarations.
+//! blocks, and `message` and `enum` declarations.
 
 use crate::Messages;
-use crate::messages::{Field, FieldType, MessageType};
+use crate::messages::{EnumType, Field, FieldType, MessageType};
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 use syntax::image_definition::{Parser, Pos, Source, Tok};
 
 /// The field types a field can be written with, besides a type's name.
-const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bytes, time, uuid, a message type, a list of one of those, `[T]`, or a map from strings to one, `{T}`";
+const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bytes, time, uuid, a message type or an enum, a list of one of those, `[T]`, or a map from strings to one, `{T}`";
 
 pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
     let mut p = Parser::new(src, true)?;
@@ -38,22 +38,26 @@ pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> 
                     if n.local.name != *name {
                         bail!("{}: a message type is named on the wire, so `{name}` can't be renamed", n.local.pos);
                     }
-                    if !theirs.types.contains_key(name) {
-                        bail!("{}: {path:?} has no message type `{name}`", n.name.pos);
+                    if !theirs.has(name) {
+                        bail!("{}: {path:?} has no message type or enum `{name}`", n.name.pos);
                     }
                     if named.insert(name.clone(), path.clone()).is_some() || out.declared.contains(name) {
                         bail!("{}: `{name}` is already imported", n.name.pos);
                     }
                     for dep in theirs.closure(name) {
-                        let ty = &theirs.types[&dep];
-                        match out.types.get(&dep) {
-                            Some(mine) if mine.fields != ty.fields => {
-                                bail!("{}: `{name}` needs {path:?}'s `{dep}`, which is not the `{dep}` already here", n.name.pos)
-                            }
-                            Some(_) => {}
-                            None => {
-                                out.types.insert(dep.clone(), ty.clone());
-                            }
+                        let differs = match (theirs.types.get(&dep), theirs.enums.get(&dep)) {
+                            (Some(ty), _) => out.types.get(&dep).map(|mine| mine.fields != ty.fields).unwrap_or(out.enums.contains_key(&dep)),
+                            (_, Some(e)) => out.enums.get(&dep).map(|mine| mine.values != e.values).unwrap_or(out.types.contains_key(&dep)),
+                            (None, None) => unreachable!("a closure is of types it has"),
+                        };
+                        if differs {
+                            bail!("{}: `{name}` needs {path:?}'s `{dep}`, which is not the `{dep}` already here", n.name.pos)
+                        }
+                        if let Some(ty) = theirs.types.get(&dep) {
+                            out.types.entry(dep.clone()).or_insert_with(|| ty.clone());
+                        }
+                        if let Some(e) = theirs.enums.get(&dep) {
+                            out.enums.entry(dep.clone()).or_insert_with(|| e.clone());
                         }
                         if dep != *name {
                             brought.entry(dep).or_insert_with(|| path.clone());
@@ -61,19 +65,46 @@ pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> 
                     }
                 }
             }
-            Tok::Ident(kw) if kw == "message" => {
+            Tok::Ident(kw) if kw == "message" || kw == "enum" => {
                 p.next();
-                let name = p.ident("message name", false)?;
+                let name = p.ident(&format!("{kw} name"), false)?;
                 if let Some(prev) = named.get(&name.name) {
                     bail!("{}: `{}` is imported from {prev:?}, and declared here too", name.pos, name.name);
                 }
                 if let Some(prev) = brought.get(&name.name) {
                     bail!("{}: `{}` comes from {prev:?} with a type imported from there, and is declared here too", name.pos, name.name);
                 }
-                if out.types.contains_key(&name.name) {
-                    bail!("{}: message `{}` is declared twice", name.pos, name.name);
+                if out.has(&name.name) {
+                    bail!("{}: `{}` is declared twice", name.pos, name.name);
                 }
                 p.expect(Tok::LBrace)?;
+                if kw == "enum" {
+                    let mut e = EnumType { name: name.name.clone(), values: vec![], doc, value_docs: vec![] };
+                    loop {
+                        let value_doc = p.docs();
+                        if *p.peek() == Tok::RBrace {
+                            let pos = p.pos();
+                            p.no_docs(&value_doc, pos)?;
+                            p.next();
+                            break;
+                        }
+                        let v = p.ident("a value's name", false)?;
+                        if e.values.contains(&v.name) {
+                            bail!("{}: `{}` has two values called `{}`", v.pos, name.name, v.name);
+                        }
+                        e.values.push(v.name);
+                        e.value_docs.push(value_doc);
+                        if *p.peek() == Tok::Comma {
+                            p.next();
+                        }
+                    }
+                    if e.values.is_empty() {
+                        bail!("{}: enum `{}` has no values", name.pos, name.name);
+                    }
+                    out.enums.insert(name.name.clone(), e);
+                    out.declared.push(name.name);
+                    continue;
+                }
                 let mut ty = MessageType { name: name.name.clone(), fields: vec![], doc, field_docs: vec![] };
                 loop {
                     let field_doc = p.docs();
@@ -102,11 +133,11 @@ pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> 
                 out.types.insert(name.name.clone(), ty);
                 out.declared.push(name.name);
             }
-            other => bail!("{pos}: expected `import` or `message`, found {other}"),
+            other => bail!("{pos}: expected `import`, `message` or `enum`, found {other}"),
         }
     }
     for (name, pos) in refs {
-        if !out.types.contains_key(&name) {
+        if !out.has(&name) {
             bail!("{pos}: `{name}` is not a field type, nor a message type declared or imported here; fields are {FIELD_TYPES}");
         }
     }

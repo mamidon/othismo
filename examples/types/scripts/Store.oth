@@ -28,6 +28,17 @@ export schemas application/bson {
     nick?: string
     rank?: i32
     boss?: Person
+    ## Enums, alone, in lists, and optional.
+    color: Color
+    palette: [Color]
+    fav?: Color
+  }
+
+  ## A color, carried as its name.
+  enum Color {
+    red
+    green
+    blue
   }
 
   ## Someone.

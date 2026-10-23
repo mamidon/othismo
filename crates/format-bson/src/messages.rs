@@ -26,7 +26,8 @@ pub enum FieldType {
     /// AssemblyScript.
     Uuid,
     /// Another message type, by name, carried as an embedded document
-    /// without a `$type`: the field's type says what it is.
+    /// without a `$type`: the field's type says what it is. Or an enum, by
+    /// name, carried as the name of its value.
     Named(String),
     /// `[T]`, a list of `T`: an array. `Array<T>` in AssemblyScript.
     List(Box<FieldType>),
@@ -123,6 +124,18 @@ impl Field {
     pub fn new(name: impl Into<String>, ty: FieldType) -> Field {
         Field { name: name.into(), ty, optional: false }
     }
+}
+
+/// `enum Color { red, green }`: one of a set of names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnumType {
+    pub name: String,
+    pub values: Vec<String>,
+    /// Its `##` documentation, and each value's, as for a message type.
+    #[serde(default)]
+    pub doc: String,
+    #[serde(default)]
+    pub value_docs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

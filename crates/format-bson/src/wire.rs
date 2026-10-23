@@ -17,6 +17,7 @@
 //! | a message type, `Person`    | document, without `$type` |
 //! | `[T]`, a list               | array |
 //! | `{T}`, a map                | document |
+//! | an enum, `Color`            | string, the value's name |
 //!
 //! An optional field, `name?: T`, is left out when it has no value; a
 //! reader takes a null as left out too.

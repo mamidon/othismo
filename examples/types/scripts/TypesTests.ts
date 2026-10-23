@@ -1,6 +1,6 @@
 import { Errno, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { Box, Reader, Uuid, Writer, decodeMessage, encodeMessage } from "othismo/bson"
-import { Person, Record, TypesTestsServer, store } from "./TypesTests.oth"
+import { Color, Person, Record, TypesTestsServer, nameOfColor, store } from "./TypesTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -15,7 +15,9 @@ function describe(r: Record): string {
     " tags=[" + r.tags.join(",") + "] grid=[" + grid.join(",") + "] team=[" + team.join(",") + "]" +
     " env={" + env(r.env) + "} teams={" + teams(r.teams) + "}" +
     " nick=" + (r.nick === null ? "-" : r.nick!) + " rank=" + (r.rank === null ? "-" : r.rank!.value.toString()) +
-    " boss=" + (r.boss === null ? "-" : person(r.boss!))
+    " boss=" + (r.boss === null ? "-" : person(r.boss!)) +
+    " color=" + nameOfColor(r.color) + " palette=[" + r.palette.map<string>((c: Color): string => nameOfColor(c)).join(",") + "]" +
+    " fav=" + (r.fav === null ? "-" : nameOfColor(r.fav!.value))
 }
 
 function env(m: Map<string, string>): string {
@@ -42,7 +44,7 @@ function person(p: Person): string {
 }
 
 /** The record the image writes at startup, described. */
-const STARTUP = "name=start count=7 born=1792758896789 id=123e4567-e89b-12d3-a456-426614174000 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}] env={HOME:/home,Content-Type:text/plain} teams={red:[{Cy 2}],blue:[]} nick=st rank=2 boss=-"
+const STARTUP = "name=start count=7 born=1792758896789 id=123e4567-e89b-12d3-a456-426614174000 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}] env={HOME:/home,Content-Type:text/plain} teams={red:[{Cy 2}],blue:[]} nick=st rank=2 boss=- color=green palette=[blue,red] fav=-"
 
 /** A record with something in every field. */
 function sample(): Record {
@@ -52,7 +54,7 @@ function sample(): Record {
   const teams = new Map<string, Array<Person>>()
   teams.set("solo", [new Person("Di", 4)])
   return new Record("sample", -3, new Date(1000), Uuid.parse("00000000-0000-0000-0000-0000000000ff")!, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)], env, teams,
-    null, new Box<i32>(-1), new Person("Ed", 5))
+    null, new Box<i32>(-1), new Person("Ed", 5), Color.blue, [], new Box<Color>(Color.red))
 }
 
 /** "" if `got` is `want`, or how it isn't. */

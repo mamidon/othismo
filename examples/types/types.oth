@@ -19,4 +19,6 @@ write /store/record Record {
   teams: { red: [{ name: "Cy", age: 2 }], blue: [] },
   nick: "st",
   rank: 2,
+  color: "green",
+  palette: ["blue", "red"],
 }

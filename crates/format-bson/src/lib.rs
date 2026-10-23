@@ -12,7 +12,7 @@ pub mod wire;
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
 use format::{Bindings, Format, Schemas};
-use messages::{FieldType, MessageType};
+use messages::{EnumType, FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -26,15 +26,23 @@ pub const BSON: &str = "application/bson";
 /// BSON messages, as a [`Format`].
 pub struct Bson;
 
-/// A set of message types, and the ones declared where it was read.
+/// A set of message types and enums, and the ones declared where it was
+/// read.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Messages {
     pub types: BTreeMap<String, MessageType>,
+    #[serde(default)]
+    pub enums: BTreeMap<String, EnumType>,
     /// The ones the file declares itself, in order; the rest it imports.
     pub declared: Vec<String>,
 }
 
 impl Messages {
+    /// Whether it has a message type or an enum called `name`.
+    pub fn has(&self, name: &str) -> bool {
+        self.types.contains_key(name) || self.enums.contains_key(name)
+    }
+
     /// `name`, and every type its fields name, however deeply, each once.
     pub fn closure(&self, name: &str) -> Vec<String> {
         let mut out = vec![name.to_string()];
@@ -75,6 +83,19 @@ impl Bson {
     }
 
     pub fn merge_messages(all: &mut Messages, from: &mut BTreeMap<String, String>, more: &Messages, origin: &str) -> Result<()> {
+        for (name, e) in &more.enums {
+            match all.enums.get(name) {
+                Some(prev) if prev.values != e.values => {
+                    let before = from.get(name).map_or("another file", String::as_str);
+                    bail!("`{name}` is declared one way by {before} and another by {origin}; an image can't use both")
+                }
+                Some(_) => {}
+                None => {
+                    all.enums.insert(name.clone(), e.clone());
+                    from.insert(name.clone(), origin.to_string());
+                }
+            }
+        }
         for (name, ty) in &more.types {
             match all.types.get(name) {
                 Some(prev) if prev.fields != ty.fields => {
@@ -104,10 +125,10 @@ impl Bson {
     pub fn document_messages(schemas: &Messages, h: &str) -> String {
         let mut out = String::new();
         let types: Vec<&MessageType> = schemas.declared.iter().filter_map(|t| schemas.types.get(t)).collect();
-        if types.is_empty() {
-            return out;
+        let enums: Vec<&EnumType> = schemas.declared.iter().filter_map(|t| schemas.enums.get(t)).collect();
+        if !types.is_empty() {
+            writeln!(out, "{h} Messages\n\nPayloads of `{}`, each named by its `$type`.\n", BSON).unwrap();
         }
-        writeln!(out, "{h} Messages\n\nPayloads of `{}`, each named by its `$type`.\n", BSON).unwrap();
         for ty in types {
             writeln!(out, "{h}# `{}`\n", ty.name).unwrap();
             if !ty.doc.is_empty() {
@@ -122,6 +143,21 @@ impl Bson {
                 let doc = doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|");
                 let optional = if f.optional { ", optional" } else { "" };
                 writeln!(out, "| `{}` | {}{optional} | {doc} |", f.name, f.ty).unwrap();
+            }
+            out.push('\n');
+        }
+        if !enums.is_empty() {
+            writeln!(out, "{h} Enums\n\nCarried as the name of their value, a string.\n").unwrap();
+        }
+        for e in enums {
+            writeln!(out, "{h}# `{}`\n", e.name).unwrap();
+            if !e.doc.is_empty() {
+                writeln!(out, "{}\n", e.doc).unwrap();
+            }
+            out.push_str("| Value | |\n|---|---|\n");
+            for (v, doc) in e.values.iter().zip(&e.value_docs) {
+                let doc = doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|");
+                writeln!(out, "| `{v}` | {doc} |").unwrap();
             }
             out.push('\n');
         }
@@ -155,7 +191,8 @@ impl Format for Bson {
     }
 
     fn same(&self, a: &Schemas, b: &Schemas) -> bool {
-        Bson::messages(a).types == Bson::messages(b).types
+        let (a, b) = (Bson::messages(a), Bson::messages(b));
+        a.types == b.types && a.enums == b.enums
     }
 
     fn encode(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<Vec<u8>, String> {
@@ -175,7 +212,7 @@ impl Format for Bson {
         let messages = Bson::messages(schemas);
         let ty = message_type(&messages, ty)?;
         match ty.field(field) {
-            Some(f) => literal(&f.ty, raw),
+            Some(f) => literal(&messages, &f.ty, raw),
             None => Err(format!("`{}` has no field `{field}`", ty.name)),
         }
     }
@@ -185,12 +222,16 @@ impl Format for Bson {
         Some(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))).collect())
     }
 
+    /// Only message types: an enum can't be a payload.
     fn declared(&self, schemas: &Schemas) -> Vec<String> {
-        Bson::messages(schemas).declared
+        let m = Bson::messages(schemas);
+        m.declared.into_iter().filter(|t| m.types.contains_key(t)).collect()
     }
 
     fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings> {
-        (!types.is_empty()).then(|| bindings::assemblyscript(&Bson::messages(schemas), types, library))
+        let m = Bson::messages(schemas);
+        let enums = m.declared.iter().any(|t| m.enums.contains_key(t));
+        (!types.is_empty() || enums).then(|| bindings::assemblyscript(&m, types, library))
     }
 
     fn document(&self, schemas: &Schemas, h: &str) -> String {
@@ -204,10 +245,11 @@ fn message_type<'a>(schemas: &'a Messages, name: &str) -> Result<&'a MessageType
 }
 
 /// Reads `text` as a literal for a field of type `t`.
-fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
+fn literal(schemas: &Messages, t: &FieldType, text: &str) -> std::result::Result<Value, String> {
     let bad = || format!("`{text}` is not a valid {t}");
     Ok(match t {
         FieldType::String | FieldType::Bytes | FieldType::Uuid => Value::Str(text.to_string()),
+        FieldType::Named(n) if schemas.enums.contains_key(n) => Value::Str(text.to_string()),
         FieldType::Time => text.parse().map(Value::Int).unwrap_or_else(|_| Value::Str(text.to_string())),
         FieldType::Bool => match text {
             "true" => Value::Bool(true),
@@ -313,6 +355,16 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
             }
             wire::int_to_bson(t, *i)
         }
+        (FieldType::Named(n), v) if schemas.enums.contains_key(n) => {
+            let e = &schemas.enums[n];
+            match v {
+                Value::Str(s) if e.values.contains(s) => B::String(s.clone()),
+                v => {
+                    let values: Vec<String> = e.values.iter().map(|v| format!("{v:?}")).collect();
+                    return Err(format!("`{at}` is a `{n}`, one of {}, but was given {v}", values.join(", ")));
+                }
+            }
+        }
         (FieldType::Named(n), Value::Object(given)) => {
             let ty = message_type(schemas, n)?;
             let doc = document(schemas, ty, given, at)?;
@@ -375,8 +427,9 @@ mod tests {
         let err = |src: &str| format!("{:#}", Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap_err());
         assert!(err("message A { x: Strin }").contains("1:16: `Strin` is not a field type, nor a message type declared or imported here"));
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
-        assert!(err("message A {} message A {}").contains("message `A` is declared twice"));
-        assert!(err("object A {}").contains("expected `import` or `message`"));
+        assert!(err("message A {} message A {}").contains("`A` is declared twice"));
+        assert!(err("message A {} enum A { a }").contains("`A` is declared twice"));
+        assert!(err("object A {}").contains("expected `import`, `message` or `enum`"));
         assert!(err(r#"import { A } from "./a.oth""#).contains("no ./a.oth here"));
 
         let mut import = |_: &str| Ok(messages(GREETING));
@@ -487,6 +540,44 @@ mod tests {
         let schemas = Bson::schemas(&m);
         assert_eq!(Bson.literal(&schemas, "T", "at", "5"), Ok(Value::Int(5)));
         assert_eq!(Bson.literal(&schemas, "T", "at", "2026-10-23T00:00:00Z"), Ok(Value::Str("2026-10-23T00:00:00Z".into())));
+    }
+
+    const COLORS: &str = r#"
+        ## A color.
+        enum Color {
+          ## The first.
+          red, green
+          blue
+        }
+        message Paint { color: Color, palette: [Color], fav?: Color }
+    "#;
+
+    #[test]
+    fn fields_may_be_enums() {
+        let m = messages(COLORS);
+        assert_eq!(m.enums["Color"].values, ["red", "green", "blue"]);
+        assert_eq!(m.declared, ["Color", "Paint"]);
+        assert_eq!(Bson.declared(&Bson::schemas(&m)), ["Paint"], "an enum is not a payload");
+        assert_eq!(m.closure("Paint"), ["Paint", "Color"]);
+        let bytes = Bson::encode_message(&m, "Paint", &value(r#"{ color: "red", palette: ["blue", "red"] }"#)).unwrap();
+        assert_eq!(Bson.show(&bytes).unwrap()[1].1, r#"["blue", "red"]"#);
+        let err = Bson::encode_message(&m, "Paint", &value(r#"{ color: "pink", palette: [] }"#)).unwrap_err();
+        assert!(err.contains(r#"`Paint.color` is a `Color`, one of "red", "green", "blue", but was given "pink""#), "{err}");
+        assert_eq!(Bson.literal(&Bson::schemas(&m), "Paint", "color", "green"), Ok(Value::Str("green".into())));
+        let doc = Bson::document_messages(&m, "##");
+        assert!(doc.contains("## Enums\n\nCarried as the name of their value, a string.\n\n### `Color`\n\nA color.\n\n| Value | |\n|---|---|\n| `red` | The first. |\n| `green` |  |\n"), "{doc}");
+        let err = |src: &str| format!("{:#}", Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap_err());
+        assert!(err("enum E {}").contains("enum `E` has no values"));
+        assert!(err("enum E { a, a }").contains("`E` has two values called `a`"));
+
+        let mut import = |_: &str| Ok(messages(COLORS));
+        let m = Bson::parse_messages(r#"import { Paint } from "./c.oth""#, &mut import).unwrap();
+        assert!(m.enums.contains_key("Color"), "an enum comes with the types that name it");
+        let e = format!("{:#}", Bson::parse_messages(r#"enum Color { red } import { Paint } from "./c.oth""#, &mut import).unwrap_err());
+        assert!(e.contains("not the `Color` already here"), "{e}");
+        let mut all = Bson::schemas(&messages("enum Color { red }"));
+        let e = Bson.merge(&mut all, &mut BTreeMap::new(), &Bson::schemas(&messages(COLORS)), "C.oth").unwrap_err().to_string();
+        assert!(e.contains("`Color` is declared one way by another file and another by C.oth"), "{e}");
     }
 
     #[test]
