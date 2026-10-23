@@ -5,9 +5,6 @@ image uses another, and how one is sealed into a single file for deployment,
 in the way a Docker image is built from a Dockerfile. It builds on
 [the namespace design](namespace.md).
 
-This is the design the runtime is moving to. The runtime today implements
-the earlier one, with `.img` files for images and `.iface` files for headers.
-
 ## One language
 
 Images and headers are both `.oth` files, in one language. A file can

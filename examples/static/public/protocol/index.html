@@ -1,0 +1,700 @@
+<!doctype html>
+<!-- Generated from docs/protocol.md by examples/static/site.mjs (task build:docs). Edit the source, not this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The protocol — Protocol — othismo</title>
+  <meta name="description" content="The three layers: the namespace, the protocol every object speaks, and payload formats; the host ABI and the SDK.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/objects/">Objects</a>
+          <a class="nav-link" href="/protocol/" aria-current="page">Protocol</a>
+          <a class="nav-link" href="/docs/">Namespaces</a>
+          <a class="nav-link" href="/images/">Building</a>
+          <a class="nav-link" href="/reference/">Reference</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Protocol</div>
+        <h1>The protocol</h1>
+        <p class="lede">Objects reach each other in three layers. The namespace decides where a
+path leads, the protocol says what can be asked of it, and a payload format
+says what the bytes in a request or an answer mean. Othismo owns the first
+two and keeps them small and fixed; the third belongs to the objects.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#three-layers">Three layers</a></li>
+          <li><a href="#layer-0-the-namespace">Layer 0: the namespace</a></li>
+          <li><a href="#layer-1-the-protocol">Layer 1: the protocol</a></li>
+          <li><a href="#layer-2-payload-formats">Layer 2: payload formats</a></li>
+          <li><a href="#the-host-abi">The host ABI</a></li>
+          <li><a href="#the-sdk">The SDK</a></li>
+          <li><a href="#not-yet">Not yet</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<h2 id="three-layers">Three layers</h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it is</th>
+<th>Who understands it</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0, the namespace</td>
+<td>views, mounts, <code>bind</code>, <code>expose</code>, resolving a path</td>
+<td>the runtime</td>
+</tr>
+<tr>
+<td>1, the protocol</td>
+<td>verb, path, flags, status, streams, cancel, forward</td>
+<td>the runtime and every object</td>
+</tr>
+<tr>
+<td>2, payload formats</td>
+<td>the bytes in a request or an answer, and what they mean</td>
+<td>the objects that exchange them</td>
+</tr>
+</tbody></table></div>
+<p>The split is the one 9P and HTTP both make. 9P is a short list of messages
+(<code>Tread</code>, <code>Twrite</code>, <code>Tstat</code>, ...), and what each file server says through
+reads and writes, such as the commands written to <code>/net/tcp/clone</code> or a
+<code>ctl</code> file, is that server&#39;s business. HTTP is a method, a path and headers,
+and the body is whatever its <code>Content-Type</code> says it is.</p>
+<p>Layers 0 and 1 change rarely and on purpose. A new kind of object, a new
+message type or a new payload format changes neither: the runtime routes a
+payload by its path and verb, never by what is inside it.</p>
+<h2 id="layer-0-the-namespace">Layer 0: the namespace</h2>
+<p>Every object has a <strong>view</strong>, the paths it can send requests to, and a
+<strong>served tree</strong>, the paths it answers for. The image builds each view;
+an object can rearrange its own afterwards, but only using what it can
+already see. <a href="/docs/">Namespaces</a> covers the model, how paths
+resolve, and what the checker can work out from it.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Othismo</th>
+<th>Plan 9</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>in an image: <code>mount &lt;at&gt; &lt;instance&gt; [readonly]</code></td>
+<td><code>mount(fd, afd, old, flag, aname)</code>, which makes the kernel send <code>Tattach</code></td>
+<td>Attach an instance&#39;s whole served tree at a point in a view. Only an image can do it.</td>
+</tr>
+<tr>
+<td>in an instance block: <code>bind &lt;at&gt; &lt;path&gt;</code></td>
+<td><code>bind(name, old, flag)</code></td>
+<td>Give an instance what <code>&lt;path&gt;</code> means in the image&#39;s own view.</td>
+</tr>
+<tr>
+<td><code>bind(src, at, flags)</code> → status</td>
+<td><code>bind(name, old, flag)</code></td>
+<td>Make <code>at</code> in the caller&#39;s view mean whatever <code>src</code> means now. Later changes to <code>src</code> don&#39;t affect it.</td>
+</tr>
+<tr>
+<td><code>unmount(at)</code> → status</td>
+<td><code>unmount(name, old)</code></td>
+<td>Take a mount out of the caller&#39;s view.</td>
+</tr>
+<tr>
+<td><code>expose(at, src, flags)</code> → status</td>
+<td>none; <code>exportfs</code> serves a whole namespace over 9P</td>
+<td>Splice part of the caller&#39;s view into the tree it serves. Requests under <code>at</code> go straight to <code>src</code> and never reach the caller&#39;s <code>serve</code>.</td>
+</tr>
+<tr>
+<td>in an image: <code>export &lt;path&gt; [at &lt;path&gt;] [readonly]</code></td>
+<td>none</td>
+<td>What an instance of the image serves: part of the image&#39;s view, at a path of its choosing.</td>
+</tr>
+<tr>
+<td>each instance gets the view the image built for it</td>
+<td><code>rfork(RFNAMEG)</code>, <code>rfork(RFCNAMEG)</code></td>
+<td>Where a view comes from. Plan 9 shares, copies or starts a process&#39;s namespace afresh. Othismo always builds it from the image, and never inherits one.</td>
+</tr>
+</tbody></table></div>
+<p>The flags are <code>READONLY</code>, and later <code>BEFORE</code> and <code>AFTER</code> for union mounts.
+A read-only mount, bind or exposure lets only safe verbs through, and the
+restriction only accumulates along a chain. Plan 9 has <code>MCREATE</code> as well,
+and no read-only flag.</p>
+<p>Nothing here is a message. <code>bind</code>, <code>unmount</code> and <code>expose</code> are host calls an
+object makes about its own view, and <code>mount</code>, <code>bind</code> in an instance block,
+and <code>export</code> are lines in an image.</p>
+<h2 id="layer-1-the-protocol">Layer 1: the protocol</h2>
+<p>A request is a verb, a path in the sender&#39;s view, flags, and optionally a
+payload. An answer is a status and, for a successful one, optionally a
+payload. Every request gets at least one answer; several, if it is a stream.</p>
+<pre><code class="language-text">request   ticket verb path flags [payload]
+answer    ticket ok done [payload]
+          ticket error errno code description
+payload   type[s] length[4] bytes[length]
+</code></pre>
+<p><code>[s]</code> is a string with its length first, <code>[n]</code> is n bytes, as in the 9P
+manual. A payload&#39;s <code>type</code> is a content type (see
+<a href="#content-types">Content types</a>); the runtime carries it and the bytes
+without looking at either.</p>
+<p>There are no handles. Every request carries its whole path, and the runtime
+resolves it afresh each time. That is what 9P&#39;s <code>walk</code>, <code>open</code> and <code>clunk</code>
+are for, and Othismo doesn&#39;t need them: the runtime&#39;s resolution and the
+server&#39;s own reading of the path do the walk, the checks <code>open</code> would make
+are made on every request, and there is nothing to clunk.</p>
+<h3 id="operations">Operations</h3>
+<p>Each 9P message starts with <code>size[4] type[1] tag[2]</code>, and those are left out
+here, as are the ticket, verb, path and flags every Othismo request starts
+with.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Othismo</th>
+<th>9P</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>none; the image&#39;s <code>mount</code> (Layer 0)</td>
+<td><code>Tattach fid[4] afid[4] uname[s] aname[s]</code> → <code>Rattach qid[13]</code></td>
+<td>Connect to a server&#39;s tree as a user; the fid names its root.</td>
+</tr>
+<tr>
+<td>none; every request carries its whole path</td>
+<td><code>Twalk fid[4] newfid[4] nwname[2] nwname*(wname[s])</code> → <code>Rwalk nwqid[2] nwqid*(qid[13])</code></td>
+<td>Resolve names one at a time from a fid; <code>newfid</code> names the result.</td>
+</tr>
+<tr>
+<td>none; the read-only rule is applied to every request</td>
+<td><code>Topen fid[4] mode[1]</code> → <code>Ropen qid[13] iounit[4]</code></td>
+<td>Prepare a fid for I/O in a mode; permissions are checked here.</td>
+</tr>
+<tr>
+<td>none; nothing to release, and a stream ends with <code>cancel</code></td>
+<td><code>Tclunk fid[4]</code> → <code>Rclunk</code></td>
+<td>Forget a fid, and any state the server attached to it.</td>
+</tr>
+<tr>
+<td><code>read</code> → <code>ok done payload</code></td>
+<td><code>Tread fid[4] offset[8] count[4]</code> → <code>Rread count[4] data[count]</code></td>
+<td>Othismo: all of what is at the path, once, with its content type. 9P: up to <code>count</code> bytes from <code>offset</code>; reading a directory gives stat records. Safe.</td>
+</tr>
+<tr>
+<td><code>watch</code> → <code>ok more payload</code>, repeated, then <code>ok done</code></td>
+<td>none; repeated <code>Tread</code> of a file that blocks, such as <code>/dev/cons</code></td>
+<td>Payloads as they happen, until the server ends the stream or the caller cancels it. Safe.</td>
+</tr>
+<tr>
+<td><code>list</code> → <code>ok more stat</code>, repeated, then <code>ok done</code></td>
+<td><code>Tread</code> of a directory fid → <code>Rread</code> of <code>stat[n]</code> records</td>
+<td>What is directly under the path, a stat record each. Safe.</td>
+</tr>
+<tr>
+<td><code>stat</code> → <code>ok done stat</code></td>
+<td><code>Tstat fid[4]</code> → <code>Rstat stat[n]</code></td>
+<td>What is at the path: see <a href="#stat-records">Stat records</a>. Safe.</td>
+</tr>
+<tr>
+<td>none</td>
+<td><code>Twstat fid[4] stat[n]</code> → <code>Rwstat</code></td>
+<td>Change metadata: rename, change mode, truncate.</td>
+</tr>
+<tr>
+<td><code>write [payload]</code> → <code>ok done [payload]</code>, or a stream</td>
+<td><code>Twrite fid[4] offset[8] count[4] data[count]</code> → <code>Rwrite count[4]</code></td>
+<td>Othismo: change what is at the path or act on it. The server may answer with a payload, which belongs to this request alone, so a write and its result can&#39;t be split by anyone else&#39;s write. 9P: bytes at an offset; answers how many were written.</td>
+</tr>
+<tr>
+<td><code>create [payload]</code> → <code>ok done [payload]</code>, or a stream</td>
+<td><code>Tcreate fid[4] name[s] perm[4] mode[1]</code> → <code>Rcreate qid[13] iounit[4]</code></td>
+<td>Make something new under the path; conventionally answered with a stat record of what was made. 9P creates and opens it, and the fid then names it.</td>
+</tr>
+<tr>
+<td><code>remove</code> → <code>ok done</code></td>
+<td><code>Tremove fid[4]</code> → <code>Rremove</code></td>
+<td>Remove what is at the path. 9P clunks the fid as well, whether or not the remove worked.</td>
+</tr>
+<tr>
+<td><code>cancel(ticket)</code> → the stream&#39;s last answer, <code>ok done</code></td>
+<td><code>Tflush oldtag[2]</code> → <code>Rflush</code></td>
+<td>Give up on a request made earlier; answers after it are dropped.</td>
+</tr>
+<tr>
+<td>any request with the <code>operator</code> flag</td>
+<td>none; who is asking is settled at <code>Tattach</code></td>
+<td>A request from whoever runs the image (see <a href="#operator-requests">Operator requests</a>).</td>
+</tr>
+<tr>
+<td><code>error errno[4] code[s] description[s]</code></td>
+<td><code>Rerror ename[s]</code></td>
+<td>The request failed: see <a href="#errors">Errors</a>. 9P&#39;s error is a free-form string.</td>
+</tr>
+<tr>
+<td>a server calls <code>forward(req, path)</code>; the caller gets no message for it</td>
+<td>none; a proxy makes its own request and copies the answers back</td>
+<td>Hand a request being served to a path in the server&#39;s own view. The answers go straight to the original caller.</td>
+</tr>
+<tr>
+<td>none yet</td>
+<td><code>Tversion</code>, <code>Tauth</code></td>
+<td>Agree on a version and a message size; prove who the user is.</td>
+</tr>
+</tbody></table></div>
+<h3 id="safe-verbs">Safe verbs</h3>
+<p><code>read</code>, <code>watch</code>, <code>list</code> and <code>stat</code> are <strong>safe</strong>: they ask about something
+without changing it. <code>write</code>, <code>create</code> and <code>remove</code> are not. A read-only
+mount answers every unsafe request with <code>read_only</code>, and the server never
+sees it.</p>
+<p>Safety is the only property of a verb that the runtime acts on. Nothing makes
+a server honour it, any more than anything stops an HTTP GET from deleting a
+record; a server that changes something when it handles a <code>read</code> is simply
+wrong.</p>
+<h3 id="streams">Streams</h3>
+<p>Any request can be answered several times. Each answer says whether it is
+the last (<code>done</code>), and the last may carry no payload. <code>watch</code> and <code>list</code> are
+always streams; a header marks any other answer that is one with <code>*</code>. There
+is no other streaming or subscription mechanism.</p>
+<p>A caller can <code>cancel</code> a request at any time. The server is told, if it
+wants to know, and the stream ends for the caller at once.</p>
+<h3 id="operator-requests">Operator requests</h3>
+<p>The <code>operator</code> flag marks a request made by whoever runs the image: its
+startup requests, and requests an image makes of the instances inside it.
+Objects have no way to set it: the host call they make requests with
+takes no flags. A header marks a request only the operator may make with
+<code>operator</code>, as in <code>/hosts/{name}  operator write text/plain</code>, and the
+runtime answers anyone else <code>forbidden</code>, whether or not checks are on, as
+it refuses an unsafe verb through a read-only mount.</p>
+<p>That is how an object leaves a path to whoever runs it, and how the
+runtime&#39;s own objects are configured: an operator <code>write</code> of their root.</p>
+<h3 id="errors">Errors</h3>
+<p>A failed request is answered with an error, and that is its last answer.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>errno</th>
+<th>code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td><code>not_found</code></td>
+<td>nothing is at the path, or the sender&#39;s view doesn&#39;t reach it</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>read_only</code></td>
+<td>an unsafe verb through a read-only mount, or of something that can&#39;t change</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>not_supported</code></td>
+<td>something is at the path, but it doesn&#39;t take that verb</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>is_directory</code></td>
+<td>a directory where something else was needed</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>not_directory</code></td>
+<td>something else where a directory was needed</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>exists</code></td>
+<td><code>create</code> of something already there</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>invalid</code></td>
+<td>a malformed path, or a payload the server couldn&#39;t make sense of</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>io</code></td>
+<td>the outside world failed</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>forbidden</code></td>
+<td>a request only the operator may make, from an object</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>unsupported_type</code></td>
+<td>the server doesn&#39;t take payloads of that content type</td>
+</tr>
+</tbody></table></div>
+<p><code>errno</code> is what a program compares. <code>code</code> is its name, and must be the name
+the table gives it, so a log or another transport can be read without the
+table. <code>description</code> is free text for people, such as why a test failed.</p>
+<p>The runtime itself answers <code>not_found</code>, <code>not_supported</code>, <code>read_only</code>,
+<code>invalid</code> (for a malformed path) and <code>forbidden</code>. Everything else, including
+<code>unsupported_type</code>, comes from servers.</p>
+<h3 id="stat-records">Stat records</h3>
+<p><code>stat</code> answers one stat record, <code>list</code> streams one per entry, and <code>create</code>
+conventionally answers one. A stat record is a payload of the content type
+<code>application/x-othismo-stat</code>, which a header can write as <code>Stat</code>. Its bytes
+are, little-endian:</p>
+<pre><code class="language-text">name[s] kind[1] length[8] type[s] version[8]
+</code></pre>
+<ul>
+<li><code>name</code>: the last segment of its path.</li>
+<li><code>kind</code>: 0 for something read whole, 1 for a directory.</li>
+<li><code>length</code>: in bytes, or 0 for a directory or if it isn&#39;t known.</li>
+<li><code>type</code>: the content type a <code>read</code> would answer with, or empty.</li>
+<li><code>version</code>: changes whenever what a <code>read</code> would answer changes, or 0 if
+the server doesn&#39;t keep track. It is what an HTTP ETag would be made from.</li>
+</ul>
+<p>This is the one payload layout the protocol defines. 9P&#39;s own stat carries
+much more, such as owners, permissions and times; Othismo has no users, and
+leaves times to the objects that keep them.</p>
+<h3 id="forward">Forward</h3>
+<p>A server can hand a request it is serving to a path in its own view. The
+runtime resolves the path as if the server had sent the request itself
+(through its view, read-only mounts and its <code>needs</code>), and delivers it there
+with the original caller&#39;s ticket. The answers go straight to that caller;
+the server that forwarded never sees them.</p>
+<p>A proxy could do the same by making its own request and copying every answer
+back, which is what a 9P proxy has to do. <code>forward</code> saves the copying and
+the bookkeeping, for streams and cancels too, and makes a promise the other
+way can&#39;t: StaticSite never sees the bytes it serves.</p>
+<h3 id="what-the-runtime-checks">What the runtime checks</h3>
+<p>On every request it checks the path and verb against the sender&#39;s <code>needs</code>
+and the receiver&#39;s <code>serves</code> (see <a href="objects.md#enforcement">Objects</a>), the
+read-only rule and the operator rule, and that only a stream gets more than
+one answer. It never checks a payload. The checker compares content types
+between needs and what is mounted when an image is built, and servers
+answer <code>unsupported_type</code> for anything they don&#39;t take.</p>
+<h2 id="layer-2-payload-formats">Layer 2: payload formats</h2>
+<p>A payload is a content type and some bytes. The content type says which
+<strong>format</strong> the bytes are in; the format, and nothing else, says what is
+inside them, including which of the format&#39;s own types they hold.</p>
+<h3 id="content-types">Content types</h3>
+<p>Content types are media types, as in HTTP: <code>text/plain</code>, <code>text/html</code>,
+<code>application/octet-stream</code>, <code>application/bson</code>. A server that serves files
+answers each with the type its name suggests; an object that exchanges BSON
+messages answers <code>application/bson</code>, whatever message it is.</p>
+<p>In headers, <code>*/*</code> stands for any payload and <code>text/*</code> for any text. A server
+that takes <code>write */*</code> meets a need to write <code>text/plain</code>; a need to
+<code>read -&gt; text/*</code> isn&#39;t met by a server that only promises <code>read -&gt; */*</code>.
+Types and subtypes compare without regard to case. A parameter a header
+writes, such as <code>charset=utf-8</code>, must be present and equal; one it leaves
+out constrains nothing.</p>
+<h3 id="formats">Formats</h3>
+<p>A format is identified by its media type, and supplies everything Othismo
+does with payloads of that type. It does all of it when a module or an image
+is built; the runtime uses none of it.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>A format supplies</th>
+<th>Used by</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>a schema language, and a parser for it</td>
+<td>everything below</td>
+</tr>
+<tr>
+<td>a rule for when two schemas of one type agree</td>
+<td>the checker, when two modules declare the same type</td>
+</tr>
+<tr>
+<td>an encoder for a literal written in an image or a slot</td>
+<td>the image builder</td>
+</tr>
+<tr>
+<td>a bindings generator for each language</td>
+<td><code>othismo bindings</code></td>
+</tr>
+<tr>
+<td>documentation rendered from its schemas</td>
+<td><code>othismo doc</code></td>
+</tr>
+</tbody></table></div>
+<p>Text needs no format: <code>text/*</code> payloads are their bytes, in UTF-8.</p>
+<h3 id="bson">BSON</h3>
+<p><code>application/bson</code> is the first format, and the one the AssemblyScript
+library supports. A payload is one BSON document whose first key, <code>$type</code>,
+names its message type; the remaining keys are its fields:</p>
+<pre><code class="language-text">## Configures a Greeter; sent once at startup by the image.
+message Greeting {
+  ## Put before each name.
+  prefix: string
+  ## End with `!` rather than `.`.
+  excited: bool
+}
+</code></pre>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Field type</th>
+<th>BSON</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>string</code></td>
+<td>string</td>
+</tr>
+<tr>
+<td><code>bool</code></td>
+<td>boolean</td>
+</tr>
+<tr>
+<td><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>u8</code>, <code>u16</code></td>
+<td>int32</td>
+</tr>
+<tr>
+<td><code>i64</code>, <code>u32</code>, <code>u64</code></td>
+<td>int64</td>
+</tr>
+<tr>
+<td><code>f32</code>, <code>f64</code></td>
+<td>double</td>
+</tr>
+<tr>
+<td><code>bytes</code></td>
+<td>binary (generic subtype)</td>
+</tr>
+</tbody></table></div>
+<p>Fields are flat, and there are no nested messages, arrays or optional fields
+yet. Adding them changes only this format.</p>
+<p>A message type is its name and its exact fields. Two modules in one image
+may both declare <code>Greeting</code> if they agree on its fields, and can&#39;t be used
+together if they don&#39;t; that is the format&#39;s rule, checked when the image is
+built.</p>
+<h3 id="where-schemas-live">Where schemas live</h3>
+<p>A module&#39;s schemas are in a file next to its header, in the format&#39;s own
+language: <code>scripts/Greeter.messages</code> for BSON. A schema file can import
+types from another one, or from another module&#39;s <code>.wasm</code>:</p>
+<pre><code class="language-text">import { Greeting } from &quot;../greeter/scripts/Greeter.messages&quot;
+</code></pre>
+<p>The schemas are embedded in the compiled module beside its header, one
+custom section per format, so a module describes its payloads as well as
+its paths. Another module&#39;s build can generate bindings for both from the
+<code>.wasm</code> alone.</p>
+<p>The <code>.oth</code> language never names a message type. A header says
+<code>/greeting  write application/bson</code>, and its <code>##</code> comment says that the
+payload is a <code>Greeting</code>. An image writes a BSON payload as a literal of the
+format (see <a href="images.md#startup-requests">Building images</a>), with the type
+named inside it, as the format requires.</p>
+<h2 id="the-host-abi">The host ABI</h2>
+<p>The ABI is Layer 1 as host calls. Paths, content types and descriptions
+are UTF-8; a length of 0 for both a type and its bytes means no payload.</p>
+<p>Imports, from module <code>othismo</code>, plus <code>env.abort</code>:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Import</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>call(verb, path, path_len, type, type_len, body, body_len, expect) -&gt; ticket</code></td>
+<td>make a request. With <code>expect</code> 0, the ticket is 0 and answers are dropped</td>
+</tr>
+<tr>
+<td><code>reply(req, type, type_len, body, body_len, done)</code></td>
+<td>answer a request being served, successfully</td>
+</tr>
+<tr>
+<td><code>fail(req, errno, desc, desc_len)</code></td>
+<td>answer it with an error, the last answer</td>
+</tr>
+<tr>
+<td><code>forward(req, path, path_len)</code></td>
+<td>hand it to a path in our view</td>
+</tr>
+<tr>
+<td><code>cancel(ticket)</code></td>
+<td>give up on a call; later answers are dropped</td>
+</tr>
+<tr>
+<td><code>bind(src, src_len, at, at_len, flags) -&gt; errno</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>unmount(at, at_len) -&gt; errno</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>expose(at, at_len, src, src_len, flags) -&gt; errno</code></td>
+<td></td>
+</tr>
+</tbody></table></div>
+<p>Exports: <code>memory</code>, and</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Export</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>rt_inbox(len) -&gt; ptr</code></td>
+<td>a buffer for the host to write into</td>
+</tr>
+<tr>
+<td><code>rt_serve(req, verb, flags, path_len, type_len, body_len)</code></td>
+<td>a request; the inbox holds the path, the type, then the bytes</td>
+</tr>
+<tr>
+<td><code>rt_answer(ticket, errno, type_len, body_len, done)</code></td>
+<td>an answer. With <code>errno</code> 0, the inbox holds the type then the bytes; otherwise it holds the description</td>
+</tr>
+<tr>
+<td><code>rt_start()</code></td>
+<td>once the image is set up</td>
+</tr>
+<tr>
+<td><code>rt_cancel(req)</code></td>
+<td>optional. Without it, a cancelled request&#39;s answers are dropped until the module ends it</td>
+</tr>
+</tbody></table></div>
+<p>Request ids are numbered per server, and tickets per caller. Answering an
+unknown request id is an error that stops the run.</p>
+<h2 id="the-sdk">The SDK</h2>
+<p>The AssemblyScript library follows the layers, and generated code joins
+them:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it has</th>
+<th>Where it comes from</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>&quot;othismo&quot;</code></td>
+<td><code>Server</code>, <code>Request</code>, <code>Response</code>, <code>Call</code>, <code>Verb</code>, <code>Errno</code>, <code>Payload</code>, <code>Stat</code>, <code>ns</code> for requests and the view, and continuations such as <code>OnPayload</code> and <code>OnText</code></td>
+<td>the library</td>
+</tr>
+<tr>
+<td><code>&quot;othismo/bson&quot;</code></td>
+<td><code>Message</code>, <code>Writer</code>, <code>Reader</code>, <code>registerMessage</code>, <code>bson.payload(msg)</code> and <code>bson.decode(payload)</code></td>
+<td>the library</td>
+</tr>
+<tr>
+<td><code>&quot;othismo/env&quot;</code></td>
+<td>clients and server bases for the runtime&#39;s traits: <code>ConsoleClient</code>, <code>ListenerClient</code>, <code>TestSuiteServer</code>, ...</td>
+<td>generated from <code>env</code></td>
+</tr>
+<tr>
+<td><code>./Greeter.oth</code></td>
+<td><code>GreeterServer</code>, and a client for each of its needs</td>
+<td>generated from <code>Greeter.oth</code></td>
+</tr>
+<tr>
+<td><code>./Greeter.messages</code></td>
+<td><code>Greeting</code>, registered with <code>&quot;othismo/bson&quot;</code></td>
+<td>generated from <code>Greeter.messages</code> by BSON&#39;s generator</td>
+</tr>
+</tbody></table></div>
+<p>A <code>Payload</code> is a content type and an <code>ArrayBuffer</code>. One whose type the
+module doesn&#39;t understand can be passed on unchanged.</p>
+<p><strong>Generated from the header</strong>, a server base class has a method for each
+request its <code>serves</code> lists, named for the verb and the path&#39;s literal
+segments, with the path&#39;s <code>{name}</code> segments as arguments. It routes each
+request to its method and answers the rest: <code>not_supported</code> for a verb
+nothing takes, and <code>unsupported_type</code> for a payload whose content type the
+entry doesn&#39;t take. A client has the same methods for the requests a need
+lists, and is made with the mount point it goes through. A need for one
+mount point gets one made already, named for the mount point&#39;s last segment:
+<code>cons</code> for <code>needs /dev/cons</code>. A need under a pattern, such as <code>needs /**</code>,
+gets only the class, to make with whichever mount point the module is told
+to use. Where an entry
+names one text type, such as <code>text/plain</code>, the methods take and give a
+<code>string</code>; otherwise a <code>Payload</code>.</p>
+<p><strong>Generated from the schemas</strong>, each message type is a class with its
+fields, encoders and decoders. What a payload holds is a question for its
+format: <code>bson.decode(payload)</code> gives a <code>Message</code>, told apart with
+<code>instanceof</code>, or an <code>Unknown</code> message for a type the module has no class
+for.</p>
+<p>So a module that uses another gets, from that module&#39;s <code>.wasm</code>, the paths
+and verbs it can call, as methods its compiler checks, and the classes for
+the payloads it sends, without reading anyone&#39;s guide to find out what
+<code>/greeting</code> takes. Only which message goes in which payload is left to the
+documentation and to the format&#39;s decoder.</p>
+<pre><code class="language-ts">import { Payload, Request, Errno, OnText, run } from &quot;othismo&quot;
+import { bson } from &quot;othismo/bson&quot;
+import { GreeterServer, cons, shouter } from &quot;./Greeter.oth&quot;
+import { Greeting } from &quot;./Greeter.messages&quot;
+
+class Greeter extends GreeterServer {
+  prefix: string = &quot;Hi, &quot;
+  excited: bool = false
+
+  start(): void {
+    cons.watch(new OnName())                    // watch / -&gt; text/plain*
+  }
+
+  writeGreeting(req: Request, body: Payload): void {   // write /greeting application/bson
+    const msg = bson.decode(body)
+    if (!(msg instanceof Greeting)) { req.fail(Errno.Invalid, &quot;expected a Greeting&quot;); return }
+    const g = msg as Greeting
+    this.prefix = g.prefix
+    this.excited = g.excited
+    req.end()
+  }
+
+  greet(name: string): void {
+    const greeting = this.prefix + name + (this.excited ? &quot;!&quot; : &quot;.&quot;)
+    cons.write(greeting, null)                  // write / text/plain
+    shouter.write(greeting, null)
+  }
+}
+
+const greeter = new Greeter()
+
+class OnName extends OnText {
+  text(line: string, done: bool): void { greeter.greet(line) }
+}
+
+run(greeter)
+</code></pre>
+<h2 id="not-yet">Not yet</h2>
+<ul>
+<li><code>version</code> and <code>auth</code>.</li>
+<li>Anything like <code>wstat</code>.</li>
+<li>Union mounts, and a <code>/srv</code> convention for posting a served tree.</li>
+<li>Timeouts on calls.</li>
+<li>Formats other than BSON. A TypeSpec emitter would be one way to write
+schemas for one.</li>
+</ul>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>othismo &middot; served by othismo</small>
+    </div>
+  </footer>
+</body>
+</html>

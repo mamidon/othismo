@@ -20,7 +20,8 @@
         <div class="nav-links">
           <a class="nav-link" href="/overview/">Overview</a>
           <a class="nav-link" href="/objects/">Objects</a>
-          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/protocol/">Protocol</a>
+          <a class="nav-link" href="/docs/">Namespaces</a>
           <a class="nav-link" href="/images/">Building</a>
           <a class="nav-link" href="/reference/">Reference</a>
         </div>
@@ -32,7 +33,7 @@
         <p class="lede">othismo runs images: sets of sandboxed AssemblyScript objects that reach each other only through the paths in their own namespaces. If the image doesn't put something in an object's view, the object can't reach it.</p>
         <div class="hero-actions">
           <a class="btn" href="/overview/">Read the overview &rarr;</a>
-          <a class="btn ghost" href="/docs/">The namespace design</a>
+          <a class="btn ghost" href="/protocol/">The protocol</a>
         </div>
       </div>
     </div>
@@ -47,28 +48,29 @@
         </div>
         <div class="showcase">
           <div>
-            <p>It touches the host in two ways: one listener, whose address the deployer can change, and the console for the access log. The site itself is packed into the image, and the HTTP server reaches it only through the site controller.</p>
+            <p>The site is an image of its own, which touches nothing on the host: it needs a listener and a console, and the image that runs it gives it the real ones, whose address the deployer can change. Its files are packed into it, and the HTTP server reaches them only through the site controller.</p>
             <p>The site also serves a file that exists only in its code. It counts the requests it has forwarded:</p>
             <p><span class="counter" id="hits">&ndash;</span></p>
             <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
           </div>
-          <pre><code>require listen : Listen { address: "127.0.0.1:8080" }
-
-instance net   : Environment.Tcp     { control / listen }
-instance cons  : Environment.Console
-instance files : Packed.Files        { include "./public/" }
-
-instance site : StaticSite {
-  mount files /files readonly
-}
+          <pre><code>needs /net/tcp  Listener
+needs /dev/cons Console
 
 instance http : HttpServer {
-  mount net  /net/tcp
-  mount site /www
-  mount cons /dev/cons
-  control /hosts/* Text { text: "/www" }
-  control /hosts/files.localhost Text { text: "/www/static" }
-}</code></pre>
+  bind  /net/tcp  /net/tcp
+  bind  /dev/cons /dev/cons
+  mount /www pages
+}
+
+instance pages : StaticSite {
+  mount /files files readonly
+}
+
+instance files : PackedFiles { include "./public/" }
+
+mount /http http
+write /http/hosts/* "/www"
+write /http/hosts/files.localhost "/www/static"</code></pre>
         </div>
       </div>
     </section>
@@ -95,7 +97,7 @@ instance http : HttpServer {
           <article class="pillar">
             <div class="num">03</div>
             <h3>The world is a server</h3>
-            <p>The console, TCP and files are servers the runtime implements, configured by the image alone. They are the only way out, and <code>--check</code> prints the most each object can ever reach.</p>
+            <p>The console, TCP and files are servers the runtime implements, given only as the needs of the image being run. They are the only way out, and <code>--check</code> prints them, and the most each object can ever reach.</p>
           </article>
         </div>
       </div>
@@ -113,8 +115,8 @@ instance http : HttpServer {
           <li class="step">
             <div class="n">1</div>
             <div>
-              <h3>Tcp accepts, http watches</h3>
-              <p><code>Environment.Tcp</code> streamed an <code>Accepted</code> to the HTTP server, which watched <code>/net/tcp/&lt;conn&gt;</code> until your whole request had arrived.</p>
+              <h3>The listener accepts, http watches</h3>
+              <p>The listener streamed your connection's name to the HTTP server, which watched <code>/net/tcp/&lt;conn&gt;/data</code> until your whole request had arrived.</p>
             </div>
           </li>
           <li class="step">
@@ -135,7 +137,7 @@ instance http : HttpServer {
             <div class="n">4</div>
             <div>
               <h3>The packed files answer the caller</h3>
-              <p><code>Packed.Files</code> replied with <code>Data</code> from the files built into the image, which went straight back to the HTTP server and out over your connection.</p>
+              <p><code>PackedFiles</code> answered with the file's bytes, as <code>text/html</code>, from the files built into the image. The answer went straight back to the HTTP server and out over your connection.</p>
             </div>
           </li>
         </ol>
@@ -151,7 +153,7 @@ instance http : HttpServer {
           <pre><code>task run:example:static     # http://127.0.0.1:8080
 task build:docs             # re-render the docs into examples/static/public
 task build:example:static   # seal it into examples/static/static.rti
-task run:example:static -- --set listen.address=0.0.0.0:8080</code></pre>
+task run:example:static -- --set listen=0.0.0.0:8080</code></pre>
         </div>
       </div>
     </section>

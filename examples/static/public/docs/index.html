@@ -4,8 +4,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Namespaces — Design — othismo</title>
-  <meta name="description" content="The namespace design: views, verbs, the AssemblyScript SDK, environment objects and the host ABI.">
+  <title>Namespaces — Namespaces — othismo</title>
+  <meta name="description" content="Namespaces: views and served trees, binds and exports, environment objects as needs, and what the checker can promise.">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,20 +21,20 @@
         <div class="nav-links">
           <a class="nav-link" href="/overview/">Overview</a>
           <a class="nav-link" href="/objects/">Objects</a>
-          <a class="nav-link" href="/docs/" aria-current="page">Design</a>
+          <a class="nav-link" href="/protocol/">Protocol</a>
+          <a class="nav-link" href="/docs/" aria-current="page">Namespaces</a>
           <a class="nav-link" href="/images/">Building</a>
           <a class="nav-link" href="/reference/">Reference</a>
         </div>
       </nav>
 
       <div class="hero-body">
-        <div class="eyebrow">Design</div>
+        <div class="eyebrow">Namespaces</div>
         <h1>Namespaces</h1>
-        <p class="lede">This document describes how objects in an image find and talk to each other.
-It replaces the earlier model, in which objects <code>emit</code>ted typed messages and
-the image routed them by <code>sender.Type</code> trees. That model needed new syntax for
-every new routing need. Here, almost everything is done by objects, by
-convention, in a Plan 9–style namespace.</p>
+        <p class="lede">This document describes how objects in an image find and reach each other:
+Layer 0 of <a href="/protocol/">the protocol</a>. Almost everything is done by
+objects, by convention, in a Plan 9–style namespace; the runtime only
+decides where each path leads.</p>
       </div>
     </div>
   </header>
@@ -45,12 +45,11 @@ convention, in a Plan 9–style namespace.</p>
         <div class="eyebrow">Contents</div>
         <ol>
           <li><a href="#the-model">The model</a></li>
-          <li><a href="#verbs">Verbs</a></li>
-          <li><a href="#the-assemblyscript-sdk">The AssemblyScript SDK</a></li>
+          <li><a href="#building-views">Building views</a></li>
+          <li><a href="#rearranging-a-view">Rearranging a view</a></li>
           <li><a href="#environment-objects">Environment objects</a></li>
-          <li><a href="#the-image">The image</a></li>
           <li><a href="#startup-order">Startup order</a></li>
-          <li><a href="#the-host-abi">The host ABI</a></li>
+          <li><a href="#what-the-checker-can-promise">What the checker can promise</a></li>
           <li><a href="#not-yet">Not yet</a></li>
         </ol>
       </nav>
@@ -61,31 +60,32 @@ convention, in a Plan 9–style namespace.</p>
 <p>Every instance has two trees.</p>
 <ul>
 <li><strong>Its view</strong> is the set of paths it can send requests to. The image builds
-the initial view with <code>mount</code>. The instance can rearrange its view at run
-time, but only using names it can already see.</li>
+the initial view with <code>mount</code> and <code>bind</code>. The instance can rearrange its
+view at run time, but only using names it can already see.</li>
 <li><strong>Its served tree</strong> is the set of paths it answers for. Nothing in it has to
 exist ahead of time. A served tree is whatever the instance&#39;s <code>serve</code> code
 says it is, like a Plan 9 file server.</li>
 </ul>
-<p>Mounting instance <code>site</code> at <code>/www</code> in <code>http</code>&#39;s view means that when <code>http</code>
-sends a request to <code>/www/index.html</code>, <code>site</code> receives it as a request for
+<p>Mounting instance <code>pages</code> at <code>/www</code> in <code>http</code>&#39;s view means that when <code>http</code>
+sends a request to <code>/www/index.html</code>, <code>pages</code> receives it as a request for
 <code>/index.html</code> in its own served tree.</p>
-<pre><code class="language-text">http&#39;s view                         site&#39;s view
-  /net/tcp  → net                     /files → files (read-only)
-  /www      → site
-  /dev/cons → cons
+<pre><code class="language-text">http&#39;s view                         pages&#39; view
+  /net/tcp  → the listener            /files → files (read-only)
+  /www      → pages
+  /dev/cons → the console
 </code></pre>
-<p>The image has a view of its own as well, which only its startup requests use
-(see <a href="#the-image">The image</a>).</p>
+<p>An image has a view of its own as well. Its startup requests resolve in it,
+its instances can be given parts of it with <code>bind</code>, and what it <code>export</code>s
+comes from it (see <a href="/images/">Building images</a>).</p>
 <p>Views are private. The same path can mean different things to different
 instances. Conventional names (<code>/dev/cons</code>, <code>/net/tcp</code>, <code>/files</code>) keep that
 manageable.</p>
 <h3 id="names-are-the-capabilities">Names are the capabilities</h3>
 <p>A path is resolved in the sender&#39;s view. A path that isn&#39;t in the view is
 <code>not_found</code>, exactly as if it didn&#39;t exist. Paths are plain strings, not
-unforgeable tokens. Putting a path in a message doesn&#39;t grant anything: the
+unforgeable tokens. Putting a path in a payload doesn&#39;t grant anything: the
 receiver resolves it in its own view. Access is controlled by what each view
-can see, and the image decides that.</p>
+can see, and the images decide that.</p>
 <h3 id="paths">Paths</h3>
 <p>Paths are absolute and <code>/</code>-separated. The runtime normalizes <code>//</code> and <code>.</code>
 segments and keeps a trailing <code>/</code>, because <code>/docs</code> and <code>/docs/</code> can mean
@@ -97,422 +97,190 @@ view.</p>
 <p>A trailing <code>/</code> means nothing in a mount point: <code>/www/</code> and <code>/www</code> name the
 same one.</p>
 <p>Resolution in a view picks the longest mount point that is a prefix of the
-path, on segment boundaries. <code>/www</code> matches <code>/www</code>, <code>/www/</code> and
-<code>/www/a/b</code>, but not <code>/wwwx</code>. Then it checks the target&#39;s exposures (see
-below) for the longest prefix of the remaining path.</p>
-<h2 id="verbs">Verbs</h2>
-<p>Every request carries a verb in its envelope, apart from its typed body. The
-runtime and any intermediary can therefore tell whether a request changes
-anything without understanding the body&#39;s type.</p>
+path, on segment boundaries. <code>/www</code> matches <code>/www</code>, <code>/www/</code> and <code>/www/a/b</code>,
+but not <code>/wwwx</code>. Then it checks the target&#39;s exposures (see below) for the
+longest prefix of the remaining path, and repeats until it reaches a server.
+A read-only mount or exposure anywhere along the way makes the result
+read-only.</p>
+<h2 id="building-views">Building views</h2>
+<p>An image builds each view from three lines (see
+<a href="images.md#views">Building images</a>):</p>
+<ul>
+<li><code>mount &lt;at&gt; &lt;instance&gt; [readonly]</code> puts an instance&#39;s whole served tree at
+<code>&lt;at&gt;</code>.</li>
+<li><code>bind &lt;at&gt; &lt;path&gt; [readonly]</code>, in an instance block, gives the instance
+what <code>&lt;path&gt;</code> means in the image&#39;s own view. That is how an image passes
+down what it was given, including the host&#39;s objects.</li>
+<li><code>needs &lt;at&gt; &lt;shape&gt;</code>, at the top level, leaves <code>&lt;at&gt;</code> in the image&#39;s view to
+be filled by whoever instantiates it: a parent image, or for the root
+image, the runtime.</li>
+</ul>
+<h2 id="rearranging-a-view">Rearranging a view</h2>
+<p>An instance can change its own view, and splice parts of it into the tree
+it serves, while it runs:</p>
 <div class="table"><table>
 <thead>
 <tr>
-<th>Verb</th>
-<th>Safe</th>
-<th>Idempotent</th>
-<th>Body</th>
-<th>Reply</th>
+<th>Operation</th>
+<th>Semantics</th>
 </tr>
 </thead>
 <tbody><tr>
-<td><code>read</code></td>
-<td>yes</td>
-<td>yes</td>
-<td>none</td>
-<td>one message, conventionally <code>Data { mime, data }</code></td>
+<td><code>bind(src, at, flags)</code></td>
+<td><code>at</code> now means whatever <code>src</code> means in our view at this moment.</td>
 </tr>
 <tr>
-<td><code>stat</code></td>
-<td>yes</td>
-<td>yes</td>
-<td>none</td>
-<td><code>Info { kind, size, mime }</code></td>
+<td><code>unmount(at)</code></td>
+<td><code>at</code> no longer means anything in our view.</td>
 </tr>
 <tr>
-<td><code>list</code></td>
-<td>yes</td>
-<td>yes</td>
-<td>none</td>
-<td>a stream of <code>Entry { name, kind }</code></td>
-</tr>
-<tr>
-<td><code>watch</code></td>
-<td>yes</td>
-<td>yes</td>
-<td>none</td>
-<td>a stream, until it ends or is cancelled</td>
-</tr>
-<tr>
-<td><code>write</code></td>
-<td>no</td>
-<td>yes</td>
-<td>a message</td>
-<td>ok</td>
-</tr>
-<tr>
-<td><code>create</code></td>
-<td>no</td>
-<td>no</td>
-<td>a message</td>
-<td><code>Entry</code> for what was made</td>
-</tr>
-<tr>
-<td><code>remove</code></td>
-<td>no</td>
-<td>yes</td>
-<td>none</td>
-<td>ok</td>
-</tr>
-<tr>
-<td><code>invoke</code></td>
-<td>no</td>
-<td>no</td>
-<td>a message</td>
-<td>anything: the escape hatch for RPC-shaped operations</td>
-</tr>
-<tr>
-<td><code>control</code></td>
-<td>no</td>
-<td>no</td>
-<td>a message or none</td>
-<td>anything; only the operator may send it</td>
+<td><code>expose(at, src, flags)</code></td>
+<td>Requests under <code>at</code> in our served tree go straight to <code>src</code> in our view; they never reach our <code>serve</code>.</td>
 </tr>
 </tbody></table></div>
-<p>A <strong>safe</strong> verb doesn&#39;t change anything. A mount or exposure can be
-<strong>read-only</strong>, in which case the runtime answers every unsafe verb sent
-through it with <code>read_only</code> and the server never sees it. The restriction only
-accumulates along a chain: something read-only stays read-only however many
-times it is re-bound or re-exposed.</p>
-<p><strong><code>control</code></strong> is the operator&#39;s verb: the image sends it in its startup
-requests, and objects can&#39;t. When an object calls with <code>control</code>, the runtime
-answers <code>forbidden</code> without resolving the path. An object that accepts only
-<code>control</code> at a path leaves that path to whoever runs the image; HttpServer&#39;s
-<code>/hosts/&lt;name&gt;</code> is one.</p>
-<p>Replies carry a <strong>status</strong>: <code>ok</code>, <code>not_found</code>, <code>read_only</code>, <code>not_supported</code>,
-<code>is_directory</code>, <code>not_directory</code>, <code>exists</code>, <code>invalid</code>, <code>io</code> or <code>forbidden</code>. A
-failure is just a reply with a status other than <code>ok</code>.</p>
-<p>A request may get several replies (a <strong>stream</strong>): each one says whether it is
-the last. <code>list</code> and <code>watch</code> use this, as does accepting connections. There
-is no other streaming or subscription mechanism.</p>
-<h2 id="the-assemblyscript-sdk">The AssemblyScript SDK</h2>
-<p>Message classes, <code>Writer</code>, <code>Reader</code> and <code>registerMessage</code> stay in
-<code>&quot;othismo&quot;</code>. The namespace SDK is <code>&quot;othismo/ns&quot;</code>. The conventional message
-types are in <code>&quot;othismo/env&quot;</code>.</p>
-<pre><code class="language-ts">export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke, Control }
-export function isSafe(v: Verb): bool
-
-export enum Status { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden }
-export enum Flag { None = 0, ReadOnly = 1 }
-
-/** A request made of our served tree. Keep it to answer later if needed. */
-export class Request {
-  readonly verb: Verb
-  readonly path: string            // relative to our root, e.g. &quot;/index.html&quot;
-  readonly body: Message | null
-  readonly cancelled: bool
-  readonly finished: bool          // answered or forwarded; answering again aborts
-  reply(body: Message | null): void          // Ok, and the last reply
-  stream(body: Message): void                // Ok, more to come
-  end(): void                                // Ok, no body, the last reply
-  fail(status: Status): void                 // the last reply
-  forward(path: string): void   // resolve `path` in OUR view; the answer goes straight to the caller
-}
-
-export class Response {
-  readonly status: Status
-  readonly body: Message | null
-  readonly done: bool              // false while a stream is still open
-  get ok(): bool
-}
-
-/** Stands in for a closure, which AssemblyScript lacks. Its fields hold the state. */
-export class Then { answer(res: Response): void }
-
-/** A request we made. */
-export class Call { cancel(): void }
-
-export namespace ns {
-  // Requests. `then` may be null when no answer is wanted.
-  function read(path: string, then: Then): Call
-  function stat(path: string, then: Then): Call
-  function list(path: string, then: Then): Call
-  function watch(path: string, then: Then): Call
-  function write(path: string, body: Message, then: Then | null): Call
-  function create(path: string, body: Message, then: Then | null): Call
-  function remove(path: string, then: Then | null): Call
-  function invoke(path: string, body: Message, then: Then | null): Call
-  function call(verb: Verb, path: string, body: Message | null, then: Then | null): Call
-
-  // Rearranging our view. Synchronous; `source` must resolve in our view.
-  function bind(source: string, at: string, flags?: Flag): Status
-  function unmount(at: string): Status
-
-  // Splices part of our view into our served tree at `at`. Requests under
-  // `at` then go straight to `source`; they never reach our serve().
-  function expose(at: string, source: string, flags?: Flag): Status
-
-  /** `root` + `path`, or null if `path` is not a clean absolute path. */
-  function join(root: string, path: string): string | null
-}
-
-export class Server {
-  start(): void {}                                   // once the image is set up
-  serve(req: Request): void { req.fail(Status.NotSupported) }
-  cancel(req: Request): void {}    // the caller gave up on a stream; it is ended for us afterwards
-}
-export function run(server: Server): void
-</code></pre>
-<p>Some details of this API:</p>
+<p>The only flag so far is <code>READONLY</code>; <code>BEFORE</code> and <code>AFTER</code>, for union mounts,
+are planned.</p>
 <ul>
-<li><strong><code>Then</code> objects take the place of callbacks.</strong> AssemblyScript closures
-can&#39;t capture variables, but classes have virtual methods, so a
-continuation object works as a closure. A connection&#39;s <code>OnData</code> object can
-<em>be</em> that connection&#39;s buffer. Underneath, the runtime numbers each call
-with a ticket, and the SDK maps tickets to <code>Then</code> objects.</li>
-<li><strong><code>forward</code> makes proxies stateless.</strong> A controller that maps paths onto
-another server never sees the answer.</li>
+<li><strong><code>bind</code> resolves <code>src</code> when it is called.</strong> The new mount points at
+whatever <code>src</code> named at that moment. Unmounting <code>src</code> later doesn&#39;t affect
+it, as with Plan 9&#39;s <code>bind</code>.</li>
 <li><strong><code>expose</code> is the delegation primitive.</strong> It can only expose what the
 instance can see, so it never widens what is reachable.</li>
-<li><strong>Unknown types pass through.</strong> A body of a type the module didn&#39;t
-register arrives as <code>Opaque</code>. It can&#39;t be read, but it can be passed on
-unchanged.</li>
-<li><strong><code>bind</code> resolves <code>source</code> when it is called.</strong> The new mount points at
-whatever <code>source</code> named at that moment. Unmounting <code>source</code> later doesn&#39;t
-affect it, as with Plan 9&#39;s <code>bind</code>.</li>
+<li><strong>Read-only only accumulates.</strong> Something read-only stays read-only however
+many times it is bound or exposed again.</li>
 </ul>
-<h3 id="example-a-site-controller">Example: a site controller</h3>
-<pre><code class="language-ts">import { Message } from &quot;othismo&quot;
-import { Server, Request, Verb, Status, Flag, ns, isSafe, run } from &quot;othismo/ns&quot;
-import { Data } from &quot;othismo/env&quot;
+<p>Every view is built by an image and none is inherited: there is no
+equivalent of Plan 9&#39;s <code>rfork</code>, since objects don&#39;t make other objects.</p>
+<pre><code class="language-ts">import { Server, Request, Verb, Errno, Flag, ns, run } from &quot;othismo&quot;
 
 class Site extends Server {
-  hits: u64 = 0
-
   start(): void {
-    ns.expose(&quot;/static&quot;, &quot;/files&quot;, Flag.ReadOnly)    // /static/* never reaches serve()
+    ns.expose(&quot;/static&quot;, &quot;/files&quot;, Flag.ReadOnly)    // /static/** never reaches serve()
   }
 
   serve(req: Request): void {
-    if (req.path == &quot;/hits&quot;) {                       // a synthetic file
-      if (req.verb == Verb.Read) req.reply(new Data(&quot;text/plain&quot;, String.UTF8.encode(this.hits.toString())))
-      else req.fail(Status.NotSupported)
-      return
-    }
-    if (!isSafe(req.verb)) { req.fail(Status.ReadOnly); return }
-    this.hits++
     req.forward(&quot;/files&quot; + (req.path.endsWith(&quot;/&quot;) ? req.path + &quot;index.html&quot; : req.path))
   }
 }
 run(new Site())
 </code></pre>
 <h2 id="environment-objects">Environment objects</h2>
-<p>Environment objects are servers implemented by the runtime. They are the only
-way to reach the outside world. An image declares one by its trait, from the
-runtime&#39;s own header, <code>env</code>: <code>instance net : Listener</code>. The trait is all the
-image and its objects know of it, and the runtime picks how to run it. Their
-configuration is a <code>control</code> of their
-root from the image (<code>control /net Listen { ... }</code>, with <code>net</code> mounted at
-<code>/net</code> in the image&#39;s view), and objects can&#39;t send <code>control</code>, so no object can open another port
-or move a files root. Changing it while the image runs isn&#39;t supported yet:
-they answer <code>control</code> with <code>not_supported</code>.</p>
+<p>Environment objects are servers implemented by the runtime, and they are the
+only way to reach the outside world. No image declares one. An image says
+what it needs with <code>needs</code>, and only the root image, the one being run, has
+its needs filled by the runtime with the real thing:</p>
+<pre><code class="language-text">needs /net/tcp  Listener      # a TCP listener
+needs /dev/cons Console       # stdin and stdout
+needs /srv/www  Files         # a directory on the host
+</code></pre>
+<p>The trait a root need names picks the object. Each root need is an object
+of its own: two <code>needs ... Listener</code> lines are two listeners. A root need
+that names any other trait, or a shape with no trait&#39;s name, is an error
+when the image is built. The root image can then configure each one, from
+its own view, and give it to the instances that should have it with <code>bind</code>.</p>
+<p>So everything a program can do to the host is listed in one place, the root
+image&#39;s <code>needs</code>, and <code>--check</code> prints it.</p>
+<p>An environment object is configured by an operator <code>write</code> of its root, which
+only an image can send. No object can open another port or move a files
+root. Changing the configuration once it has started isn&#39;t supported yet:
+they answer later writes of their root with <code>not_supported</code>.</p>
 <div class="table"><table>
 <thead>
 <tr>
 <th>Trait</th>
-<th>Config</th>
+<th>Configured with</th>
 <th>Serves</th>
 </tr>
 </thead>
 <tbody><tr>
 <td><code>Console</code></td>
-<td>none</td>
-<td><code>watch /</code>: a stream of <code>Line</code>, one per line of stdin, ending at EOF. <code>write /</code>: prints the body</td>
+<td>nothing</td>
+<td><code>watch /</code>: a stream of <code>text/plain</code>, one line of stdin each, without its line ending, until EOF. <code>write /</code>: prints the payload on a line of its own: <code>text/*</code> as it is, a stat record as its fields, anything else as its type and length</td>
 </tr>
 <tr>
 <td><code>Listener</code></td>
-<td><code>Listen { address }</code></td>
-<td><code>read /address</code>: <code>Text</code> with the bound address. <code>watch /accept</code>: a stream of <code>Accepted { conn }</code>. <code>watch /&lt;conn&gt;</code>: a stream of <code>Data</code> received, ending when the peer closes. <code>write /&lt;conn&gt;</code>: sends a <code>Data</code>&#39;s bytes. <code>remove /&lt;conn&gt;</code>: closes our side</td>
+<td><code>text/plain</code>: the address, e.g. <code>127.0.0.1:8080</code></td>
+<td><code>read /address</code>: the bound address. <code>watch /accept</code>: a stream of <code>text/plain</code> connection names. <code>watch /{conn}/data</code>: the bytes received, as <code>application/octet-stream</code>, until the peer closes. <code>write /{conn}/data</code>: sends the payload&#39;s bytes. <code>read /{conn}/remote</code>: the peer&#39;s address. <code>remove /{conn}</code>: closes our side, once everything is sent</td>
 </tr>
 <tr>
 <td><code>Files</code></td>
-<td><code>FilesRoot { path }</code></td>
-<td><code>read</code>: <code>Data</code> with a MIME type from the extension. <code>stat</code>: <code>Info</code>. <code>list</code>: a stream of <code>Entry</code>, sorted by name. Read-only: unsafe verbs get <code>read_only</code></td>
+<td><code>text/plain</code>: the directory, relative to the image</td>
+<td><code>read</code>: the file, with a content type from its extension. <code>stat</code> and <code>list</code>: stat records, the listing sorted by name. Read-only: unsafe verbs get <code>read_only</code></td>
 </tr>
 </tbody></table></div>
-<p><code>Packed.Files</code> answers exactly as <code>Files</code> does, from files copied
-into the image when it was built (see <a href="/images/">Building images</a>). It isn&#39;t
-an environment object, since it touches nothing outside the image.</p>
 <p>Console reads stdin only if something is watching it by the time the image
-has started. When there are several Console instances, each line goes to the
-next one in turn, and every watcher of that Console gets it.</p>
-<p>A Tcp connection can have one watcher; a second gets <code>exists</code>. Data that
+has started. When there are several Consoles, each line goes to the next one
+in turn, and every watcher of that Console gets it.</p>
+<p>A connection&#39;s data can have one watcher; a second gets <code>exists</code>. Data that
 arrives before anyone watches is kept for the first watcher. Files answers
-anything outside its root, including through symlinks, with <code>not_found</code>. <code>Console</code> prints
-a message whose only field is <code>text: string</code> verbatim, and anything else
-JSON-ish.</p>
-<p>In an image another one imports, these run in memory instead, touching
-nothing on the host (see <a href="images.md#importing-an-image">Importing an image</a>).</p>
-<h2 id="the-image">The image</h2>
-<p>What&#39;s left of the image language is instances, the mounts that make up each
-view, and startup requests, plus the packing and slots
-described in <a href="/images/">Building images</a>:</p>
-<pre><code class="language-text">require listen : Listen { address: &quot;127.0.0.1:8080&quot; }   # the host may change it
-
-instance http : HttpServer {
-  mount /net/tcp net
-  mount /www site
-  mount /dev/cons cons
-}
-
-instance site : StaticSite {           # scripts/StaticSite.wasm
-  mount /files files readonly
-}
-
-instance net   : Listener
-instance cons  : Console
-instance files : Packed.Files { include &quot;./public/&quot; }
-
-mount /net  net                        # the image&#39;s own view
-mount /http http
-
-control /net listen                                     # net&#39;s config
-control /http/hosts/localhost Text { text: &quot;/www&quot; }     # a startup request to http
-</code></pre>
-<ul>
-<li><code>mount &lt;path&gt; &lt;instance&gt; [readonly]</code> puts that instance&#39;s whole served tree
-at <code>&lt;path&gt;</code> in a view. Inside an instance&#39;s block it builds that instance&#39;s
-view. At the top level it builds the image&#39;s own view. Instances can be
-declared in any order, so an image can start from the instance at the top
-of the namespace and work down.</li>
-<li><code>&lt;verb&gt; &lt;path&gt; [Type { fields }]</code> is a request the image makes at startup,
-resolved in the image&#39;s view like any other request: <code>/http/hosts/localhost</code>
-reaches <code>/hosts/localhost</code> in <code>http</code>&#39;s served tree because <code>http</code> is
-mounted at <code>/http</code>. The image can only send requests to what it mounts, so
-an image with no top-level mounts sends none. Requests can appear anywhere
-in the image, and are made in the order they are written. The image
-ignores replies, except that a failure is printed to stderr as a warning.</li>
-<li><code>control</code> is the operator&#39;s verb, and these startup requests are the only
-place an image sends it. An environment object&#39;s config is a <code>control</code> of
-its root, so to configure one the image mounts it and sends that:
-<code>control /net listen</code>. Objects can&#39;t send <code>control</code> themselves.</li>
-<li>The runtime&#39;s message types (<code>Line</code>, <code>Text</code>, <code>Data</code>, <code>Info</code>, <code>Entry</code>,
-<code>Accepted</code>, <code>Listen</code>, <code>FilesRoot</code>) are always in scope; importing them
-<code>from env</code> is allowed but not needed. Any other type the image writes is
-imported from a header: <code>import { Greeting } from Greeter</code> takes it from
-that module, and <code>from &quot;./shared.iface&quot;</code> from a header file. An image never
-imports a type on its objects&#39; behalf, only the ones it writes itself. A
-type is its name and its fields, so a header may redeclare one of the
-runtime&#39;s types only with exactly the same fields, and two headers that
-declare one name differently can&#39;t be used in one image.</li>
-</ul>
-<h3 id="what-the-checker-can-promise">What the checker can promise</h3>
-<p>An instance can only bind what it can see and only expose what it can see.
-So the set of instances it can ever reach is bounded by the transitive closure
-of the image&#39;s mount edges, which can be computed without running anything.
-Read-only flags carry through the closure. <code>othismo --check</code> prints it:</p>
-<pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
-
-the image sees /net → net, /http → http
-
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: site rw, net rw, cons rw, files ro (via site)
-site   sees /files → files ro
-       can reach at most: files ro
-net    listens on 127.0.0.1:8080
-cons   reads stdin, writes stdout
-files  serves 11 built-in files, 105.6 KB
-</code></pre>
-<p>The checker also holds the image to its objects&#39; interfaces (see
-<a href="/objects/">Objects</a>): every mount must serve what its object needs there,
-and every startup request must be one its object serves. While the image
-runs, the runtime holds every object to its interface and every body to its
-type; <code>--no-checks</code> turns that off.</p>
+anything outside its root, including through symlinks, with <code>not_found</code>.</p>
+<h3 id="in-memory">In memory</h3>
+<p>The runtime also provides objects that serve the same traits and touch
+nothing outside the image. They are ordinary objects, imported from <code>env</code>,
+and any image can declare them and pass them to what it instantiates:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Object</th>
+<th>Serves</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MemoryConsole</code></td>
+<td><code>Console</code>, and <code>Terminal</code>: <code>write /typed</code> types a line, <code>watch /printed</code> streams whatever is written to it</td>
+</tr>
+<tr>
+<td><code>MemoryListener</code></td>
+<td><code>Listener</code>, and <code>Dialer</code>: <code>create /dial</code> with an <code>application/octet-stream</code> payload connects, the server receives the bytes, and the request&#39;s answers are everything the server writes, until it closes the connection</td>
+</tr>
+<tr>
+<td><code>PackedFiles</code></td>
+<td><code>FileTree</code>, from files copied into the image when it was built (see <a href="images.md#packed-files">Building images</a>)</td>
+</tr>
+</tbody></table></div>
+<p>This is how an image is tested: the test image is a root with no needs, and
+gives the image under test in-memory objects where its deployment would give
+it real ones.</p>
 <h2 id="startup-order">Startup order</h2>
 <ol>
-<li>Every instance is created and every view is built from the image&#39;s mounts.
-Module top-level code runs. It may already make requests, which are queued.</li>
-<li>The image&#39;s startup requests are delivered, in the order they are written.</li>
+<li>Every instance is created, and every view is built from the images&#39;
+mounts and binds. Module top-level code runs. It may already make
+requests, which are queued.</li>
+<li>Every image&#39;s startup requests are delivered, each image&#39;s in the order
+they are written, and an instantiated image&#39;s before those of the image
+that instantiates it, so it is set up by the time its parent configures
+it through what it exports.</li>
 <li><code>start()</code> runs on every Wasm instance, in start order.</li>
 <li>Environment objects start listening (stdin, sockets).</li>
 </ol>
-<p><strong>Start order</strong> follows the mounts: an instance starts after everything it
-mounts, so whatever it finds in its view has been configured and started
-first. Instances that don&#39;t depend on each other keep image order. Where
-instances mount each other, the one that comes first in the image starts
-last.</p>
+<p><strong>Start order</strong> follows the mounts and binds: an instance starts after
+everything it mounts, so whatever it finds in its view has been configured
+and started first. Mounting an instance of an image counts as mounting what
+it exports. Instances that don&#39;t depend on each other keep image order.
+Where instances mount each other, the one that comes first in the image
+starts last.</p>
 <p>The run ends when the queue is empty and no outside event can arrive any more.</p>
-<h2 id="the-host-abi">The host ABI</h2>
-<p>The path, verb, status and ticket travel as arguments. Only bodies are BSON,
-as before.</p>
-<p>Imports (module <code>othismo</code>), plus <code>env.abort</code>:</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Import</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>call(verb, path, path_len, body, body_len, expect) -&gt; ticket</code></td>
-<td><code>body_len</code> 0 means no body. With <code>expect</code> 0, the ticket is 0 and replies are dropped</td>
-</tr>
-<tr>
-<td><code>reply(req, status, body, body_len, done)</code></td>
-<td>answer a request we are serving</td>
-</tr>
-<tr>
-<td><code>forward(req, path, path_len)</code></td>
-<td>hand a request to a path in our view</td>
-</tr>
-<tr>
-<td><code>cancel(ticket)</code></td>
-<td>give up on a call; later replies are dropped</td>
-</tr>
-<tr>
-<td><code>bind(src, src_len, at, at_len, flags) -&gt; status</code></td>
-<td></td>
-</tr>
-<tr>
-<td><code>unmount(at, at_len) -&gt; status</code></td>
-<td></td>
-</tr>
-<tr>
-<td><code>expose(at, at_len, src, src_len, flags) -&gt; status</code></td>
-<td></td>
-</tr>
-</tbody></table></div>
-<p>Exports: <code>memory</code>, plus the following:</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Export</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>rt_inbox(len) -&gt; ptr</code></td>
-<td>a buffer for the host to write into</td>
-</tr>
-<tr>
-<td><code>rt_serve(req, verb, path_len, body_len)</code></td>
-<td>the inbox holds the path, then the body</td>
-</tr>
-<tr>
-<td><code>rt_answer(ticket, status, body_len, done)</code></td>
-<td>the inbox holds the body</td>
-</tr>
-<tr>
-<td><code>rt_start()</code></td>
-<td></td>
-</tr>
-<tr>
-<td><code>rt_cancel(req)</code></td>
-<td>optional. Without it, a cancelled request&#39;s replies are dropped until the module ends it</td>
-</tr>
-</tbody></table></div>
-<p>Request ids are numbered per server and tickets per caller. Replying to an
-unknown request id is an error that stops the run. Replies to a cancelled
-request, and replies to a call made with <code>expect</code> 0, are dropped.</p>
+<h2 id="what-the-checker-can-promise">What the checker can promise</h2>
+<p>An instance can only bind what it can see and only expose what it can see.
+So the set of instances it can ever reach is bounded by the transitive closure
+of the images&#39; mount and bind edges, which can be computed without running
+anything. Read-only flags carry through the closure, and an instance of an
+image reaches only what it exports. <code>othismo --check</code> prints it:</p>
+<pre><code class="language-text">slot listen : text/plain = &quot;127.0.0.1:8080&quot; (default)
+
+from the host:
+  /net/tcp    listens on 127.0.0.1:8080
+  /dev/cons   reads stdin, writes stdout
+
+web.http    sees /net/tcp → /net/tcp, /dev/cons → /dev/cons, /www → web.pages
+            can reach at most: /net/tcp rw, /dev/cons rw, web.pages rw, web.files ro (via web.pages)
+web.pages   sees /files → web.files ro
+            can reach at most: web.files ro
+web.files   serves 12 built-in files, 149.6 KB
+</code></pre>
+<p>The checker also holds the images to their objects&#39; interfaces (see
+<a href="/objects/">Objects</a>): every mount must serve what its object needs there,
+and every startup request must be one its object serves.</p>
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>Union mounts (several servers at one path, tried in order, as Plan 9&#39;s
@@ -520,6 +288,7 @@ request, and replies to a call made with <code>expect</code> 0, are dropped.</p>
 <li>A <code>/srv</code> convention for posting a served tree so that others can mount it.</li>
 <li>Timeouts on calls.</li>
 <li>Writable Files.</li>
+<li>Reconfiguring an environment object while it runs.</li>
 </ul>
 
     </article>

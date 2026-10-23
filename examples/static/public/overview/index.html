@@ -21,7 +21,8 @@
         <div class="nav-links">
           <a class="nav-link" href="/overview/" aria-current="page">Overview</a>
           <a class="nav-link" href="/objects/">Objects</a>
-          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/protocol/">Protocol</a>
+          <a class="nav-link" href="/docs/">Namespaces</a>
           <a class="nav-link" href="/images/">Building</a>
           <a class="nav-link" href="/reference/">Reference</a>
         </div>
@@ -45,7 +46,7 @@ and the interfaces; the runtime holds the code to them.</p>
         <ol>
           <li><a href="#why">Why</a></li>
           <li><a href="#objects">Objects</a></li>
-          <li><a href="#messages">Messages</a></li>
+          <li><a href="#requests">Requests</a></li>
           <li><a href="#namespaces">Namespaces</a></li>
           <li><a href="#the-edge">The edge</a></li>
           <li><a href="#images">Images</a></li>
@@ -85,26 +86,28 @@ business.</p>
 <p>Objects are single-threaded and share nothing. They react to requests and to
 the answers to their own requests, and that is their whole life.</p>
 <p>What you read instead of the code is the object&#39;s <strong>interface</strong>, a header
-that travels inside the module. It declares the message types the object
-uses, the paths it serves and what each takes and answers, what it needs to
-find in its view, and its documentation. The checker holds every image to its
-objects&#39; interfaces, and the runtime holds every object to its own while it
-runs. <a href="/objects/">Objects</a> covers them in detail.</p>
-<h2 id="messages">Messages</h2>
-<p>A request is a path, a verb and, for some verbs, a typed message as its body.
-The message types are declared in the objects&#39; interfaces and are what you
-specify: what an object accepts, what it answers, and what each field
-means.</p>
-<p>The verb is a convention. It states what the sender expects handling the
-request to imply: <code>read</code>, <code>stat</code>, <code>list</code> and <code>watch</code> ask about something
-without changing it; <code>write</code> and <code>remove</code> change something in a way that is
-safe to repeat; <code>create</code> and <code>invoke</code> may do anything, once per request. The
-verbs are modelled on HTTP&#39;s methods, and like those, nothing makes a server
-honour them. A server that changes something when it handles a <code>read</code> is
-simply wrong, as a GET that deletes a record is.</p>
-<p>A failure is just an answer with a status other than <code>ok</code>, and a stream is
+that travels inside the module. It declares the paths the object serves and
+what each takes and answers, what it needs to find in its view, and its
+documentation. The checker holds every image to its objects&#39; interfaces, and
+the runtime holds every object to its own while it runs. <a href="/objects/">Objects</a>
+covers them in detail.</p>
+<h2 id="requests">Requests</h2>
+<p>A request is a path, a verb and, for some verbs, a payload: a content type
+and some bytes. There are seven verbs. <code>read</code>, <code>stat</code>, <code>list</code> and <code>watch</code> ask
+about something without changing it; <code>write</code>, <code>create</code> and <code>remove</code> may
+change it. Like HTTP&#39;s methods, nothing makes a server honour that. A server
+that changes something when it handles a <code>read</code> is simply wrong, as a GET
+that deletes a record is.</p>
+<p>A failure is just an answer with an error instead of <code>ok</code>, and a stream is
 just several answers to one request. There are no exceptions crossing
 objects, no callbacks and no separate subscription mechanism.</p>
+<p>The runtime never looks inside a payload. Its content type, such as
+<code>text/html</code> or <code>application/bson</code>, says which format its bytes are in, and
+what they mean is between the objects that exchange them, as an HTTP body
+is between a client and a server. Othismo&#39;s own part, the namespace and the
+protocol, stays small and fixed however many kinds of payload there are.
+<a href="/protocol/">The protocol</a> sets out all three layers and how they compare
+with 9P.</p>
 <h2 id="namespaces">Namespaces</h2>
 <p>Every object has its own namespace, as every process does in Plan 9. It
 has two sides: its <strong>view</strong>, the paths it can send requests to, and its
@@ -113,7 +116,7 @@ another&#39;s view at <code>/www</code> means that when the second sends a reque
 <code>/www/index.html</code>, the first receives a request for <code>/index.html</code>.</p>
 <p>What isn&#39;t in an object&#39;s view doesn&#39;t exist for it. A path it can&#39;t see is
 <code>not_found</code>, exactly as if nothing were there, and mentioning a path in a
-message gives the receiver nothing, because the receiver resolves it in its
+payload gives the receiver nothing, because the receiver resolves it in its
 own view. An object can rearrange its view and share parts of it while it
 runs, but only using what it can already see, and a read-only mount stays
 read-only however it is passed on.</p>
@@ -124,85 +127,101 @@ namespace requests and knows nothing about files; a static site is an object
 that forwards reads to a files tree it was given read-only, and never sees
 the bytes it serves.</p>
 <h2 id="the-edge">The edge</h2>
-<p>Some objects are built into the runtime. <strong>Environment objects</strong> are the
-console, TCP and the host&#39;s files, and they are the only way any object
-reaches the world outside the image. Their configuration comes from the image
-alone, so no object can open another port or access files not originally
-visible to the image.</p>
-<p>These are the side effects you specify. The question &quot;what can this program
-do to the machine it runs on&quot; has a short answer: whatever its environment
-objects allow, and nothing else.</p>
+<p>The only way any object reaches the world outside the image is through
+<strong>environment objects</strong>, built into the runtime: the console, TCP and the
+host&#39;s files. No image declares one. An image says what it <strong>needs</strong>, and
+only the image being run has its needs filled with the real thing; the
+images it uses get them passed down, or get stand-ins that run in memory.</p>
+<p>So the question &quot;what can this program do to the machine it runs on&quot; has a
+short answer, written in one place: whatever the needs of the image being
+run allow, and nothing else. Their configuration comes from that image
+alone, so no object can open another port or reach files that weren&#39;t given
+to the image.</p>
 <h2 id="images">Images</h2>
-<p>An image is a file that declares the objects, what each one can see, and
-optionally configures them by sending them some initial messages. Those use
-<code>control</code>, a verb only the image may send: objects can&#39;t configure each
-other, or the environment.</p>
-<p>This one, slightly trimmed, serves this site:</p>
-<pre><code class="language-text"># parameters that must be provided to run this image; optional here, since
-# there are defaults
-require listen : Listen { address: &quot;127.0.0.1:8080&quot; }
+<p>An image is a file that declares objects, what each one can see, and
+optionally some requests to configure them when it starts. Images and
+interfaces are written in the same language, <code>.oth</code>, and an image can use
+another as an object of its own: one made of objects, serving only what it
+exports.</p>
+<p>This one serves this site. It touches nothing on the host itself; it needs
+a listener and a console:</p>
+<pre><code class="language-text">needs /net/tcp  Listener
+needs /dev/cons Console
 
 instance http : HttpServer {
-  mount /net/tcp net
-  mount /www site
-  mount /dev/cons cons
+  bind  /net/tcp  /net/tcp
+  bind  /dev/cons /dev/cons
+  mount /www pages
 }
 
-instance site : StaticSite {
+instance pages : StaticSite {
   mount /files files readonly
 }
 
-# a socket
-instance net   : Listener
-instance cons  : Console
 # brings the host&#39;s ./public folder into the image, at build time
-instance files : Packed.Files { include &quot;./public/&quot; }
+instance files : PackedFiles { include &quot;./public/&quot; }
 
-# what the image itself can reach, to configure it
-mount /net  net
-mount /http http
-
-# configures the socket to listen to localhost on port 8080 by default
-control /net listen
 # tells http to serve every host from /www in its view
-control /http/hosts/* Text { text: &quot;/www&quot; }
+mount /http http
+write /http/hosts/* &quot;/www&quot;
+</code></pre>
+<p>And this one runs it, giving it the real thing:</p>
+<pre><code class="language-text">import Site from &quot;./site.oth&quot;
+
+# a parameter, which whoever runs the image may change
+require listen : text/plain = &quot;127.0.0.1:8080&quot;
+
+needs /net/tcp  Listener
+needs /dev/cons Console
+
+instance web : Site {
+  bind /net/tcp  /net/tcp
+  bind /dev/cons /dev/cons
+}
+
+# configures the socket to listen where `listen` says
+write /net/tcp listen
 </code></pre>
 <p>Because an object can only pass on what it can see, the most any object can
-ever reach is fixed by the image&#39;s mounts and can be worked out without
+ever reach is fixed by the images&#39; mounts and can be worked out without
 running anything. <code>othismo --check</code> prints it, along with everything the
 image touches on the host:</p>
-<pre><code class="language-text">slot listen : Listen { address: &quot;127.0.0.1:8080&quot; (default) }
+<pre><code class="language-text">slot listen : text/plain = &quot;127.0.0.1:8080&quot; (default)
 
-the image sees /net → net, /http → http
+from the host:
+  /net/tcp    listens on 127.0.0.1:8080
+  /dev/cons   reads stdin, writes stdout
 
-http   sees /net/tcp → net, /www → site, /dev/cons → cons
-       can reach at most: site rw, net rw, cons rw, files ro (via site)
-site   sees /files → files ro
-       can reach at most: files ro
-net    listens on 127.0.0.1:8080
-cons   reads stdin, writes stdout
-files  serves 11 built-in files, 105.6 KB
+web.http    sees /net/tcp → /net/tcp, /dev/cons → /dev/cons, /www → web.pages
+            can reach at most: /net/tcp rw, /dev/cons rw, web.pages rw, web.files ro (via web.pages)
+web.pages   sees /files → web.files ro
+            can reach at most: web.files ro
+web.files   serves 12 built-in files, 149.6 KB
 </code></pre>
 <p>That is a promise about the code without reading the code: <code>StaticSite</code>
 can&#39;t write anything, can&#39;t reach the network and can&#39;t see any file outside
 <code>public/</code>, whatever it was written to do.</p>
+<p>The site&#39;s tests are an image too. It gives the site an in-memory listener
+instead of a real one, and puts a test suite beside it to dial it.</p>
 <h2 id="building-and-deploying">Building and deploying</h2>
 <p>An image can be built, as a Docker image is built from a Dockerfile, into a
-single file holding its compiled objects, its message types and any files it
+single file holding its compiled objects, their interfaces and any files it
 packs. The built file is what you deploy, and it is the same thing that was
-checked: nothing outside it is read when it runs, except through its
-environment objects.</p>
-<p>What changes between deployments is declared as a <strong>slot</strong>: a message the
+checked: nothing outside it is read when it runs, except through its needs.</p>
+<p>What changes between deployments is declared as a <strong>slot</strong>: a value the
 image requires from whoever runs it, such as the address to listen on. The
 image&#39;s author decides the slot&#39;s type and defaults; the deployer supplies
-the rest. Slots can stand in for messages but never change mounts, so a
+the rest. Slots can stand in for payloads but never change mounts, so a
 deployer can&#39;t widen what any object reaches, and <code>--check</code> on the built
 file still tells the whole story.</p>
 <h2 id="where-it-comes-from">Where it comes from</h2>
 <ul>
-<li><strong>Plan 9</strong>: per-process namespaces, mounts, and servers whose trees are
-whatever their code says they are. Most of Othismo&#39;s model is Plan 9&#39;s,
-applied to objects in one program instead of processes on a network.</li>
+<li><strong>Plan 9</strong>: per-process namespaces, mounts, a small fixed protocol, and
+servers whose trees are whatever their code says they are. Most of
+Othismo&#39;s model is Plan 9&#39;s, applied to objects in one program instead of
+processes on a network.</li>
+<li><strong>HTTP</strong>: verbs that say what handling a request implies, and bodies whose
+content type says what they are.</li>
 <li><strong>Docker</strong>: an image built from a source file into one artifact that runs
 anywhere, configured from outside by the people who deploy it.</li>
 <li><strong>Smalltalk</strong>, to a lesser extent: a system made of objects that interact
@@ -211,12 +230,15 @@ only by sending each other messages, kept and shipped as an image.</li>
 <h2 id="where-it-stands">Where it stands</h2>
 <p>Othismo is a work in progress, and the runtime here, <code>othismo</code>, is a
 from-scratch rewrite that started from the top: the model first, with the
-semantics adjusted as they are used. Some things the premise needs aren&#39;t
-there yet. A trapped object stops the whole run, calls never time out, and
-there is no support yet for testing an image&#39;s objects against stand-in
-environment objects.</p>
-<p>The details are in <a href="/objects/">Objects</a>, <a href="/docs/">Namespaces</a> and
-<a href="/images/">Building images</a>.</p>
+semantics adjusted as they are used.</p>
+<p>What it has so far: the namespace and the protocol, payloads the runtime
+never reads, with BSON as their first format, one <code>.oth</code> language for
+images and interfaces, images used as objects, and environment objects
+given only as the needs of the image being run.</p>
+<p>Some things the premise needs aren&#39;t there yet. A trapped object stops the
+whole run, and calls never time out.</p>
+<p>The details are in <a href="/protocol/">The protocol</a>, <a href="/docs/">Namespaces</a>,
+<a href="/objects/">Objects</a> and <a href="/images/">Building images</a>.</p>
 
     </article>
   </main>

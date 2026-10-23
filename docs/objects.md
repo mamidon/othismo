@@ -5,10 +5,6 @@ its namespace, and it comes with a header that says exactly what it serves
 and what it needs. The header is what you review; the runtime holds the code
 to it.
 
-This is the design the runtime is moving to. The runtime today implements
-the earlier one, in which headers are `.iface` files that declare message
-types.
-
 ## What an object is
 
 A **module** is a compiled `.wasm` file. An **object** is one running
@@ -376,8 +372,8 @@ A module is built from its header, its schemas and its source:
    - from the schemas, by the format's generator, `scripts/Greeter.messages.ts`:
      a class for each message type, with its encoder and decoder.
 2. The source is compiled to `.wasm`.
-3. The header and the schemas are appended to the module, as custom sections:
-   `othismo embed scripts/Greeter.wasm`.
+3. The header and the schemas beside it are appended to the module, as
+   custom sections: `othismo embed scripts/Greeter.oth scripts/Greeter.wasm`.
 
 `task` does all three for the examples. The generated bindings are ordinary
 files, committed next to the source, so editors and compilers see them like
@@ -425,9 +421,13 @@ as the image runs.
 
 ## Where it stands
 
-The runtime implements the earlier design: `.iface` headers that declare
-message types, a runtime that decodes and checks every body, and generated
-bindings for message types only. AssemblyScript is the only language with
-bindings generators. The checker doesn't model exposures: a mount is checked
-against what its target serves, not what the target might expose there at
-run time, so only the runtime catches a mismatch behind an exposure.
+Headers, schemas and bindings work as described here. Every example object
+has a header and is written against the bindings generated from it, the
+checker holds images to their objects' headers, and the runtime holds the
+objects to them while they run.
+
+AssemblyScript is the only language with bindings generators so far, and
+BSON the only payload format. The checker doesn't model an object's own
+exposures: a mount is checked against what its target serves, not what the
+target might expose there at run time, so only the runtime catches a
+mismatch behind one.

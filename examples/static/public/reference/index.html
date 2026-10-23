@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Built-in objects — Reference — othismo</title>
-  <meta name="description" content="The built-in objects and the runtime's message types, generated from the runtime's header.">
+  <meta name="description" content="The runtime's objects and the shapes they are made of, generated from the runtime's header.">
   <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,7 +21,8 @@
         <div class="nav-links">
           <a class="nav-link" href="/overview/">Overview</a>
           <a class="nav-link" href="/objects/">Objects</a>
-          <a class="nav-link" href="/docs/">Design</a>
+          <a class="nav-link" href="/protocol/">Protocol</a>
+          <a class="nav-link" href="/docs/">Namespaces</a>
           <a class="nav-link" href="/images/">Building</a>
           <a class="nav-link" href="/reference/" aria-current="page">Reference</a>
         </div>
@@ -30,7 +31,7 @@
       <div class="hero-body">
         <div class="eyebrow">Reference</div>
         <h1>Built-in objects</h1>
-        <p class="lede">The objects the runtime implements, which are the only way any object reaches the world outside the image, and the shapes and message types they use. An image declares one by its trait, <code>instance net : Listener</code>, and the runtime picks how to run it; <code>Packed.Files</code> is declared by its own name. They are declared in the runtime&#39;s own header, <code>env</code>, and this page is generated from it.</p>
+        <p class="lede">The objects the runtime implements, and the shapes they are made of. Console, Listener and Files are the only way any object reaches the world outside the image: the image being run gets one by needing it, <code>needs /net/tcp Listener</code>, and the runtime picks how to run it. The others touch nothing outside the image, and any image can declare one by its name. They are declared in the runtime&#39;s own header, <code>env</code>, and this page is generated from it.</p>
       </div>
     </div>
   </header>
@@ -43,9 +44,10 @@
           <li><a href="#console">Console</a></li>
           <li><a href="#listener">Listener</a></li>
           <li><a href="#files">Files</a></li>
-          <li><a href="#packed-files">Packed.Files</a></li>
+          <li><a href="#memoryconsole">MemoryConsole</a></li>
+          <li><a href="#memorylistener">MemoryListener</a></li>
+          <li><a href="#packedfiles">PackedFiles</a></li>
           <li><a href="#shapes">Shapes</a></li>
-          <li><a href="#messages">Messages</a></li>
         </ol>
       </nav>
     </aside>
@@ -54,9 +56,9 @@
 <h2 id="console">Console</h2>
 <p>A console: lines in, and anything out. The runtime runs it on the host&#39;s
 stdin and stdout.</p>
-<p>Whatever is written to it is printed on a line of its own. A message whose
-only field is a string <code>text</code>, such as a <code>Line</code>, prints as that text; any
-other as its type and fields.</p>
+<p>Whatever is written to it is printed on a line of its own: text as it
+is, a stat record as its fields, and anything else as its content type
+and length.</p>
 <h3 id="serves">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -68,7 +70,7 @@ other as its type and fields.</p>
 </thead>
 <tbody><tr>
 <td><code>/</code></td>
-<td><code>watch -&gt; Line*</code>, <code>write Opaque</code></td>
+<td><code>watch -&gt; text/plain*</code>, <code>write */*</code></td>
 <td>Watch for every line of input, until it ends; write to print.</td>
 </tr>
 </tbody></table></div>
@@ -86,29 +88,39 @@ listener on the address the image configures it with.</p>
 </thead>
 <tbody><tr>
 <td><code>/</code></td>
-<td><code>control Listen</code></td>
-<td>Configured by the image only, with where to listen.</td>
+<td><code>operator write text/plain</code></td>
+<td>Configured by the image only, with the address to listen on, e.g. &quot;127.0.0.1:8080&quot;.</td>
 </tr>
 <tr>
 <td><code>/address</code></td>
-<td><code>read -&gt; Text</code></td>
+<td><code>read -&gt; text/plain</code></td>
 <td>The bound address, e.g. &quot;127.0.0.1:8080&quot;.</td>
 </tr>
 <tr>
 <td><code>/accept</code></td>
-<td><code>watch -&gt; Accepted*</code></td>
-<td>Every connection accepted, as it is.</td>
+<td><code>watch -&gt; text/plain*</code></td>
+<td>The name of every connection accepted, as it is.</td>
+</tr>
+<tr>
+<td><code>/{conn}/data</code></td>
+<td><code>watch -&gt; application/octet-stream*</code>, <code>write application/octet-stream</code></td>
+<td>A connection&#39;s bytes: watch for those received, until the peer closes; write to send.</td>
+</tr>
+<tr>
+<td><code>/{conn}/remote</code></td>
+<td><code>read -&gt; text/plain</code></td>
+<td>The peer&#39;s address.</td>
 </tr>
 <tr>
 <td><code>/{conn}</code></td>
-<td><code>watch -&gt; Data*</code>, <code>write Data</code>, <code>remove</code></td>
-<td>A connection: watch for the bytes received, until the peer closes; write to send; remove to close our side once everything is sent.</td>
+<td><code>remove</code></td>
+<td>Close our side, once everything written is sent.</td>
 </tr>
 </tbody></table></div>
 <h2 id="files">Files</h2>
 <p>Read-only access to one directory on the host, and nothing above it.</p>
-<p>A file&#39;s MIME type comes from its extension. Reading a directory answers
-<code>is_directory</code>, and a listing is sorted by name.</p>
+<p>A file&#39;s content type comes from its extension. Reading a directory
+answers <code>is_directory</code>, and a listing is sorted by name.</p>
 <h3 id="serves-3">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -120,19 +132,19 @@ listener on the address the image configures it with.</p>
 </thead>
 <tbody><tr>
 <td><code>/</code></td>
-<td><code>control FilesRoot</code>, <code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
-<td>Configured by the image only, with the directory to serve.</td>
+<td><code>operator write text/plain</code>, <code>read -&gt; */*</code>, <code>stat</code>, <code>list</code></td>
+<td>Configured by the image only, with the directory to serve, relative to the image.</td>
 </tr>
 <tr>
 <td><code>/**</code></td>
-<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td><code>read -&gt; */*</code>, <code>stat</code>, <code>list</code></td>
 <td></td>
 </tr>
 </tbody></table></div>
-<h2 id="packed-files">Packed.Files</h2>
-<p>Files packed into the image when it was built, by its <code>include</code>s. It
-answers as <code>Files</code> does.</p>
-<p>Implements <code>FileTree</code>.</p>
+<h2 id="memoryconsole">MemoryConsole</h2>
+<p>A console in memory, which touches nothing on the host, to give an image
+where it would be given the real one.</p>
+<p>Implements <code>Console</code>, <code>Terminal</code>.</p>
 <h3 id="serves-4">Serves</h3>
 <div class="table"><table>
 <thead>
@@ -143,16 +155,93 @@ answers as <code>Files</code> does.</p>
 </tr>
 </thead>
 <tbody><tr>
+<td><code>/</code></td>
+<td><code>watch -&gt; text/plain*</code>, <code>write */*</code></td>
+<td>Watch for every line of input, until it ends; write to print.</td>
+</tr>
+<tr>
+<td><code>/typed</code></td>
+<td><code>write text/plain</code></td>
+<td>Type a line, as if on stdin.</td>
+</tr>
+<tr>
+<td><code>/printed</code></td>
+<td><code>watch -&gt; */**</code></td>
+<td>Everything written to the console, as it is written.</td>
+</tr>
+</tbody></table></div>
+<h2 id="memorylistener">MemoryListener</h2>
+<p>A listener in memory, which touches nothing on the host, to give an image
+where it would be given a real one. Connections come from <code>/dial</code>.</p>
+<p>Implements <code>Listener</code>, <code>Dialer</code>.</p>
+<h3 id="serves-5">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/</code></td>
+<td><code>operator write text/plain</code></td>
+<td>Configured by the image only, with the address to listen on, e.g. &quot;127.0.0.1:8080&quot;.</td>
+</tr>
+<tr>
+<td><code>/address</code></td>
+<td><code>read -&gt; text/plain</code></td>
+<td>The bound address, e.g. &quot;127.0.0.1:8080&quot;.</td>
+</tr>
+<tr>
+<td><code>/accept</code></td>
+<td><code>watch -&gt; text/plain*</code></td>
+<td>The name of every connection accepted, as it is.</td>
+</tr>
+<tr>
+<td><code>/{conn}/data</code></td>
+<td><code>watch -&gt; application/octet-stream*</code>, <code>write application/octet-stream</code></td>
+<td>A connection&#39;s bytes: watch for those received, until the peer closes; write to send.</td>
+</tr>
+<tr>
+<td><code>/{conn}/remote</code></td>
+<td><code>read -&gt; text/plain</code></td>
+<td>The peer&#39;s address.</td>
+</tr>
+<tr>
+<td><code>/{conn}</code></td>
+<td><code>remove</code></td>
+<td>Close our side, once everything written is sent.</td>
+</tr>
+<tr>
+<td><code>/dial</code></td>
+<td><code>create application/octet-stream -&gt; application/octet-stream*</code></td>
+<td>Connect, sending the request&#39;s bytes, and get back everything the server writes, until it closes the connection.</td>
+</tr>
+</tbody></table></div>
+<h2 id="packedfiles">PackedFiles</h2>
+<p>Files packed into the image when it was built, by its <code>include</code>s. It
+answers as <code>Files</code> does.</p>
+<p>Implements <code>FileTree</code>.</p>
+<h3 id="serves-6">Serves</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Requests</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
 <td><code>/**</code></td>
-<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td><code>read -&gt; */*</code>, <code>stat</code>, <code>list</code></td>
 <td></td>
 </tr>
 </tbody></table></div>
 <h2 id="shapes">Shapes</h2>
 <p>Traits and protocols the objects above are made of, for headers to use.</p>
 <h3 id="dialer"><code>Dialer</code></h3>
-<p>The other side of a listener run in memory, which an image that imports
-another can drive it with.</p>
+<p>The other side of a listener in memory: connect to it.</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -163,7 +252,7 @@ another can drive it with.</p>
 </thead>
 <tbody><tr>
 <td><code>/dial</code></td>
-<td><code>create Data -&gt; Data*</code></td>
+<td><code>create application/octet-stream -&gt; application/octet-stream*</code></td>
 <td>Connect, sending the request&#39;s bytes, and get back everything the server writes, until it closes the connection.</td>
 </tr>
 </tbody></table></div>
@@ -179,13 +268,13 @@ another can drive it with.</p>
 </thead>
 <tbody><tr>
 <td><code>/**</code></td>
-<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code>, <code>list -&gt; Entry*</code></td>
+<td><code>read -&gt; */*</code>, <code>stat</code>, <code>list</code></td>
 <td></td>
 </tr>
 </tbody></table></div>
 <h3 id="terminal"><code>Terminal</code></h3>
-<p>The other side of a console run in memory, which an image that imports
-another can drive it with: type lines into it, and watch what it prints.</p>
+<p>The other side of a console in memory: type lines into it, and watch
+what it prints.</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -196,12 +285,12 @@ another can drive it with: type lines into it, and watch what it prints.</p>
 </thead>
 <tbody><tr>
 <td><code>/typed</code></td>
-<td><code>write Line</code></td>
+<td><code>write text/plain</code></td>
 <td>Type a line, as if on stdin.</td>
 </tr>
 <tr>
 <td><code>/printed</code></td>
-<td><code>watch -&gt; Opaque*</code></td>
+<td><code>watch -&gt; */**</code></td>
 <td>Everything written to the console, as it is written.</td>
 </tr>
 </tbody></table></div>
@@ -218,13 +307,13 @@ runs, each in a fresh run of the image.</p>
 </thead>
 <tbody><tr>
 <td><code>/tests</code></td>
-<td><code>list -&gt; Entry*</code></td>
-<td>The tests, by name.</td>
+<td><code>list</code></td>
+<td>The tests, a stat record each.</td>
 </tr>
 <tr>
 <td><code>/tests/{name}</code></td>
-<td><code>invoke -&gt; Outcome</code></td>
-<td>Runs a test, and answers how it went.</td>
+<td><code>write</code></td>
+<td>Runs a test, and answers <code>ok</code> if it passed, or an error, conventionally <code>invalid</code>, whose description says why it didn&#39;t.</td>
 </tr>
 </tbody></table></div>
 <h3 id="protocols">Protocols</h3>
@@ -238,193 +327,18 @@ runs, each in a fresh run of the image.</p>
 </thead>
 <tbody><tr>
 <td><code>Connection</code></td>
-<td><code>watch -&gt; Data*</code>, <code>write Data</code>, <code>remove</code></td>
+<td><code>watch -&gt; application/octet-stream*</code>, <code>write application/octet-stream</code></td>
 <td>A stream of bytes each way.</td>
 </tr>
 <tr>
 <td><code>Dir</code></td>
-<td><code>list -&gt; Entry*</code>, <code>stat -&gt; Info</code></td>
+<td><code>list</code>, <code>stat</code></td>
 <td>Something listed.</td>
 </tr>
 <tr>
 <td><code>File</code></td>
-<td><code>read -&gt; Data</code>, <code>stat -&gt; Info</code></td>
+<td><code>read -&gt; */*</code>, <code>stat</code></td>
 <td>Something read whole.</td>
-</tr>
-</tbody></table></div>
-<h2 id="messages">Messages</h2>
-<h3 id="text"><code>Text</code></h3>
-<p>A string value: a setting, an address, a name.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>text</code></td>
-<td>string</td>
-<td></td>
-</tr>
-</tbody></table></div>
-<h3 id="data"><code>Data</code></h3>
-<p>The contents of something, as <code>read</code> answers.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>mime</code></td>
-<td>string</td>
-<td>Its MIME type, or &quot;&quot; if it isn&#39;t known.</td>
-</tr>
-<tr>
-<td><code>data</code></td>
-<td>bytes</td>
-<td></td>
-</tr>
-</tbody></table></div>
-<h3 id="info"><code>Info</code></h3>
-<p>What <code>stat</code> answers.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>kind</code></td>
-<td>string</td>
-<td>&quot;file&quot; or &quot;dir&quot;.</td>
-</tr>
-<tr>
-<td><code>size</code></td>
-<td>i64</td>
-<td>In bytes; 0 for a directory.</td>
-</tr>
-<tr>
-<td><code>mime</code></td>
-<td>string</td>
-<td>Its MIME type, or &quot;&quot; if it isn&#39;t known.</td>
-</tr>
-</tbody></table></div>
-<h3 id="entry"><code>Entry</code></h3>
-<p>One name in a <code>list</code> stream, or what <code>create</code> made.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>name</code></td>
-<td>string</td>
-<td></td>
-</tr>
-<tr>
-<td><code>kind</code></td>
-<td>string</td>
-<td>&quot;file&quot; or &quot;dir&quot;.</td>
-</tr>
-</tbody></table></div>
-<h3 id="line"><code>Line</code></h3>
-<p>One line of text, without its line ending.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>text</code></td>
-<td>string</td>
-<td></td>
-</tr>
-</tbody></table></div>
-<h3 id="listen"><code>Listen</code></h3>
-<p>Configures a Tcp listener.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>address</code></td>
-<td>string</td>
-<td>The address to listen on, e.g. &quot;127.0.0.1:8080&quot;.</td>
-</tr>
-</tbody></table></div>
-<h3 id="accepted"><code>Accepted</code></h3>
-<p>A new connection.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>conn</code></td>
-<td>string</td>
-<td>Its name under the listener: watch, write or remove <code>/&lt;conn&gt;</code>.</td>
-</tr>
-<tr>
-<td><code>peer</code></td>
-<td>string</td>
-<td>The remote address.</td>
-</tr>
-</tbody></table></div>
-<h3 id="filesroot"><code>FilesRoot</code></h3>
-<p>Configures Files.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>path</code></td>
-<td>string</td>
-<td>The directory served, relative to the image.</td>
-</tr>
-</tbody></table></div>
-<h3 id="outcome"><code>Outcome</code></h3>
-<p>How a test went.</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th></th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>passed</code></td>
-<td>bool</td>
-<td></td>
-</tr>
-<tr>
-<td><code>detail</code></td>
-<td>string</td>
-<td>Why it failed, or anything worth saying about it.</td>
 </tr>
 </tbody></table></div>
 

@@ -5,10 +5,6 @@ path leads, the protocol says what can be asked of it, and a payload format
 says what the bytes in a request or an answer mean. Othismo owns the first
 two and keeps them small and fixed; the third belongs to the objects.
 
-This is the design the runtime is moving to. The runtime today implements
-the earlier one, in which every body is a BSON message whose type the
-runtime knows and checks.
-
 ## Three layers
 
 | Layer | What it is | Who understands it |

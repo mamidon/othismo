@@ -42,7 +42,7 @@ tasks:
 
   build:docs:
     desc: Re-render docs/*.md, and the reference from as/env/, into the static example's site
-    deps: [npm, bindings:env]
+    deps: [npm, build]
     sources:
       - docs/*.md
       - as/env/*.oth

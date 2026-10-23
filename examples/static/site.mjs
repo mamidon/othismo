@@ -2,6 +2,7 @@
 //
 //   docs/overview.md   -> public/overview/index.html
 //   docs/objects.md    -> public/objects/index.html
+//   docs/protocol.md   -> public/protocol/index.html
 //   docs/namespace.md  -> public/docs/index.html
 //   docs/images.md     -> public/images/index.html
 //   `othismo doc env`  -> public/reference/index.html
@@ -39,18 +40,25 @@ const PAGES = [
     description: "Objects: the sandboxed modules you don't read, and the interfaces you do.",
   },
   {
+    source: "docs/protocol.md",
+    out: "protocol/index.html",
+    nav: "/protocol/",
+    eyebrow: "Protocol",
+    description: "The three layers: the namespace, the protocol every object speaks, and payload formats; the host ABI and the SDK.",
+  },
+  {
     source: "docs/namespace.md",
     out: "docs/index.html",
     nav: "/docs/",
-    eyebrow: "Design",
-    description: "The namespace design: views, verbs, the AssemblyScript SDK, environment objects and the host ABI.",
+    eyebrow: "Namespaces",
+    description: "Namespaces: views and served trees, binds and exports, environment objects as needs, and what the checker can promise.",
   },
   {
     source: "docs/images.md",
     out: "images/index.html",
     nav: "/images/",
     eyebrow: "Building",
-    description: "Building images: sealing an image into one file, packed files, and slots the host fills in.",
+    description: "The .oth language: imports and exports, images as objects, slots, packed files, testing, and sealing an image into one file.",
   },
   {
     source: "as/env/",
@@ -58,7 +66,7 @@ const PAGES = [
     out: "reference/index.html",
     nav: "/reference/",
     eyebrow: "Reference",
-    description: "The built-in objects and the runtime's message types, generated from the runtime's header.",
+    description: "The runtime's objects and the shapes they are made of, generated from the runtime's header.",
   },
 ]
 
@@ -72,6 +80,8 @@ const LINKS = {
   "overview.md": "/overview/",
   "docs/objects.md": "/objects/",
   "objects.md": "/objects/",
+  "docs/protocol.md": "/protocol/",
+  "protocol.md": "/protocol/",
 }
 
 function slug(text) {
@@ -154,7 +164,8 @@ function page(p, doc) {
         <div class="nav-links">
           ${navLink("/overview/", "Overview")}
           ${navLink("/objects/", "Objects")}
-          ${navLink("/docs/", "Design")}
+          ${navLink("/protocol/", "Protocol")}
+          ${navLink("/docs/", "Namespaces")}
           ${navLink("/images/", "Building")}
           ${navLink("/reference/", "Reference")}
         </div>

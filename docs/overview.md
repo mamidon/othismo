@@ -173,7 +173,7 @@ web.http    sees /net/tcp → /net/tcp, /dev/cons → /dev/cons, /www → web.pa
             can reach at most: /net/tcp rw, /dev/cons rw, web.pages rw, web.files ro (via web.pages)
 web.pages   sees /files → web.files ro
             can reach at most: web.files ro
-web.files   serves 11 built-in files, 105.6 KB
+web.files   serves 12 built-in files, 149.6 KB
 ```
 
 That is a promise about the code without reading the code: `StaticSite`
@@ -216,15 +216,13 @@ Othismo is a work in progress, and the runtime here, `othismo`, is a
 from-scratch rewrite that started from the top: the model first, with the
 semantics adjusted as they are used.
 
-These documents describe the design it is moving to: payloads the runtime
-doesn't read, one `.oth` language for images and interfaces, images used as
-objects, and environment objects given only as the needs of the image being
-run. The runtime still implements the earlier one, in which every body is a
-BSON message whose type the runtime knows, images are `.img` files, headers
-are `.iface` files, and an image declares the runtime's objects as instances.
+What it has so far: the namespace and the protocol, payloads the runtime
+never reads, with BSON as their first format, one `.oth` language for
+images and interfaces, images used as objects, and environment objects
+given only as the needs of the image being run.
 
-Some things the premise needs aren't there yet in either. A trapped object
-stops the whole run, and calls never time out.
+Some things the premise needs aren't there yet. A trapped object stops the
+whole run, and calls never time out.
 
 The details are in [The protocol](protocol.md), [Namespaces](namespace.md),
 [Objects](objects.md) and [Building images](images.md).

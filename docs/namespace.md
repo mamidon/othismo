@@ -5,10 +5,6 @@ Layer 0 of [the protocol](protocol.md). Almost everything is done by
 objects, by convention, in a Plan 9–style namespace; the runtime only
 decides where each path leads.
 
-This is the design the runtime is moving to. The runtime today implements
-the earlier one, with `.img` files, a `control` verb, and the runtime's
-objects declared as instances.
-
 ## The model
 
 Every instance has two trees.
@@ -150,7 +146,7 @@ they answer later writes of their root with `not_supported`.
 
 | Trait | Configured with | Serves |
 |---|---|---|
-| `Console` | nothing | `watch /`: a stream of `text/plain`, one line of stdin each, without its line ending, until EOF. `write /`: prints the payload on a line of its own: `text/*` as it is, anything else as its type and length |
+| `Console` | nothing | `watch /`: a stream of `text/plain`, one line of stdin each, without its line ending, until EOF. `write /`: prints the payload on a line of its own: `text/*` as it is, a stat record as its fields, anything else as its type and length |
 | `Listener` | `text/plain`: the address, e.g. `127.0.0.1:8080` | `read /address`: the bound address. `watch /accept`: a stream of `text/plain` connection names. `watch /{conn}/data`: the bytes received, as `application/octet-stream`, until the peer closes. `write /{conn}/data`: sends the payload's bytes. `read /{conn}/remote`: the peer's address. `remove /{conn}`: closes our side, once everything is sent |
 | `Files` | `text/plain`: the directory, relative to the image | `read`: the file, with a content type from its extension. `stat` and `list`: stat records, the listing sorted by name. Read-only: unsafe verbs get `read_only` |
 
@@ -218,7 +214,7 @@ web.http    sees /net/tcp → /net/tcp, /dev/cons → /dev/cons, /www → web.pa
             can reach at most: /net/tcp rw, /dev/cons rw, web.pages rw, web.files ro (via web.pages)
 web.pages   sees /files → web.files ro
             can reach at most: web.files ro
-web.files   serves 11 built-in files, 105.6 KB
+web.files   serves 12 built-in files, 149.6 KB
 ```
 
 The checker also holds the images to their objects' interfaces (see
