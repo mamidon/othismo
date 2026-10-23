@@ -7,7 +7,7 @@ use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-const A: &str = "object A { needs /dev/cons { / write */* }  serves { / invoke */* } }";
+const A: &str = "object A { needs /dev/cons { / write */* }  serves { / write */* } }";
 
 /// Modules aren't run here, so they needn't do anything; they only need headers.
 fn a() -> Vec<u8> {
@@ -25,7 +25,7 @@ fn fixture(name: &str) -> Fixture {
             "test.img",
             r#"import { Ping } from "./messages.iface"
             instance cons : Console
-            instance a : A { mount /dev/cons cons }  mount /a a  invoke /a Ping
+            instance a : A { mount /dev/cons cons }  mount /a a  write /a Ping
             instance b : B { mount /a a readonly }
             instance a2 : A { mount /dev/cons cons }"#,
         );

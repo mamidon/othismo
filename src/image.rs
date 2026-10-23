@@ -710,7 +710,7 @@ mod tests {
               mount /net/tcp net readonly
             }
             write /echo/greeting Greeting { prefix: "hi \"there\"", n: -3, x: 1.5, ok: true }
-            invoke /echo Ping
+            create /echo Ping
             remove /echo/old
             watch /echo
             "#,
@@ -729,7 +729,7 @@ mod tests {
 
         let reqs = &img.requests;
         let verbs: Vec<_> = reqs.iter().map(|r| r.verb).collect();
-        assert_eq!(verbs, [Verb::Write, Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
+        assert_eq!(verbs, [Verb::Write, Verb::Write, Verb::Create, Verb::Remove, Verb::Watch]);
         let msg = |r: &Request| match r.body.as_ref().unwrap() {
             Literal::Message(b) => b.clone(),
             other => panic!("{other:?}"),

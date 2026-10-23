@@ -1,14 +1,13 @@
 //! Running an image's tests, for `othismo test`. A test suite is any
 //! instance whose type declares the `TestSuite` trait: it lists its tests at
 //! `/tests`, a stat record each, and runs one when `/tests/<name>` is
-//! invoked, answering with an `Outcome`. Each test gets a fresh run of the image, started but with
+//! written, answering `ok` if it passed and an error saying why if not. Each test gets a fresh run of the image, started but with
 //! nothing outside: no stdin, no sockets.
 
 use crate::ns::{Status, Verb};
 use crate::pack::Pack;
-use crate::payload::{self, Stat};
+use crate::payload::Stat;
 use crate::runtime::{Answered, Io, Options, Runtime};
-use crate::wire::Message;
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
 use std::io::Write;
@@ -79,24 +78,17 @@ fn run_one(pack: &Pack, options: Options, i: usize, test: &str) -> Result<(bool,
         return Ok((false, format!("`{test}` can't be run: a test's name is one path segment"), String::new()));
     }
     let (mut rt, out) = start(pack, options)?;
-    let answers = rt.ask(i, Verb::Invoke, &format!("/tests/{test}"), None)?;
+    let answers = rt.ask(i, Verb::Write, &format!("/tests/{test}"), None)?;
     let (passed, detail) = outcome(answers.into_iter().find(|a| a.done));
     Ok((passed, detail, out.text()))
 }
 
 fn outcome(answer: Option<Answered>) -> (bool, String) {
-    let Some(a) = answer else { return (false, "it never answered".into()) };
-    if a.status != Status::Ok {
-        let detail = if a.detail.is_empty() { String::new() } else { format!(": {}", a.detail) };
-        return (false, format!("it answered {}{detail}", a.status));
-    }
-    let body = a.body.filter(|b| b.ty == payload::BSON).and_then(|b| Message::decode(&b.bytes).ok());
-    let Some(body) = body.filter(|b| b.type_name == "Outcome") else {
-        return (false, "it answered without an Outcome".into());
-    };
-    match (body.fields.get_bool("passed"), body.fields.get_str("detail")) {
-        (Ok(passed), Ok(detail)) => (passed, detail.to_string()),
-        _ => (false, "its Outcome is malformed".into()),
+    match answer {
+        None => (false, "it never answered".into()),
+        Some(a) if a.status == Status::Ok => (true, String::new()),
+        Some(a) if a.detail.is_empty() => (false, format!("it answered {}", a.status)),
+        Some(a) => (false, a.detail),
     }
 }
 
@@ -132,24 +124,16 @@ impl Write for Captured {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::payload::Payload;
-    use bson::doc;
 
-    fn answered(status: Status, body: Option<Message>) -> Option<Answered> {
-        Some(Answered { status, body: body.map(|m| Payload::new(payload::BSON, m.encode())), detail: String::new(), done: true })
+    fn answered(status: Status, detail: &str) -> Option<Answered> {
+        Some(Answered { status, body: None, detail: detail.into(), done: true })
     }
 
     #[test]
-    fn an_answer_is_an_outcome_or_a_failure() {
-        let outcome_msg = |passed: bool, detail: &str| Message { type_name: "Outcome".into(), fields: doc! { "passed": passed, "detail": detail } };
-        assert_eq!(outcome(answered(Status::Ok, Some(outcome_msg(true, "")))), (true, "".into()));
-        assert_eq!(outcome(answered(Status::Ok, Some(outcome_msg(false, "got 404")))), (false, "got 404".into()));
+    fn a_test_passes_with_ok_and_fails_with_an_error() {
+        assert_eq!(outcome(answered(Status::Ok, "")), (true, "".into()));
+        assert_eq!(outcome(answered(Status::Invalid, "got 404")), (false, "got 404".into()));
+        assert_eq!(outcome(answered(Status::NotFound, "")), (false, "it answered not_found".into()));
         assert_eq!(outcome(None), (false, "it never answered".into()));
-        assert_eq!(outcome(answered(Status::NotFound, None)), (false, "it answered not_found".into()));
-        let why = Some(Answered { status: Status::Invalid, body: None, detail: "got 404".into(), done: true });
-        assert_eq!(outcome(why), (false, "it answered invalid: got 404".into()));
-        assert_eq!(outcome(answered(Status::Ok, None)), (false, "it answered without an Outcome".into()));
-        let text = Message { type_name: "Text".into(), fields: doc! { "text": "yes" } };
-        assert_eq!(outcome(answered(Status::Ok, Some(text))), (false, "it answered without an Outcome".into()));
     }
 }

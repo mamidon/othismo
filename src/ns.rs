@@ -20,10 +20,9 @@ pub enum Verb {
     Write,
     Create,
     Remove,
-    Invoke,
 }
 
-pub const VERBS: [Verb; 8] = [
+pub const VERBS: [Verb; 7] = [
     Verb::Read,
     Verb::Stat,
     Verb::List,
@@ -31,7 +30,6 @@ pub const VERBS: [Verb; 8] = [
     Verb::Write,
     Verb::Create,
     Verb::Remove,
-    Verb::Invoke,
 ];
 
 impl Verb {
@@ -53,7 +51,6 @@ impl Verb {
             Verb::Write => "write",
             Verb::Create => "create",
             Verb::Remove => "remove",
-            Verb::Invoke => "invoke",
         }
     }
 
@@ -506,8 +503,8 @@ mod tests {
             assert_eq!(Verb::from_i32(i as i32), Some(*v));
             assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
         }
-        assert_eq!(Verb::from_i32(8), None);
+        assert_eq!(Verb::from_i32(7), None);
         assert_eq!(Status::from_i32(-1), None);
-        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Invoke.is_safe());
+        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Create.is_safe());
     }
 }

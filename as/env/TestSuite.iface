@@ -1,15 +1,9 @@
-## How a test went.
-message Outcome {
-  passed: bool
-  ## Why it failed, or anything worth saying about it.
-  detail: string
-}
-
 ## Something with tests to run, which `othismo test` finds by this trait and
 ## runs, each in a fresh run of the image.
 trait TestSuite {
-  ## The tests, by name.
+  ## The tests, a stat record each.
   /tests          list
-  ## Runs a test, and answers how it went, as an `Outcome`.
-  /tests/{name}   invoke -> application/bson
+  ## Runs a test, and answers `ok` if it passed, or an error, conventionally
+  ## `invalid`, whose description says why it didn't.
+  /tests/{name}   write
 }

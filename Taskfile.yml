@@ -85,7 +85,6 @@ tasks:
   bindings:
     desc: Regenerate the AssemblyScript bindings from every header
     cmds:
-      - task: bindings:env
       - for: { var: EXAMPLES }
         task: bindings:one
         vars: { NAME: '{{.ITEM}}' }
@@ -115,18 +114,6 @@ tasks:
         task: wasm:one
         vars: { NAME: '{{.ITEM}}' }
 
-  # The runtime's own bindings, which modules import as "othismo/env".
-  bindings:env:
-    internal: true
-    deps: [build]
-    sources:
-      - as/env/*.iface
-      - src/**/*.rs
-    generates:
-      - as/env.ts
-    cmds:
-      - '{{.BIN}} bindings --library ./bson env -o as/env.ts'
-
   bindings:one:
     internal: true
     label: bindings:{{.NAME}}
@@ -141,7 +128,7 @@ tasks:
   wasm:one:
     internal: true
     label: wasm:{{.NAME}}
-    deps: [npm, bindings:env]
+    deps: [npm, build]
     sources:
       - as/*.ts
       # What embed writes into each module: the header format and env's types.

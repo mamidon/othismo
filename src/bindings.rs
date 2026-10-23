@@ -124,15 +124,13 @@ mod tests {
     use crate::iface;
 
     #[test]
-    fn the_runtimes_bindings_are_up_to_date() {
-        let out = assemblyscript(iface::env(), "env", "./bson");
-        assert!(out == include_str!("../as/env.ts"), "as/env.ts is stale; run `task bindings`");
+    fn the_runtime_declares_no_message_types() {
+        assert!(iface::env().declared.is_empty(), "so it has no bindings of its own");
     }
 
     #[test]
     fn generates_a_class_per_declared_message() {
         let src = r#"
-            import { Outcome } from env
             ## Configures a Greeter.
             message Greeting {
               ## Put before each name.
@@ -150,7 +148,6 @@ mod tests {
         let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
         let out = assemblyscript(&header, "G.iface", "othismo/bson");
         assert!(out.starts_with("// Generated from G.iface by `othismo bindings`."), "{out}");
-        assert!(!out.contains("class Outcome"), "imported types have their own bindings");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */

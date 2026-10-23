@@ -49,7 +49,7 @@ declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, fla
 // ---------------------------------------------------------------------------
 // Verbs, errors, flags (numbered as in src/ns.rs)
 
-export enum Verb { Read, Stat, List, Watch, Write, Create, Remove, Invoke }
+export enum Verb { Read, Stat, List, Watch, Write, Create, Remove }
 
 /** Safe verbs never change anything; read-only mounts let only these through. */
 export function isSafe(v: Verb): bool {
@@ -211,7 +211,6 @@ export namespace ns {
   export function write(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Write, path, body, then); }
   export function create(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Create, path, body, then); }
   export function remove(path: string, then: Then | null = null): Call { return call(Verb.Remove, path, null, then); }
-  export function invoke(path: string, body: Payload | null, then: Then | null = null): Call { return call(Verb.Invoke, path, body, then); }
 
   /** Makes what `source` names in our view also appear at `at`. */
   export function bind(source: string, at: string, flags: Flag = Flag.None): Errno {

@@ -1,6 +1,4 @@
 import { OCTETS, Payload, Request, Response, Server, Stat, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
-import { bson } from "othismo/bson"
-import { Outcome } from "othismo/env"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -19,9 +17,9 @@ const CASES: Case[] = [
 ]
 
 /**
- * The site's tests. Listing /tests names them; invoking /tests/<name> dials
- * the site with that case's request, and answers how the response began
- * once the server hangs up.
+ * The site's tests. Listing /tests names them; writing /tests/<name> dials
+ * the site with that case's request, and once the server hangs up, answers
+ * ok if the response began as it should, or an error saying how it began.
  */
 class SiteTests extends Server {
   serve(req: Request): void {
@@ -30,7 +28,7 @@ class SiteTests extends Server {
       req.end()
       return
     }
-    if (req.path.startsWith("/tests/") && req.verb == Verb.Invoke) {
+    if (req.path.startsWith("/tests/") && req.verb == Verb.Write) {
       const name = req.path.slice("/tests/".length)
       for (let i = 0; i < CASES.length; i++) {
         const c = CASES[i]
@@ -59,9 +57,9 @@ class Check extends Then {
     if (body !== null) this.got += body.asText()
     if (!res.done) return
     const line = this.got.split("\r\n")[0]
-    if (!res.ok) this.req.reply(bson.payload(new Outcome(false, "dialing failed with status " + res.status.toString())))
-    else if (line.startsWith(this.c.want)) this.req.reply(bson.payload(new Outcome(true, "")))
-    else this.req.reply(bson.payload(new Outcome(false, "expected `" + this.c.want + "...`, got `" + line + "`")))
+    if (!res.ok) this.req.fail(Errno.Invalid, "dialing failed with errno " + res.status.toString())
+    else if (line.startsWith(this.c.want)) this.req.end()
+    else this.req.fail(Errno.Invalid, "expected `" + this.c.want + "...`, got `" + line + "`")
   }
 }
 

@@ -910,7 +910,6 @@ mod tests {
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
         assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
-        assert!(p.messages.contains_key("Outcome"), "runtime types are always in scope");
         assert!(p.messages.contains_key("Greeting"));
     }
 
@@ -932,7 +931,7 @@ mod tests {
     fn startup_requests_are_typed() {
         let inst = |req: &str| format!("{HEADER} instance e : Echo mount /e e {req}");
         let p = check_src(&inst(
-            "write /e/config Config { name: \"x\", count: 3, ratio: 2, on: true } invoke /e Ping remove /e/a//b/",
+            "write /e/config Config { name: \"x\", count: 3, ratio: 2, on: true } create /e Ping remove /e/a//b/",
         ))
         .unwrap();
         let s = &p.startup;
@@ -947,8 +946,8 @@ mod tests {
         assert!(err(&inst("write /e/c Config { name: \"x\" }")).contains("missing field `count`"));
         assert!(err(&inst("write /e/c Config { name: 1, count: 1, ratio: 1, on: true }")).contains("is string"));
         assert!(err(&inst("write /e/c Config { name: \"\", count: 256, ratio: 1, on: true }")).contains("does not fit in u8"));
-        assert!(err(&inst("invoke /e Ping { x: 1 }")).contains("no field `x`"));
-        assert!(err(&inst("invoke /e Missing")).contains("unknown message type"));
+        assert!(err(&inst("create /e Ping { x: 1 }")).contains("no field `x`"));
+        assert!(err(&inst("create /e Missing")).contains("unknown message type"));
         assert!(err(&inst("write /e Blob { data: 1 }")).contains("is bytes"));
         assert!(err(&inst("read /e/../x")).contains("not a clean absolute path"));
         assert!(err(&inst("read /x")).contains("nothing is mounted at `/x` in the image's view"));
@@ -964,7 +963,7 @@ mod tests {
 
     #[test]
     fn startup_requests_keep_the_order_they_are_written_in() {
-        let p = check_src(&format!("{HEADER} invoke /b Ping instance a : A mount /a a invoke /a Ping instance b : B mount /b b invoke /b/x Ping"))
+        let p = check_src(&format!("{HEADER} write /b Ping instance a : A mount /a a write /a Ping instance b : B mount /b b write /b/x Ping"))
             .unwrap();
         let order: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(order, ["/b", "/a", "/b/x"]);
@@ -972,14 +971,14 @@ mod tests {
 
     #[test]
     fn requests_resolve_in_the_images_view() {
-        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  invoke /x Ping  write /e/out \"hi\"")).unwrap();
+        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  write /x Ping  write /e/out \"hi\"")).unwrap();
         let view = [MountDecl { at: "/".into(), target: 1, read_only: false }, MountDecl { at: "/e/out".into(), target: 0, read_only: false }];
         assert_eq!(p.view, view);
         let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, ["/x", "/e/out"], "kept as written, and resolved again when the image runs");
 
-        let e = err(&format!("{HEADER} mount /e e readonly  instance e : Echo  invoke /e Ping"));
-        assert!(e.contains("`/e` is read-only in the image's view, so it can't take `invoke`"), "{e}");
+        let e = err(&format!("{HEADER} mount /e e readonly  instance e : Echo  write /e Ping"));
+        assert!(e.contains("`/e` is read-only in the image's view, so it can't take `write`"), "{e}");
         assert!(check_src(&format!("{HEADER} mount /e e readonly  instance e : Echo  read /e")).is_ok());
         let e = err(&format!("{HEADER} mount /c cons  mount /c/ cons"));
         assert!(e.contains("`/c` is already mounted in the image's view"), "{e}");
@@ -1096,23 +1095,6 @@ mod tests {
         assert!(e.contains("`g` is a slot; its fields come from the host, so use it alone"), "{e}");
         let e = err(&format!("{HEADER} require t : Ping instance net : Listener mount /net net write /net t"));
         assert!(e.contains("needs exactly one config"), "{e}");
-    }
-
-    #[test]
-    fn runtime_types_can_only_be_redeclared_exactly() {
-        let dir = std::env::temp_dir().join(format!("othismo_envshape_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("m.iface"), "message Outcome { passed: i32 }\nmessage Line { text: string }").unwrap();
-        let mut none = |_: &str| -> Result<Header> { bail!("no modules") };
-        let ok = image::parse(r#"import { Line } from "./m" import { Outcome } from env"#).unwrap();
-        assert!(check(&ok, &dir, &mut none).is_ok());
-        let bad = image::parse(r#"import { Outcome } from "./m.iface""#).unwrap();
-        let e = format!("{:#}", check(&bad, &dir, &mut none).unwrap_err());
-        let missing = image::parse(r#"import { Nope } from env"#).unwrap();
-        let e2 = format!("{:#}", check(&missing, &dir, &mut none).unwrap_err());
-        std::fs::remove_dir_all(&dir).ok();
-        assert!(e.contains("`Outcome` is a runtime type and must be declared as { passed: bool, detail: string }"), "{e}");
-        assert!(e2.contains("env has no message type `Nope`"), "{e2}");
     }
 
     #[test]
