@@ -14,6 +14,7 @@
 //! | bytes                       | binary (generic subtype) |
 //! | a message type, `Person`    | document, without `$type` |
 //! | `[T]`, a list               | array |
+//! | `{T}`, a map                | document |
 
 use crate::messages::FieldType;
 use anyhow::{Context, Result, bail};

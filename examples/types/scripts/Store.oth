@@ -18,6 +18,9 @@ export schemas application/bson {
     tags: [string]
     grid: [[i32]]
     team: [Person]
+    ## Maps, from strings to anything a field can be.
+    env: {string}
+    teams: {[Person]}
   }
 
   ## Someone.

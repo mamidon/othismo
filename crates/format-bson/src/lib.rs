@@ -213,7 +213,7 @@ fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
             _ => return Err(bad()),
         },
         FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
-        FieldType::Named(_) | FieldType::List(_) => {
+        FieldType::Named(_) | FieldType::List(_) | FieldType::Map(_) => {
             let mut p = Parser::new(text, false).map_err(|e| e.to_string())?;
             let v = p.value().map_err(|e| e.to_string())?;
             if *p.peek() != syntax::image_definition::Tok::Eof {
@@ -309,6 +309,19 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
             let items = items.iter().enumerate().map(|(i, v)| to_bson(schemas, e, v, &format!("{at}[{i}]")));
             B::Array(items.collect::<std::result::Result<_, _>>()?)
         }
+        (FieldType::Map(e), Value::Object(entries)) => {
+            let mut doc = Document::new();
+            for (k, v) in entries {
+                if k.name.contains('\0') {
+                    return Err(format!("`{at}`'s key {:?} has a NUL in it, which BSON can't carry", k.name));
+                }
+                if doc.contains_key(&k.name) {
+                    return Err(format!("`{at}` has the key {:?} twice", k.name));
+                }
+                doc.insert(k.name.clone(), to_bson(schemas, e, v, &format!("{at}[{}]", json_string(&k.name)))?);
+            }
+            B::Document(doc)
+        }
         (FieldType::Named(n), v) => return Err(format!("`{at}` is a `{n}`, written `{{ <field>: <value>, ... }}`, but was given {v}")),
         (t, v) => return Err(format!("`{at}` is {t}, but was given {v}")),
     })
@@ -400,6 +413,24 @@ mod tests {
         assert_eq!(Bson.literal(&Bson::schemas(&m), "Lists", "names", r#"["x"]"#), Ok(Value::List(vec![Value::Str("x".into())])));
         let e = format!("{:#}", Bson::parse_messages("message A { x: [Nope] }", &mut |p| bail!("no {p} here")).unwrap_err());
         assert!(e.contains("1:17: `Nope` is not a field type"), "{e}");
+    }
+
+    #[test]
+    fn fields_may_be_maps() {
+        let m = messages(&format!("{NESTED} message Maps {{ env: {{string}}, by_name: {{Person}}, groups: {{[u8]}} }}"));
+        assert_eq!(m.types["Maps"].fields[2].ty.to_string(), "{[u8]}");
+        assert_eq!(m.closure("Maps"), ["Maps", "Person"]);
+        let src = r#"{ env: { HOME: "/", "Content-Type": "x" }, by_name: { al: { name: "Al", age: 3 } }, groups: { a: [1], b: [] } }"#;
+        let shown = Bson.show(&Bson::encode_message(&m, "Maps", &value(src)).unwrap()).unwrap();
+        assert_eq!(shown[0].1, r#"{"HOME": "/", "Content-Type": "x"}"#, "in the order given");
+        assert_eq!(shown[1].1, r#"{"al": {"name": "Al", "age": 3}}"#);
+        assert_eq!(shown[2].1, r#"{"a": [1], "b": []}"#);
+        let err = |src: &str| Bson::encode_message(&m, "Maps", &value(src)).unwrap_err();
+        assert!(err(r#"{ env: [], by_name: {}, groups: {} }"#).contains("`Maps.env` is {string}, but was given []"));
+        assert!(err(r#"{ env: { a: "x", a: "y" }, by_name: {}, groups: {} }"#).contains("`Maps.env` has the key \"a\" twice"));
+        assert!(err(r#"{ env: {}, by_name: { al: { name: "Al" } }, groups: {} }"#).contains("`Maps.by_name[\"al\"]` is missing field `age`"));
+        assert!(err(r#"{ env: {}, by_name: {}, groups: { a: [300] } }"#).contains("300 does not fit in u8"));
+        assert!(err(&format!("{{ env: {{ \"a{}\": \"x\" }}, by_name: {{}}, groups: {{}} }}", '\0')).contains("has a NUL in it"));
     }
 
     #[test]

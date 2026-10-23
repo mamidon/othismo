@@ -145,6 +145,11 @@ export class Writer {
     this.element(BSON_ARRAY, name, items.finish());
   }
 
+  /** For map fields: `entries`, by their keys, as a document. */
+  map(name: string, entries: Writer): void {
+    this.element(BSON_DOCUMENT, name, entries.finish());
+  }
+
   /** An element of any BSON type, its value's bytes as BSON lays them out. */
   element(tag: u8, name: string, value: ArrayBuffer): void {
     this.key(tag, name);
@@ -301,6 +306,11 @@ export class Reader {
   /** A list field's items, each under its index: "0", "1", .... */
   array(name: string): Reader {
     return new Reader(this.embedded(this.field(name, BSON_ARRAY)));
+  }
+
+  /** A map field's entries, each under its key. */
+  map(name: string): Reader {
+    return this.doc(name);
   }
 
   /** Every field's name, in order. */

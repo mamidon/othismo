@@ -39,7 +39,7 @@ pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bi
     Bindings { imports, code }
 }
 
-/// Functions that write and read lists, by name: AssemblyScript has no
+/// Functions that write and read lists and maps, by name: AssemblyScript has no
 /// closures, so each element type gets its own.
 #[derive(Default)]
 struct Helpers(BTreeMap<String, String>);
@@ -105,6 +105,7 @@ fn as_type(t: &FieldType) -> String {
     match t {
         FieldType::Named(n) => n.clone(),
         FieldType::List(e) => format!("Array<{}>", as_type(e)),
+        FieldType::Map(e) => format!("Map<string, {}>", as_type(e)),
         _ => scalar(t).to_string(),
     }
 }
@@ -124,7 +125,7 @@ fn scalar(t: &FieldType) -> &'static str {
         FieldType::U64 => "u64",
         FieldType::F32 => "f32",
         FieldType::F64 => "f64",
-        FieldType::Named(_) | FieldType::List(_) => unreachable!("not a scalar"),
+        FieldType::Named(_) | FieldType::List(_) | FieldType::Map(_) => unreachable!("not a scalar"),
     }
 }
 
@@ -133,6 +134,7 @@ fn mangle(t: &FieldType) -> String {
     match t {
         FieldType::Named(n) => n.clone(),
         FieldType::List(e) => format!("list_{}", mangle(e)),
+        FieldType::Map(e) => format!("map_{}", mangle(e)),
         _ => scalar(t).to_string(),
     }
 }
@@ -165,6 +167,19 @@ impl Helpers {
                 }
                 format!("w.array({key}, {f}({value}))")
             }
+            FieldType::Map(e) => {
+                let f = format!("__write_{}", mangle(t));
+                if !self.0.contains_key(&f) {
+                    self.0.insert(f.clone(), String::new());
+                    let each = self.write("keys[i]", "v.get(keys[i])", e);
+                    let body = format!(
+                        "function {f}(v: {}): Writer {{\n  const w = new Writer()\n  const keys = v.keys()\n  for (let i = 0; i < keys.length; i++) {each}\n  return w\n}}\n",
+                        as_type(t)
+                    );
+                    self.0.insert(f.clone(), body);
+                }
+                format!("w.map({key}, {f}({value}))")
+            }
         }
     }
 
@@ -195,6 +210,19 @@ impl Helpers {
                 }
                 format!("{f}(r.array({key}))")
             }
+            FieldType::Map(e) => {
+                let f = format!("__read_{}", mangle(t));
+                if !self.0.contains_key(&f) {
+                    self.0.insert(f.clone(), String::new());
+                    let each = self.read("keys[i]", e);
+                    let body = format!(
+                        "function {f}(r: Reader): {ty} {{\n  const keys = r.keys()\n  const out = new {ty}()\n  for (let i = 0; i < keys.length; i++) out.set(keys[i], {each})\n  return out\n}}\n",
+                        ty = as_type(t)
+                    );
+                    self.0.insert(f.clone(), body);
+                }
+                format!("{f}(r.map({key}))")
+            }
         }
     }
 }
@@ -220,6 +248,7 @@ mod tests {
             message Ping {}
             message Nested { greeting: Greeting }
             message Lists { names: [string], grid: [[u8]], people: [Greeting] }
+            message Maps { env: {string}, groups: {[Greeting]} }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
@@ -266,6 +295,11 @@ registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
         let read = "function __read_list_list_u8(r: Reader): Array<Array<u8>> {\n  const keys = r.keys()\n  const out = new Array<Array<u8>>()\n  for (let i = 0; i < keys.length; i++) out.push(__read_list_u8(r.array(keys[i])))\n  return out\n}\n";
         assert!(out.contains(read), "{out}");
         assert!(out.contains("out.push(<u8>r.i64(keys[i]))") && out.contains("out.push(Greeting.decode(r.doc(keys[i])))"), "{out}");
+        assert!(out.contains("  env: Map<string, string>\n  groups: Map<string, Array<Greeting>>\n"), "{out}");
+        assert!(out.contains("w.map(\"groups\", __write_map_list_Greeting(this.groups))"), "{out}");
+        assert!(out.contains("new Maps(__read_map_string(r.map(\"env\")), __read_map_list_Greeting(r.map(\"groups\")))"), "{out}");
+        assert!(out.contains("  const keys = v.keys()\n  for (let i = 0; i < keys.length; i++) w.array(keys[i], __write_list_Greeting(v.get(keys[i])))\n"), "{out}");
+        assert!(out.contains("  for (let i = 0; i < keys.length; i++) out.set(keys[i], r.string(keys[i]))\n"), "{out}");
         let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;
         assert!(only.find("class Nested") < only.find("class Greeting"), "the types a field names come with it: {only}");
         assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");

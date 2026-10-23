@@ -14,8 +14,11 @@ export class Record extends Message {
   tags: Array<string>
   grid: Array<Array<i32>>
   team: Array<Person>
+  /** Maps, from strings to anything a field can be. */
+  env: Map<string, string>
+  teams: Map<string, Array<Person>>
 
-  constructor(name: string, count: i32, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>) {
+  constructor(name: string, count: i32, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>, env: Map<string, string>, teams: Map<string, Array<Person>>) {
     super()
     this.name = name
     this.count = count
@@ -23,6 +26,8 @@ export class Record extends Message {
     this.tags = tags
     this.grid = grid
     this.team = team
+    this.env = env
+    this.teams = teams
   }
 
   /** The `Record` in `p`, or null if it holds none. */
@@ -40,8 +45,10 @@ export class Record extends Message {
     w.array("tags", __write_list_string(this.tags))
     w.array("grid", __write_list_list_i32(this.grid))
     w.array("team", __write_list_Person(this.team))
+    w.map("env", __write_map_string(this.env))
+    w.map("teams", __write_map_list_Person(this.teams))
   }
-  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team"))) }
+  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team")), __read_map_string(r.map("env")), __read_map_list_Person(r.map("teams"))) }
 }
 registerMessage("Record", (r: Reader): Message => Record.decode(r))
 
@@ -100,6 +107,20 @@ function __read_list_string(r: Reader): Array<string> {
   return out
 }
 
+function __read_map_list_Person(r: Reader): Map<string, Array<Person>> {
+  const keys = r.keys()
+  const out = new Map<string, Array<Person>>()
+  for (let i = 0; i < keys.length; i++) out.set(keys[i], __read_list_Person(r.array(keys[i])))
+  return out
+}
+
+function __read_map_string(r: Reader): Map<string, string> {
+  const keys = r.keys()
+  const out = new Map<string, string>()
+  for (let i = 0; i < keys.length; i++) out.set(keys[i], r.string(keys[i]))
+  return out
+}
+
 function __write_list_Person(v: Array<Person>): Writer {
   const w = new Writer()
   for (let i = 0; i < v.length; i++) w.doc(i.toString(), v[i])
@@ -121,6 +142,20 @@ function __write_list_list_i32(v: Array<Array<i32>>): Writer {
 function __write_list_string(v: Array<string>): Writer {
   const w = new Writer()
   for (let i = 0; i < v.length; i++) w.string(i.toString(), v[i])
+  return w
+}
+
+function __write_map_list_Person(v: Map<string, Array<Person>>): Writer {
+  const w = new Writer()
+  const keys = v.keys()
+  for (let i = 0; i < keys.length; i++) w.array(keys[i], __write_list_Person(v.get(keys[i])))
+  return w
+}
+
+function __write_map_string(v: Map<string, string>): Writer {
+  const w = new Writer()
+  const keys = v.keys()
+  for (let i = 0; i < keys.length; i++) w.string(keys[i], v.get(keys[i]))
   return w
 }
 

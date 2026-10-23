@@ -13,4 +13,6 @@ write /store/record Record {
   tags: ["a", "b"],
   grid: [[1, 2], [], [-3]],
   team: [{ name: "Bo", age: 1 }],
+  env: { HOME: "/home", "Content-Type": "text/plain" },
+  teams: { red: [{ name: "Cy", age: 2 }], blue: [] },
 }

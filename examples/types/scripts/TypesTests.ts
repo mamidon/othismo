@@ -11,7 +11,27 @@ function describe(r: Record): string {
   let team: string[] = []
   for (let i = 0; i < r.team.length; i++) team.push(person(r.team[i]))
   return "name=" + r.name + " count=" + r.count.toString() + " owner=" + person(r.owner) +
-    " tags=[" + r.tags.join(",") + "] grid=[" + grid.join(",") + "] team=[" + team.join(",") + "]"
+    " tags=[" + r.tags.join(",") + "] grid=[" + grid.join(",") + "] team=[" + team.join(",") + "]" +
+    " env={" + env(r.env) + "} teams={" + teams(r.teams) + "}"
+}
+
+function env(m: Map<string, string>): string {
+  const keys = m.keys()
+  let out: string[] = []
+  for (let i = 0; i < keys.length; i++) out.push(keys[i] + ":" + m.get(keys[i]))
+  return out.join(",")
+}
+
+function teams(m: Map<string, Array<Person>>): string {
+  const keys = m.keys()
+  let out: string[] = []
+  for (let i = 0; i < keys.length; i++) {
+    const team = m.get(keys[i])
+    let people: string[] = []
+    for (let j = 0; j < team.length; j++) people.push(person(team[j]))
+    out.push(keys[i] + ":[" + people.join(",") + "]")
+  }
+  return out.join(",")
 }
 
 function person(p: Person): string {
@@ -19,11 +39,16 @@ function person(p: Person): string {
 }
 
 /** The record the image writes at startup, described. */
-const STARTUP = "name=start count=7 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}]"
+const STARTUP = "name=start count=7 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}] env={HOME:/home,Content-Type:text/plain} teams={red:[{Cy 2}],blue:[]}"
 
 /** A record with something in every field. */
 function sample(): Record {
-  return new Record("sample", -3, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)])
+  const env = new Map<string, string>()
+  env.set("b", "2")
+  env.set("a", "1")
+  const teams = new Map<string, Array<Person>>()
+  teams.set("solo", [new Person("Di", 4)])
+  return new Record("sample", -3, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)], env, teams)
 }
 
 /** "" if `got` is `want`, or how it isn't. */

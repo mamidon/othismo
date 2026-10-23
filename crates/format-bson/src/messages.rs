@@ -24,6 +24,9 @@ pub enum FieldType {
     Named(String),
     /// `[T]`, a list of `T`: an array. `Array<T>` in AssemblyScript.
     List(Box<FieldType>),
+    /// `{T}`, `T`s by string keys: a document. `Map<string, T>` in
+    /// AssemblyScript.
+    Map(Box<FieldType>),
 }
 
 impl FieldType {
@@ -51,7 +54,7 @@ impl FieldType {
     pub fn names(&self) -> Vec<&str> {
         match self {
             FieldType::Named(n) => vec![n],
-            FieldType::List(t) => t.names(),
+            FieldType::List(t) | FieldType::Map(t) => t.names(),
             _ => vec![],
         }
     }
@@ -77,6 +80,7 @@ impl fmt::Display for FieldType {
         let s = match self {
             FieldType::Named(n) => return f.write_str(n),
             FieldType::List(t) => return write!(f, "[{t}]"),
+            FieldType::Map(t) => return write!(f, "{{{t}}}"),
             FieldType::String => "string",
             FieldType::Bool => "bool",
             FieldType::I8 => "i8",
