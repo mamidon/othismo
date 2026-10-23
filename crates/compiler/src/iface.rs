@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn rejects_mistakes() {
-        assert!(err("message A { x: i32 }").contains("message types are declared in a schema file"));
+        assert!(err("message A { x: i32 }").contains("message types are declared in their format's block"));
         assert!(err("protocol Stat { read }").contains("reserved"));
         assert!(err("import { Nope } from env").contains("env has no protocol, trait or object `Nope`"));
         assert!(err(r#"import { X } from "./other.oth""#).contains("no \"./other.oth\" here"));
