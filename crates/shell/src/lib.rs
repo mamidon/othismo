@@ -14,6 +14,7 @@ pub mod command;
 pub mod repl;
 pub mod session;
 pub mod show;
+pub mod tui;
 pub mod world;
 
 pub use session::{Event, Outcome, Session};

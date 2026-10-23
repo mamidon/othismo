@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use format::AllSchemas;
 use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -29,8 +30,9 @@ An image is a .oth source, which is built in memory, or a built .rti file.
 `shell` runs the image, and lets you look around it and make requests of it
 while it runs: from the image's own view, or from any instance's. Only you,
 at this terminal, can: the shell runs the image in its own process, and
-nothing outside the process can reach it. --plain reads commands a line at
-a time, as a script can; type :help in the shell for its commands.
+nothing outside the process can reach it. It takes the whole screen; with
+--plain, or without a terminal, it reads commands a line at a time, as a
+script can. Type :help in the shell for its commands.
 
 `test` runs the image's tests: each instance whose type declares TestSuite
 lists its tests, and each test runs in a fresh run of the image, with nothing
@@ -289,9 +291,15 @@ fn shell(args: &[String]) -> Result<Result<()>, Usage> {
     let mut plain = false;
     let running = Running::parse(args, |arg| arg == "--plain" && { plain = true; true })?;
     let options = running.options;
+    let title = running.image.file_name().map_or_else(|| running.image.display().to_string(), |n| n.to_string_lossy().into_owned());
+    // The full screen needs a terminal on both ends; otherwise, lines.
+    let plain = plain || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal();
     Ok((|| {
         let mut session = othismo::shell::Session::start(move || running.load(), options, othismo::formats())?;
-        let _ = plain;
-        othismo::shell::repl::run(&mut session, std::io::stdin().lock(), &mut std::io::stdout())
+        if plain {
+            othismo::shell::repl::run(&mut session, std::io::stdin().lock(), &mut std::io::stdout())
+        } else {
+            othismo::shell::tui::run(session, &title)
+        }
     })())
 }

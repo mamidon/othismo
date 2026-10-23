@@ -26,5 +26,6 @@ shell.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+ratatui.workspace = true
 bson.workspace = true
 wat.workspace = true

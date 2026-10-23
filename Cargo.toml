@@ -24,3 +24,4 @@ serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"
 wasmtime = { version = "48.0.7", features = ["anyhow"] }
 wat = "1.262.0"
+ratatui = "0.30.2"

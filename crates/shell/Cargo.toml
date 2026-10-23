@@ -11,6 +11,7 @@ format.workspace = true
 image.workspace = true
 runtime.workspace = true
 anyhow.workspace = true
+ratatui.workspace = true
 
 [dev-dependencies]
 format-bson.workspace = true

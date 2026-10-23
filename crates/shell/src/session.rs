@@ -143,6 +143,20 @@ impl Session {
         Ok(id)
     }
 
+    /// Asks instance `inst` itself, as the operator, about `path` in what
+    /// it serves: how the shell lists served trees, whoever it looks from.
+    /// Only safe verbs; its answers aren't counted among the open requests.
+    pub fn look_inside(&mut self, inst: usize, verb: Verb, path: &str) -> Result<u64> {
+        if !verb.is_safe() {
+            bail!("looking inside changes nothing: {} can't be sent that way", verb.keyword());
+        }
+        self.next += 1;
+        if !self.op.send(Command::Look { id: self.next, inst, verb, path: path.into() }) {
+            bail!("the image has stopped");
+        }
+        Ok(self.next)
+    }
+
     pub fn cancel(&mut self, id: Option<u64>) -> Result<u64> {
         let id = id.or_else(|| self.open.keys().last().copied()).ok_or_else(|| anyhow!("nothing is open"))?;
         if !self.open.contains_key(&id) {
