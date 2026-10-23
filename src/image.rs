@@ -156,6 +156,8 @@ pub(crate) enum Tok {
     Arrow,
     /// `*` after an answer's type: a stream.
     Star,
+    /// A content type: `text/plain`, `text/*`, `*/*`, `text/html;charset=utf-8`.
+    Type(String),
     /// A `##` comment, which documents what follows. Only headers keep them.
     Doc(String),
     Eof,
@@ -175,6 +177,7 @@ impl std::fmt::Display for Tok {
             Tok::Colon => write!(f, "`:`"),
             Tok::Arrow => write!(f, "`->`"),
             Tok::Star => write!(f, "`*`"),
+            Tok::Type(s) => write!(f, "content type `{s}`"),
             Tok::Doc(_) => write!(f, "a `##` comment"),
             Tok::Eof => write!(f, "end of file"),
         }
@@ -236,6 +239,12 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
             toks.push((Tok::Arrow, pos));
             bump!();
             bump!();
+        } else if c == '*' && chars.get(i + 1) == Some(&'/') {
+            let start = i;
+            while i < chars.len() && type_char(chars[i]) {
+                bump!();
+            }
+            push_type(&mut toks, chars[start..i].iter().collect(), pos, Pos { line, col });
         } else if c == '*' {
             toks.push((Tok::Star, pos));
             bump!();
@@ -298,6 +307,14 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
             while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '$' | '.')) {
                 bump!();
             }
+            // An identifier straight before a `/` starts a content type.
+            if chars.get(i) == Some(&'/') {
+                while i < chars.len() && type_char(chars[i]) {
+                    bump!();
+                }
+                push_type(&mut toks, chars[start..i].iter().collect(), pos, Pos { line, col });
+                continue;
+            }
             toks.push((Tok::Ident(chars[start..i].iter().collect()), pos));
         } else {
             bail!("{pos}: unexpected character {c:?}");
@@ -305,6 +322,24 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
     }
     toks.push((Tok::Eof, Pos { line, col }));
     Ok(toks)
+}
+
+/// Whether `c` can be part of a content type as headers write it.
+fn type_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "!#$&^_.+-*/;=".contains(c)
+}
+
+/// A content type, and a `*` straight after it, which marks a stream:
+/// `text/plain*`, `text/**`, `*/**`. `text/*` alone is any text.
+fn push_type(toks: &mut Vec<(Tok, Pos)>, mut ty: String, pos: Pos, end: Pos) {
+    let stream = ty.ends_with("**") || (ty.ends_with('*') && !ty.ends_with("/*"));
+    if stream {
+        ty.pop();
+    }
+    toks.push((Tok::Type(ty), pos));
+    if stream {
+        toks.push((Tok::Star, Pos { line: end.line, col: end.col - 1 }));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +753,36 @@ mod tests {
             ]
         );
         assert!(lex("/a/{b", false).is_err());
+    }
+
+    #[test]
+    fn content_types_are_one_token_and_a_star_after_one_is_a_stream() {
+        let toks: Vec<Tok> =
+            lex("text/plain text/plain* text/* text/** */* */** application/x-othismo-stat text/html;charset=utf-8 a /b", false)
+                .unwrap()
+                .into_iter()
+                .map(|t| t.0)
+                .collect();
+        let ty = |s: &str| Tok::Type(s.into());
+        assert_eq!(
+            toks,
+            [
+                ty("text/plain"),
+                ty("text/plain"),
+                Tok::Star,
+                ty("text/*"),
+                ty("text/*"),
+                Tok::Star,
+                ty("*/*"),
+                ty("*/*"),
+                Tok::Star,
+                ty("application/x-othismo-stat"),
+                ty("text/html;charset=utf-8"),
+                Tok::Ident("a".into()),
+                Tok::Path("/b".into()),
+                Tok::Eof
+            ]
+        );
     }
 
     #[test]
