@@ -3,10 +3,10 @@
 
 use super::Reply;
 use super::files::{mime, name};
-use crate::ns::{self, Status, Verb};
-use crate::pack::Hash;
-use crate::payload::{Payload, Stat};
-use crate::tree::{Node, Tree};
+use protocol::ns::{self, Status, Verb};
+use image::pack::Hash;
+use protocol::payload::{Payload, Stat};
+use image::tree::{Node, Tree};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;

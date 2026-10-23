@@ -1,8 +1,8 @@
 //! `Listener`, run as a TCP listener and the connections it accepts.
 
 use super::{Event, Reply, What};
-use crate::ns::{Status, Verb};
-use crate::payload::{OCTETS, Payload};
+use protocol::ns::{Status, Verb};
+use protocol::payload::{OCTETS, Payload};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{Read, Write};

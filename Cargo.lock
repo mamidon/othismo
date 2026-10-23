@@ -862,6 +862,7 @@ dependencies = [
  "format-bson",
  "image",
  "protocol",
+ "runtime",
  "serde",
  "sha2",
  "syntax",
@@ -1057,6 +1058,16 @@ dependencies = [
  "rustc-hash",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "protocol",
+ "wasmtime",
 ]
 
 [[package]]

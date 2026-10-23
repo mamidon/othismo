@@ -1,8 +1,8 @@
 //! `Files`, run as read-only access to one directory on the host.
 
 use super::Reply;
-use crate::ns::{Status, Verb};
-use crate::payload::{Payload, Stat};
+use protocol::ns::{Status, Verb};
+use protocol::payload::{Payload, Stat};
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 

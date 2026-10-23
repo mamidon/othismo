@@ -1,0 +1,11 @@
+[package]
+name = "runtime"
+description = "Runs a built image: modules sandboxed in wasmtime, the host's objects, and the namespace between them"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+image.workspace = true
+anyhow.workspace = true
+wasmtime.workspace = true

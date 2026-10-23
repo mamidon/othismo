@@ -18,10 +18,10 @@ pub use files::Files;
 pub use packed::Packed;
 pub use tcp::{MemoryListener, Tcp};
 
-use crate::check::{Instance, Kind};
-use crate::ns::{Status, Verb};
-use crate::pack::Pack;
-use crate::payload::Payload;
+use image::program::{Instance, Kind};
+use protocol::ns::{Status, Verb};
+use image::pack::Pack;
+use protocol::payload::Payload;
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::net::TcpStream;

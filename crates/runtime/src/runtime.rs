@@ -1,7 +1,7 @@
 //! Instantiates a built [`Pack`] and runs its message loop.
 //!
 //! Every message is a request to a path or a reply to one. A request is
-//! resolved in the sender's view (see [`crate::ns`]) when it is made, and
+//! resolved in the sender's view (see `protocol::ns`) when it is made, and
 //! queued for the instance that serves it. Replies go back to whoever made
 //! the request, tagged with the ticket the caller was given.
 //!
@@ -19,12 +19,12 @@
 //! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
 //! module asks for is refused before it is instantiated.
 
-use crate::check::{Kind, MountDecl, Program};
-use crate::pack::Pack;
+use image::program::{Kind, MountDecl, Program};
+use image::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
-use crate::iface;
-use crate::ns::{self, Namespace, Resolved, Status, Verb};
-use crate::payload::Payload;
+use image::header as iface;
+use protocol::ns::{self, Namespace, Resolved, Status, Verb};
+use protocol::payload::Payload;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};

@@ -4,9 +4,9 @@
 //! written, answering `ok` if it passed and an error saying why if not. Each test gets a fresh run of the image, started but with
 //! nothing outside: no stdin, no sockets.
 
-use crate::ns::{Status, Verb};
-use crate::pack::Pack;
-use crate::payload::Stat;
+use protocol::ns::{Status, Verb};
+use image::pack::Pack;
+use protocol::payload::Stat;
 use crate::runtime::{Answered, Io, Options, Runtime};
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;

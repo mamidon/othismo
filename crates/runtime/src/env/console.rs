@@ -1,8 +1,8 @@
 //! `Console`, run on the host's stdin and stdout.
 
 use super::{Event, Reply, What};
-use crate::ns::{Status, Verb};
-use crate::payload::Payload;
+use protocol::ns::{Status, Verb};
+use protocol::payload::Payload;
 use crate::render;
 use anyhow::{Context, Result};
 use std::io::{BufRead, Write};
