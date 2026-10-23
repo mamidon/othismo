@@ -44,15 +44,15 @@ pub trait Format: Send + Sync {
     /// Whether two sets of schemas declare the same types.
     fn same(&self, a: &Schemas, b: &Schemas) -> bool;
 
-    /// Encodes a literal, which `schemas` must allow.
-    fn encode(&self, schemas: &Schemas, value: &Value) -> Result<Vec<u8>, String>;
-    /// Checks a literal that may leave fields out, such as a slot's default.
-    fn check(&self, schemas: &Schemas, value: &Value) -> Result<(), String>;
-    /// Every field a value must give, in order, as far as `so_far` says
-    /// which type it is.
-    fn fields(&self, schemas: &Schemas, so_far: &[(String, Value)]) -> Vec<String>;
-    /// Raw text, as `--set` gives it, as field `field` of the value `so_far`.
-    fn literal(&self, schemas: &Schemas, so_far: &[(String, Value)], field: &str, raw: &str) -> Result<Value, String>;
+    /// Encodes a literal of type `ty`, which `schemas` must have.
+    fn encode(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<Vec<u8>, String>;
+    /// Checks a literal of type `ty` that may leave fields out, such as a
+    /// slot's default.
+    fn check(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<(), String>;
+    /// Every field a value of type `ty` gives, in order.
+    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String>;
+    /// Raw text, as `--set` gives it, as field `field` of a value of type `ty`.
+    fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String>;
     /// An encoded payload's fields, each as JSON-ish text, for `--check`.
     fn show(&self, bytes: &[u8]) -> Option<Vec<(String, String)>>;
 
@@ -94,14 +94,15 @@ impl Formats {
         self.0.iter().map(|f| f.as_ref())
     }
 
-    /// Encodes `value` as a payload of content type `ty`, with `schemas` as
-    /// the formats' schemas. Only a format can encode a structured literal.
-    pub fn encode(&self, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
-        let Some(f) = self.for_type(ty) else {
+    /// Encodes `value`, of message type `ty`, as a payload of content type
+    /// `content_type`, with `schemas` as the formats' schemas. Only a format
+    /// can encode a structured literal.
+    pub fn encode(&self, content_type: &str, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
+        let Some(f) = self.for_type(content_type) else {
             let have: Vec<&str> = self.iter().map(|f| f.content_type()).collect();
-            return Err(format!("no format writes `{ty}`; a structured literal needs one, and the image has {}", list(&have)));
+            return Err(format!("no format writes `{content_type}`; a structured literal needs one, and the image has {}", list(&have)));
         };
-        f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), value)
+        f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), ty, value)
     }
 }
 

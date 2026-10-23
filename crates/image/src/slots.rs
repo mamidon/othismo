@@ -3,7 +3,7 @@
 //! wherever the slots are used. A structured slot is filled field by field
 //! and then encoded by its format. See `docs/images.md`.
 
-use crate::program::{Arg, Program, SlotValue};
+use crate::program::{Arg, Program, Slot, SlotValue};
 use protocol::payload::Payload;
 use syntax::image_definition::{Ident, Pos, Value};
 use anyhow::{Context, Result, bail};
@@ -75,30 +75,26 @@ impl Filling {
         fields.retain(|(f, ..)| f != name);
         fields.push((name.to_string(), value, origin.to_string()));
     }
-
-    /// A structured value's fields so far, without where they came from.
-    fn so_far(fields: &[(String, Value, String)]) -> Vec<(String, Value)> {
-        fields.iter().map(|(f, v, _)| (f.clone(), v.clone())).collect()
-    }
 }
 
 /// Fills every slot: the image's defaults first, then `given` in order, a
 /// later value replacing an earlier one, field by field for a structured
 /// slot. Fails, listing every problem, if a value names an unknown slot or
 /// field or doesn't fit, or if any slot or field is left without a value.
-/// A structured slot is filled and encoded by whichever of `formats` is for
-/// its content type.
+/// A structured slot, a message, is filled and encoded by whichever of
+/// `formats` is for its content type.
 pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result<()> {
     let mut problems = vec![];
     let messages = program.messages.clone();
-    let format = |ty: &str| -> Option<(&dyn Format, Schemas)> {
-        let f = formats.for_type(ty)?;
-        Some((f, messages.get(f.content_type()).cloned().unwrap_or_default()))
+    let format = |slot: &Slot| -> (&dyn Format, Schemas, String) {
+        let f = formats.for_type(&slot.ty).expect("the checker found a format for each structured slot");
+        let message = slot.message.clone().expect("a structured slot has a message type");
+        (f, messages.get(f.content_type()).cloned().unwrap_or_default(), message)
     };
     let mut filling: Vec<Filling> = program
         .slots
         .iter()
-        .map(|s| match (&s.default, s.structured(formats)) {
+        .map(|s| match (&s.default, s.structured()) {
             (Some(SlotValue::Tree(Value::Object(fields))), true) => {
                 Filling::Fields(fields.iter().map(|(k, v)| (k.name.clone(), v.clone(), "default".to_string())).collect())
             }
@@ -128,13 +124,17 @@ pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result
                 }
             }
             (Filling::Fields(_), None, _) => problems.push(format!(
-                "{}: {}: `{}` is a {} payload, given field by field: `{}.<field>=...`",
-                g.origin, g.slot, g.slot, slot.ty, g.slot
+                "{}: {}: `{}` is a message, `{}`, given field by field: `{}.<field>=...`",
+                g.origin,
+                g.slot,
+                g.slot,
+                slot.message.as_deref().unwrap_or_default(),
+                g.slot
             )),
             (Filling::Fields(fields), Some(f), GivenValue::Literal(v)) => Filling::set(fields, f, v.clone(), &g.origin),
             (Filling::Fields(fields), Some(f), GivenValue::Text(raw)) => {
-                let (format, schemas) = format(&slot.ty).expect("a structured slot has a format");
-                match format.literal(&schemas, &Filling::so_far(fields), f, raw) {
+                let (format, schemas, message) = format(slot);
+                match format.literal(&schemas, &message, f, raw) {
                     Ok(v) => Filling::set(fields, f, v, &g.origin),
                     Err(e) => problems.push(format!("{}: {}.{f}: {e}", g.origin, g.slot)),
                 }
@@ -151,8 +151,11 @@ pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result
                 (Payload::text(""), vec![])
             }
             Filling::Fields(fields) => {
-                let (format, schemas) = format(&slot.ty).expect("a structured slot has a format");
-                let wanted = format.fields(&schemas, &Filling::so_far(&fields));
+                let (format, schemas, message) = format(slot);
+                let wanted = format.fields(&schemas, &message).unwrap_or_else(|e| {
+                    problems.push(format!("{}: {e}", slot.name));
+                    vec![]
+                });
                 let missing: Vec<&str> = wanted.iter().map(String::as_str).filter(|n| !fields.iter().any(|(f, ..)| f == n)).collect();
                 for m in &missing {
                     problems.push(format!("{}.{m}: required, not provided", slot.name));
@@ -165,7 +168,7 @@ pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result
                 let pos = Pos { line: 0, col: 0 };
                 let tree = Value::Object(fields.into_iter().map(|(f, v, _)| (Ident { name: f, pos }, v)).collect());
                 let bytes = if missing.is_empty() {
-                    format.encode(&schemas, &tree).unwrap_or_else(|e| {
+                    format.encode(&schemas, &message, &tree).unwrap_or_else(|e| {
                         problems.push(format!("{}: {e}", slot.name));
                         vec![]
                     })

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x07";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x08";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.
@@ -193,10 +193,10 @@ pub fn describe(pack: &Pack, formats: &Formats) -> String {
 /// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a structured
 /// slot, each field's value and where it came from.
 fn describe_slot(slot: &program::Slot, formats: &Formats) -> String {
-    let ty = &slot.ty;
+    let ty = slot.message.as_ref().unwrap_or(&slot.ty);
     let origin = |f: &str| slot.origins.iter().find(|(name, _)| name == f).map(|(_, o)| o.as_str()).unwrap_or("?");
     let Some(value) = &slot.value else { return format!("slot {} : {ty} (unbound)", slot.name) };
-    if let Some(f) = formats.for_type(ty) {
+    if let Some(f) = formats.for_type(&slot.ty).filter(|_| slot.structured()) {
         let fields = value.payload().ok().and_then(|p| f.show(&p.bytes));
         let Some(fields) = fields else { return format!("slot {} : {ty} (unreadable)", slot.name) };
         let shown: Vec<String> = fields.iter().map(|(f, v)| format!("{f}: {v} ({})", origin(f))).collect();

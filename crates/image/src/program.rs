@@ -4,7 +4,7 @@
 
 use crate::header::Object;
 use anyhow::{Context, Result, bail};
-use format::{AllSchemas, Formats};
+use format::AllSchemas;
 use protocol::ns::{self, Resolved, Verb};
 use protocol::payload::Payload;
 use serde::{Deserialize, Serialize};
@@ -118,12 +118,16 @@ impl Arg {
     }
 }
 
-/// `require <name> : <content type> [= <default>]`
+/// `require <name> : <message type or content type> [= <default>]`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Slot {
     pub name: String,
     /// The content type of what it stands for.
     pub ty: String,
+    /// Its message type, for a structured slot, whose value is given field
+    /// by field.
+    #[serde(default)]
+    pub message: Option<String>,
     /// The image's default: text, or a structured value, which may leave
     /// some fields out.
     pub default: Option<SlotValue>,
@@ -141,10 +145,10 @@ pub enum SlotValue {
 }
 
 impl Slot {
-    /// Whether its payloads are structured: one of `formats` encodes them
-    /// from their fields.
-    pub fn structured(&self, formats: &Formats) -> bool {
-        formats.for_type(&self.ty).is_some()
+    /// Whether its payloads are structured: messages, which its format
+    /// encodes from their fields.
+    pub fn structured(&self) -> bool {
+        self.message.is_some()
     }
 }
 

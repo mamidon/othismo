@@ -279,10 +279,10 @@ fn the_cli_layers_value_files_then_set() {
     let f = Fixture::new("pack_cli_values");
     f.file(
         "test.oth",
-        r#"import { A } from "./scripts/A.wasm"
+        r#"import { A, Info } from "./scripts/A.wasm"
         import { Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
-        require info : application/bson = { $type: "Info" }
+        require info : Info
         instance a : A
         needs /net Listener
         write /net listen"#,
@@ -304,7 +304,7 @@ fn the_cli_layers_value_files_then_set() {
     assert_eq!(code, Some(0), "{out}");
     assert!(out.starts_with("slot listen : text/plain = \"0.0.0.0:0\" (--set)\n"), "{out}");
     assert!(
-        out.contains("slot info : application/bson { $type: \"Info\" (default), kind: \"file\" (a.vals:2:10), size: 2 (b.vals:1:10), mime: \"\" (a.vals:2:33) }"),
+        out.contains("slot info : Info { kind: \"file\" (a.vals:2:10), size: 2 (b.vals:1:10), mime: \"\" (a.vals:2:33) }"),
         "{out}"
     );
 

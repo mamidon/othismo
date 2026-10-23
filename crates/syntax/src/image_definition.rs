@@ -145,9 +145,12 @@ pub struct Request {
 pub enum Literal {
     /// `"text"`, a `text/plain` payload, or `<content type> "text"`.
     Text { ty: Option<Ident>, text: String, pos: Pos },
-    /// `<content type> { ... }`, encoded by that content type's format, or
-    /// `{ ... }` alone, where the type is a slot's.
+    /// `<content type> { ... }`, or `{ ... }` alone, where the type is a
+    /// slot's message type.
     Tree { ty: Option<Ident>, value: Value, pos: Pos },
+    /// `<message type> { ... }`: a message, encoded by the format of the
+    /// schemas block that declares its type.
+    Message { ty: Ident, value: Value, pos: Pos },
     /// `<content type> from "<file>"`: the file's bytes, relative to the image.
     File { ty: Ident, path: String, pos: Pos },
     /// A slot's name.
@@ -737,14 +740,9 @@ impl Parser {
                 }
             }
             Tok::Ident(_) => {
-                let name = self.ident("a slot's name", false)?;
+                let name = self.ident("a slot's name, or a message type", false)?;
                 if matches!(self.peek(), Tok::LBrace) {
-                    bail!(
-                        "{pos}: `{} {{ ... }}` names a message type; write the payload's content type, and the type inside it: \
-                         `application/bson {{ $type: \"{}\", ... }}`",
-                        name.name,
-                        name.name
-                    );
+                    return Ok(Literal::Message { ty: name, value: self.value()?, pos });
                 }
                 Literal::Name(name)
             }
@@ -851,12 +849,8 @@ impl Parser {
         let name = self.ident("slot name", false)?;
         self.expect(Tok::Colon)?;
         let ty = match self.next() {
-            (Tok::Type(ty), pos) => Ident { name: ty, pos },
-            (Tok::Ident(t), pos) => bail!(
-                "{pos}: a slot is typed by a content type: `require {} : application/bson = {{ $type: \"{t}\", ... }}`",
-                name.name
-            ),
-            (other, pos) => bail!("{pos}: expected the slot's content type, found {other}"),
+            (Tok::Type(ty) | Tok::Ident(ty), pos) => Ident { name: ty, pos },
+            (other, pos) => bail!("{pos}: expected the slot's message type or content type, found {other}"),
         };
         let mut default = None;
         if *self.peek() == Tok::Eq {
@@ -1083,20 +1077,20 @@ mod tests {
         let img = parse(
             r#"require listen : text/plain = "127.0.0.1:8080"
             require admin : text/plain
-            require greeting : application/bson = { $type: "Greeting", prefix: "Hi" }
+            require greeting : Greeting = { prefix: "Hi" }
             write /net listen"#,
         )
         .unwrap();
         let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.ty.name.as_str())).collect();
-        assert_eq!(reqs, [("listen", "text/plain"), ("admin", "text/plain"), ("greeting", "application/bson")]);
+        assert_eq!(reqs, [("listen", "text/plain"), ("admin", "text/plain"), ("greeting", "Greeting")]);
         assert!(matches!(&img.requires[0].default, Some(Literal::Text { text, .. }) if text == "127.0.0.1:8080"));
         assert_eq!(img.requires[1].default, None);
         assert!(matches!(&img.requires[2].default, Some(Literal::Tree { ty: None, .. })));
         assert!(matches!(&img.requests[0].body, Some(Literal::Name(n)) if n.name == "listen"), "a slot is named");
         assert!(parse("require : text/plain").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
-        let e = parse("require g : Greeting").unwrap_err().to_string();
-        assert!(e.contains("a slot is typed by a content type"), "{e}");
+        let e = parse("require g : { }").unwrap_err().to_string();
+        assert!(e.contains("expected the slot's message type or content type"), "{e}");
     }
 
     #[test]
@@ -1248,8 +1242,8 @@ mod tests {
         assert!(matches!(&img.requests[0].body, Some(Literal::Tree { ty: Some(_), value: Value::Object(_), .. })));
         assert!(matches!(&img.requests[1].body, Some(Literal::File { ty, path, .. }) if ty.name == "image/png" && path == "./logo.png"));
         assert!(matches!(&img.requests[2].body, Some(Literal::Tree { ty: None, .. })), "the checker asks what it is");
-        let e = parse("write /a Greeting { x: 1 }").unwrap_err().to_string();
-        assert!(e.contains("`Greeting { ... }` names a message type"), "{e}");
+        let img = parse("write /a Greeting { x: 1 }").unwrap();
+        assert!(matches!(&img.requests[0].body, Some(Literal::Message { ty, value: Value::Object(_), .. }) if ty.name == "Greeting"));
         let e = parse("write /a text/plain 3").unwrap_err().to_string();
         assert!(e.contains("expected a quoted string, `{ ... }` or `from \"<file>\"` after `text/plain`"), "{e}");
     }

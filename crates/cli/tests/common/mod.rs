@@ -47,11 +47,17 @@ pub fn module(wat: &str, iface: &str) -> Vec<u8> {
     othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap()
 }
 
-/// [`module`], with the message types `messages` declares embedded too.
+/// [`module`], with the message types `messages` declares, which its
+/// header may name, embedded too.
 pub fn module_with(wat: &str, iface: &str, messages: &str) -> Vec<u8> {
-    use format::Format;
-    let schemas = format_bson::Bson.parse(messages, &mut |_| anyhow::bail!("no imports here")).unwrap();
-    othismo::iface::embed_schemas(&module(wat, iface), &format_bson::Bson, &schemas).unwrap()
+    let iface = if iface.contains("export object") { iface.to_string() } else { iface.replace("object ", "export object ") };
+    let path = std::path::Path::new("/module/M.oth");
+    let mut loader = othismo::iface::Loader::new(othismo::formats());
+    loader.files.insert(path.into(), format!("{iface}\nexport schemas application/bson {{ {messages} }}").into_bytes());
+    let header = loader.header(path).unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
+    let schemas = loader.schemas(&format_bson::Bson, path).unwrap();
+    let wasm = othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap();
+    othismo::iface::embed_schemas(&wasm, &format_bson::Bson, &schemas).unwrap()
 }
 
 /// A scratch directory holding an image, its messages and its scripts.
