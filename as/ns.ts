@@ -47,7 +47,7 @@ declare function host_unmount(at: usize, atLen: i32): i32;
 declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, flags: i32): i32;
 
 // ---------------------------------------------------------------------------
-// Verbs, errors, flags (numbered as in src/ns.rs)
+// Verbs, errors, flags (numbered as in crates/protocol/src/ns.rs)
 
 export enum Verb { Read, Stat, List, Watch, Write, Create, Remove }
 

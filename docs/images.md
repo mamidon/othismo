@@ -420,7 +420,7 @@ test that fails, and the command exits with a failure if any did.
 ## The file format
 
 ```text
-"RTIMAGE" 0x06        magic and format version
+"RTIMAGE" 0x07        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

@@ -232,7 +232,7 @@ fn packed_trees_survive_sealing_and_unpacking() {
     let built = packed(&f, r#"include "public/""#).unwrap();
     let opened = pack::unseal(&built.seal(), f.dir.clone()).unwrap();
     assert_eq!(listing(&opened), listing(&built));
-    assert_eq!(pack::describe(&opened), "files  serves 1 built-in file, 1 bytes\n");
+    assert_eq!(pack::describe(&opened, &othismo::formats()), "files  serves 1 built-in file, 1 bytes\n");
 
     let out = f.dir.join("out");
     opened.unpack(&out).unwrap();
@@ -256,13 +256,13 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
     let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
-    let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &[]).unwrap_err());
+    let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &othismo::formats(), &[]).unwrap_err());
     assert!(e.ends_with("root: required, not provided"), "{e}");
 
     let given = Given { origin: "--set".into(), slot: "root".into(), field: None, value: GivenValue::Text("www".into()) };
-    slots::bind(&mut opened.program, &[given]).unwrap();
+    slots::bind(&mut opened.program, &othismo::formats(), &[given]).unwrap();
     assert_eq!(
-        pack::describe(&opened),
+        pack::describe(&opened, &othismo::formats()),
         "slot listen : text/plain = \"127.0.0.1:8080\" (default)\n\
          slot root : text/plain = \"www\" (--set)\n\
          \n\

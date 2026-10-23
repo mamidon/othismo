@@ -1,6 +1,6 @@
 // BSON messages, the first payload format: each one is a BSON document
 // whose first key is `$type` (the class name), followed by the class's
-// fields (see src/wire.rs). Its content type is `application/bson`, and the
+// fields (see crates/format-bson/src/wire.rs). Its content type is `application/bson`, and the
 // document names its own type. Bindings for a header's message types are
 // generated from it, and register themselves here.
 
@@ -87,7 +87,7 @@ const BSON_BOOL: u8 = 0x08;
 const BSON_INT32: u8 = 0x10;
 const BSON_INT64: u8 = 0x12;
 
-/** Builds one BSON document. Integer methods follow src/wire.rs's mapping. */
+/** Builds one BSON document. Integer methods follow crates/format-bson/src/wire.rs's mapping. */
 export class Writer {
   private buf: ArrayBuffer = new ArrayBuffer(64);
   private len: i32 = 4; // room for the document length, patched by finish()

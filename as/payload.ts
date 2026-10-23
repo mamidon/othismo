@@ -1,7 +1,7 @@
 // Payloads: what a request or an answer carries besides its verb, path and
 // status. A content type and some bytes, which the runtime carries without
 // looking inside. The one layout the protocol defines itself is the stat
-// record (see src/payload.rs), which `stat` and `list` answer with.
+// record (see crates/protocol/src/payload.rs), which `stat` and `list` answer with.
 
 export const TEXT = "text/plain"
 export const OCTETS = "application/octet-stream"
@@ -100,7 +100,7 @@ export class Stat {
 /**
  * Whether a payload of content type `given` fits where `want` is written:
  * `*\/*` takes anything and `text/*` any text, and a parameter `want` writes
- * must be in `given` with the same value (see src/payload.rs).
+ * must be in `given` with the same value (see crates/protocol/src/payload.rs).
  */
 export function fits(want: string, given: string): bool {
   const w = want.split(";")

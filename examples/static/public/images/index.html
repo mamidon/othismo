@@ -436,7 +436,7 @@ started, and a test can only reach what the image has in memory. A test that
 never answers fails. What the image prints on its consoles is shown for each
 test that fails, and the command exits with a failure if any did.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x06        magic and format version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x07        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

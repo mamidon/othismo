@@ -11,6 +11,8 @@ edition = "2024"
 [workspace.dependencies]
 protocol = { path = "crates/protocol" }
 syntax = { path = "crates/syntax" }
+format = { path = "crates/format" }
+format-bson = { path = "crates/format-bson" }
 anyhow = "1.0.104"
 bson = { version = "3.1.0", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -26,6 +28,8 @@ edition.workspace = true
 [dependencies]
 protocol.workspace = true
 syntax.workspace = true
+format.workspace = true
+format-bson.workspace = true
 anyhow.workspace = true
 bson.workspace = true
 serde.workspace = true

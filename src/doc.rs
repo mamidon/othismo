@@ -2,14 +2,14 @@
 //! `othismo doc` prints, and what the site's reference pages are made of.
 
 use crate::check;
-use crate::format::{Bson, Format, Messages};
 use crate::iface::{self, Entry, Object};
+use format::{AllSchemas, Formats};
 use std::fmt::Write;
 
 /// An object's page: its guide, or its `##` comment if it has none, then
-/// the reference for what it serves and needs, and for the message types
-/// its module declares.
-pub fn object(o: &Object, schemas: &Messages) -> String {
+/// the reference for what it serves and needs, and for the types its
+/// module declares in each of `formats`.
+pub fn object(o: &Object, formats: &Formats, schemas: &AllSchemas) -> String {
     let mut out = String::new();
     let guide = o.guide.as_deref().unwrap_or(&o.doc);
     if !guide.trim_start().starts_with("# ") {
@@ -20,7 +20,11 @@ pub fn object(o: &Object, schemas: &Messages) -> String {
     }
     out.push_str("## Reference\n\n");
     reference(&mut out, o, "###");
-    out.push_str(&Bson::document(schemas, "###"));
+    for f in formats.iter() {
+        if let Some(s) = schemas.get(f.content_type()) {
+            out.push_str(&f.document(s, "###"));
+        }
+    }
     out
 }
 
@@ -102,6 +106,8 @@ fn cell(doc: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use format::Format;
+    use format_bson::{BSON, Bson};
 
     fn header(src: &str) -> iface::Header {
         let file = iface::parse(src).unwrap();
@@ -135,7 +141,8 @@ mod tests {
     #[test]
     fn documents_an_object_from_its_header() {
         let h = header(SITE);
-        let out = object(&h.objects[0], &Bson::parse(HITS, &mut |_| unreachable!()).unwrap());
+        let schemas = AllSchemas::from([(BSON.to_string(), Bson.parse(HITS, &mut |_| unreachable!()).unwrap())]);
+        let out = object(&h.objects[0], &crate::formats(), &schemas);
         assert!(out.starts_with("# Site\n\nServes a site.\n\nFrom its files.\n\n## Reference\n\n### Serves\n\n"), "{out}");
         assert!(out.contains("| `/hits` | `read -> application/bson` | How many, so far. |\n| `/**` | `read -> */*` |  |\n"), "{out}");
         assert!(out.contains("### Needs\n\n#### `/files`\n\nThe files.\n\n| Path | Requests | |"), "{out}");
@@ -145,7 +152,7 @@ mod tests {
     #[test]
     fn a_guide_replaces_the_comment() {
         let h = header(r#"object Big { guide "./Big.md" }"#);
-        assert_eq!(object(&h.objects[0], &Messages::default()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
+        assert_eq!(object(&h.objects[0], &crate::formats(), &AllSchemas::new()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
     }
 
     #[test]

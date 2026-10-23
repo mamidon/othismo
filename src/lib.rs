@@ -5,16 +5,19 @@ pub mod bindings;
 pub mod check;
 pub mod doc;
 pub mod env;
-pub mod format;
 pub mod iface;
-pub mod messages;
 pub mod pack;
 pub mod render;
 pub mod runtime;
 pub mod slots;
 pub mod suite;
 pub mod tree;
-pub mod wire;
 
 pub use protocol::{ns, pattern, payload};
+pub use format_bson::{messages, wire};
+
+/// The formats this othismo knows: BSON's.
+pub fn formats() -> format::Formats {
+    format::Formats::new(vec![Box::new(format_bson::Bson)])
+}
 pub use syntax::image;

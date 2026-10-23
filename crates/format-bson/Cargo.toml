@@ -1,0 +1,12 @@
+[package]
+name = "format-bson"
+description = "The BSON payload format: message types, their wire layout, literals, and AssemblyScript bindings"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+format.workspace = true
+syntax.workspace = true
+anyhow.workspace = true
+bson.workspace = true
+serde.workspace = true

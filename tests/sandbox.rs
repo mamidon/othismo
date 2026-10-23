@@ -818,7 +818,7 @@ fn an_instantiated_image_is_relative_to_its_own_file() {
         format!("import Site from \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance site : Site\ninstance probe : Probe {{\n  mount /f site\n  bind /out /out\n}}\n"),
     );
     assert_eq!(run(&f).unwrap(), "hi\nnot_found\n");
-    let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap());
+    let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap(), &othismo::formats());
     assert!(described.contains("site.files  serves 1 built-in file, 2 bytes"), "{described}");
 }
 

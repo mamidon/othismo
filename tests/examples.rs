@@ -35,8 +35,10 @@ fn bindings_are_up_to_date() {
             let name = source.file_name().unwrap().to_string_lossy().into_owned();
             let want = match source.extension().and_then(|e| e.to_str()) {
                 Some("messages") => {
-                    let schemas = othismo::iface::Loader::default().schemas(&source).unwrap();
-                    (!schemas.declared.is_empty()).then(|| othismo::bindings::assemblyscript(&schemas, &name, "othismo/bson"))
+                    use format::Format;
+                    let bson = &format_bson::Bson;
+                    let schemas = othismo::iface::Loader::new(othismo::formats()).schemas(bson, &source).unwrap();
+                    bson.bindings(&schemas, &name, "othismo/bson")
                 }
                 Some("oth") => othismo::bindings::namespace(&othismo::iface::load(&source).unwrap(), &name, "othismo", "othismo/env"),
                 _ => continue,
@@ -118,7 +120,7 @@ fn example_tests_pass() {
             }
             let rel = img.strip_prefix(&examples).unwrap().to_string_lossy().into_owned();
             let mut pack = othismo::pack::load(&example(&rel)).unwrap();
-            othismo::slots::bind(&mut pack.program, &[]).unwrap();
+            othismo::slots::bind(&mut pack.program, &othismo::formats(), &[]).unwrap();
             let reports = othismo::suite::run(&pack, Options::default()).unwrap();
             assert!(!reports.is_empty(), "{rel} has no tests");
             let failed: Vec<_> = reports.iter().filter(|r| !r.passed).collect();

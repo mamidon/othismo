@@ -1,8 +1,6 @@
-//! How the console turns a payload into a line of text, and how `--check`
-//! shows a slot's values.
+//! How the console turns a payload into a line of text.
 
 use crate::payload::{Payload, Stat};
-use bson::Bson;
 use std::fmt::Write;
 
 /// Text prints as it is. A stat record prints as its fields, since the
@@ -20,23 +18,8 @@ pub fn line(p: &Payload) -> String {
     format!("{} ({n} byte{})", p.ty, if n == 1 { "" } else { "s" })
 }
 
-pub fn json_value(v: &Bson) -> String {
-    match v {
-        Bson::String(s) => json_string(s),
-        Bson::Boolean(b) => b.to_string(),
-        Bson::Int32(i) => i.to_string(),
-        Bson::Int64(i) => i.to_string(),
-        Bson::Double(x) if x.is_finite() => format!("{x:?}"),
-        Bson::Double(x) => json_string(&x.to_string()),
-        Bson::Binary(b) => match std::str::from_utf8(&b.bytes) {
-            Ok(s) => json_string(s),
-            Err(_) => format!("<{} bytes>", b.bytes.len()),
-        },
-        other => json_string(&other.to_string()),
-    }
-}
-
-fn json_string(s: &str) -> String {
+/// `s` as a JSON string.
+pub fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

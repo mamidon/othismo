@@ -4,12 +4,10 @@
 //! and then encoded by its format. See `docs/images.md`.
 
 use crate::check::{Arg, Program, SlotValue};
-use crate::format;
 use crate::image::{Ident, Pos, Value};
-use crate::messages::FieldType;
 use crate::payload::Payload;
-use crate::wire;
 use anyhow::{Context, Result, bail};
+use format::{Format, Formats, Schemas};
 use std::path::Path;
 
 /// One value from the host: a whole slot's, or one field of a structured one's.
@@ -78,12 +76,9 @@ impl Filling {
         fields.push((name.to_string(), value, origin.to_string()));
     }
 
-    /// The type a structured value's `$type` names, so far.
-    fn type_name(fields: &[(String, Value, String)]) -> Option<&str> {
-        fields.iter().find_map(|(f, v, _)| match v {
-            Value::Str(t) if f == wire::TYPE_KEY => Some(t.as_str()),
-            _ => None,
-        })
+    /// A structured value's fields so far, without where they came from.
+    fn so_far(fields: &[(String, Value, String)]) -> Vec<(String, Value)> {
+        fields.iter().map(|(f, v, _)| (f.clone(), v.clone())).collect()
     }
 }
 
@@ -91,12 +86,19 @@ impl Filling {
 /// later value replacing an earlier one, field by field for a structured
 /// slot. Fails, listing every problem, if a value names an unknown slot or
 /// field or doesn't fit, or if any slot or field is left without a value.
-pub fn bind(program: &mut Program, given: &[Given]) -> Result<()> {
+/// A structured slot is filled and encoded by whichever of `formats` is for
+/// its content type.
+pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result<()> {
     let mut problems = vec![];
+    let messages = program.messages.clone();
+    let format = |ty: &str| -> Option<(&dyn Format, Schemas)> {
+        let f = formats.for_type(ty)?;
+        Some((f, messages.get(f.content_type()).cloned().unwrap_or_default()))
+    };
     let mut filling: Vec<Filling> = program
         .slots
         .iter()
-        .map(|s| match (&s.default, s.structured()) {
+        .map(|s| match (&s.default, s.structured(formats)) {
             (Some(SlotValue::Tree(Value::Object(fields))), true) => {
                 Filling::Fields(fields.iter().map(|(k, v)| (k.name.clone(), v.clone(), "default".to_string())).collect())
             }
@@ -131,19 +133,8 @@ pub fn bind(program: &mut Program, given: &[Given]) -> Result<()> {
             )),
             (Filling::Fields(fields), Some(f), GivenValue::Literal(v)) => Filling::set(fields, f, v.clone(), &g.origin),
             (Filling::Fields(fields), Some(f), GivenValue::Text(raw)) => {
-                if f == wire::TYPE_KEY {
-                    Filling::set(fields, f, Value::Str(raw.clone()), &g.origin);
-                    continue;
-                }
-                let ty = Filling::type_name(fields).and_then(|t| program.messages.types.get(t));
-                let value = match ty {
-                    None => Err(format!("give `{}.{}` first, so that the field's type is known", g.slot, wire::TYPE_KEY)),
-                    Some(ty) => match ty.field(f) {
-                        Some(t) => literal(t, raw),
-                        None => Err(format!("`{}` has no field `{f}`", ty.name)),
-                    },
-                };
-                match value {
+                let (format, schemas) = format(&slot.ty).expect("a structured slot has a format");
+                match format.literal(&schemas, &Filling::so_far(fields), f, raw) {
                     Ok(v) => Filling::set(fields, f, v, &g.origin),
                     Err(e) => problems.push(format!("{}: {}.{f}: {e}", g.origin, g.slot)),
                 }
@@ -160,29 +151,21 @@ pub fn bind(program: &mut Program, given: &[Given]) -> Result<()> {
                 (Payload::text(""), vec![])
             }
             Filling::Fields(fields) => {
-                let Some(type_name) = Filling::type_name(&fields) else {
-                    problems.push(format!("{}.{}: required, not provided", slot.name, wire::TYPE_KEY));
-                    bound.push(Arg::Payload(Payload::text("")));
-                    continue;
-                };
-                let Some(ty) = program.messages.types.get(type_name) else {
-                    problems.push(format!("{}: no module in the image declares a message type `{type_name}`", slot.name));
-                    bound.push(Arg::Payload(Payload::text("")));
-                    continue;
-                };
-                let missing: Vec<&str> = ty.fields.iter().map(|(n, _)| n.as_str()).filter(|n| !fields.iter().any(|(f, ..)| f == n)).collect();
+                let (format, schemas) = format(&slot.ty).expect("a structured slot has a format");
+                let wanted = format.fields(&schemas, &Filling::so_far(&fields));
+                let missing: Vec<&str> = wanted.iter().map(String::as_str).filter(|n| !fields.iter().any(|(f, ..)| f == n)).collect();
                 for m in &missing {
                     problems.push(format!("{}.{m}: required, not provided", slot.name));
                 }
                 // Where each field came from, in the type's order.
                 let mut origins: Vec<(String, String)> = vec![];
-                for name in std::iter::once(wire::TYPE_KEY).chain(ty.fields.iter().map(|(n, _)| n.as_str())) {
+                for name in &wanted {
                     origins.extend(fields.iter().find(|(f, ..)| f == name).map(|(f, _, o)| (f.clone(), o.clone())));
                 }
                 let pos = Pos { line: 0, col: 0 };
                 let tree = Value::Object(fields.into_iter().map(|(f, v, _)| (Ident { name: f, pos }, v)).collect());
                 let bytes = if missing.is_empty() {
-                    format::encode(&slot.ty, &program.messages, &tree).unwrap_or_else(|e| {
+                    format.encode(&schemas, &tree).unwrap_or_else(|e| {
                         problems.push(format!("{}: {e}", slot.name));
                         vec![]
                     })
@@ -212,26 +195,12 @@ pub fn bind(program: &mut Program, given: &[Given]) -> Result<()> {
     Ok(())
 }
 
-/// Reads `text` as a literal for a field of type `t`.
-fn literal(t: FieldType, text: &str) -> std::result::Result<Value, String> {
-    let bad = || format!("`{text}` is not a valid {t}");
-    Ok(match t {
-        FieldType::String | FieldType::Bytes => Value::Str(text.to_string()),
-        FieldType::Bool => match text {
-            "true" => Value::Bool(true),
-            "false" => Value::Bool(false),
-            _ => return Err(bad()),
-        },
-        FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
-        _ => Value::Int(text.parse().map_err(|_| bad())?),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::check;
-    use crate::format::{Bson, Format};
+    use crate::wire;
+    use format_bson::Bson;
     use std::path::Path;
 
     /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it
@@ -244,8 +213,8 @@ mod tests {
         })
         .unwrap();
         let wasm = crate::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
-        let wasm = crate::iface::embed_schemas::<Bson>(&wasm, &Bson::parse(info, &mut |_| unreachable!()).unwrap()).unwrap();
-        let mut loader = crate::iface::Loader::default();
+        let wasm = crate::iface::embed_schemas(&wasm, &Bson, &Bson.parse(info, &mut |_| unreachable!()).unwrap()).unwrap();
+        let mut loader = crate::iface::Loader::new(crate::formats());
         loader.files.insert("/slots/A.oth".into(), a.into());
         loader.files.insert("/slots/A.messages".into(), info.into());
         loader.files.insert("/slots/A.wasm".into(), wasm);
@@ -293,7 +262,7 @@ mod tests {
             whole("--set", "listen", "0.0.0.0:8080"),
             text("--set", "info", "size", "42"),
         ];
-        bind(&mut p, &values).unwrap();
+        bind(&mut p, &crate::formats(), &values).unwrap();
 
         assert_eq!(p.instances[0].config.as_ref().unwrap().text().unwrap(), "0.0.0.0:8080");
         let info = fields(p.startup[0].body.as_ref().unwrap());
@@ -308,12 +277,12 @@ mod tests {
     fn payload_slots_are_given_whole() {
         let mut p = program(IMAGE);
         let info = [text("--set", "info", "size", "1"), text("--set", "info", "mime", "")];
-        bind(&mut p, &[&info[..], &[whole("a.vals:1:8", "host", "a"), whole("--set", "host", "example.com")]].concat()).unwrap();
+        bind(&mut p, &crate::formats(), &[&info[..], &[whole("a.vals:1:8", "host", "a"), whole("--set", "host", "example.com")]].concat()).unwrap();
         assert_eq!(p.startup[2].body, Some(Arg::Payload(Payload::text("example.com"))));
         assert_eq!(p.slots[2].origins, [(String::new(), "--set".to_string())]);
 
         let mut p = program("require host : text/plain instance a : A mount /a a write /a/host host");
-        let e = bind(&mut p, &[]).unwrap_err().to_string();
+        let e = bind(&mut p, &crate::formats(), &[]).unwrap_err().to_string();
         assert!(e.ends_with("host: required, not provided"), "{e}");
     }
 
@@ -324,7 +293,7 @@ mod tests {
             let mut parser = crate::image::Parser::new(src, false).unwrap();
             parser.value().unwrap()
         };
-        bind(&mut p, &[given("v.vals:1:8", "info", None, GivenValue::Literal(tree(r#"{ size: 3, mime: "" }"#)))]).unwrap();
+        bind(&mut p, &crate::formats(), &[given("v.vals:1:8", "info", None, GivenValue::Literal(tree(r#"{ size: 3, mime: "" }"#)))]).unwrap();
         assert_eq!(fields(p.startup[0].body.as_ref().unwrap()), bson::doc! { "kind": "file", "size": 3i64, "mime": "" });
     }
 
@@ -339,7 +308,7 @@ mod tests {
             whole("--set", "info", "x"),
             given("v.vals:2:8", "host", None, GivenValue::Literal(Value::Int(1))),
         ];
-        let e = bind(&mut p, &values).unwrap_err().to_string();
+        let e = bind(&mut p, &crate::formats(), &values).unwrap_err().to_string();
         assert_eq!(
             e,
             "the image's slots can't be filled:\n  \
@@ -353,8 +322,8 @@ mod tests {
              info.mime: required, not provided"
         );
         let mut p = program(r#"require g : application/bson instance a : A mount /a a write /a/info g"#);
-        let e = bind(&mut p, &[text("--set", "g", "kind", "x")]).unwrap_err().to_string();
-        assert!(e.contains("g.kind: give `g.$type` first"), "{e}");
+        let e = bind(&mut p, &crate::formats(), &[text("--set", "g", "kind", "x")]).unwrap_err().to_string();
+        assert!(e.contains("g.kind: give `$type` first"), "{e}");
         assert!(e.contains("g.$type: required, not provided"), "{e}");
     }
 
@@ -383,8 +352,8 @@ mod tests {
     #[test]
     fn an_image_without_slots_needs_nothing() {
         let mut p = program("needs /cons Console");
-        bind(&mut p, &[]).unwrap();
-        let e = bind(&mut p, &[text("--set", "x", "y", "z")]).unwrap_err().to_string();
+        bind(&mut p, &crate::formats(), &[]).unwrap();
+        let e = bind(&mut p, &crate::formats(), &[text("--set", "x", "y", "z")]).unwrap_err().to_string();
         assert!(e.contains("there is no slot `x`"), "{e}");
     }
 }

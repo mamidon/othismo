@@ -29,7 +29,7 @@ impl Write for Captured {
 /// Loads `image` and runs it with `input` as stdin; returns what it printed.
 pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<String> {
     let mut pack = othismo::pack::load(image)?;
-    othismo::slots::bind(&mut pack.program, &[])?;
+    othismo::slots::bind(&mut pack.program, &othismo::formats(), &[])?;
     let out = Captured::default();
     let io = Io { input: Box::new(Cursor::new(input.as_bytes().to_vec())), output: Box::new(out.clone()) };
     runtime::run(&pack, io, options)?;
@@ -49,9 +49,9 @@ pub fn module(wat: &str, iface: &str) -> Vec<u8> {
 
 /// [`module`], with the message types `messages` declares embedded too.
 pub fn module_with(wat: &str, iface: &str, messages: &str) -> Vec<u8> {
-    use othismo::format::{Bson, Format};
-    let schemas = Bson::parse(messages, &mut |_| anyhow::bail!("no imports here")).unwrap();
-    othismo::iface::embed_schemas::<Bson>(&module(wat, iface), &schemas).unwrap()
+    use format::Format;
+    let schemas = format_bson::Bson.parse(messages, &mut |_| anyhow::bail!("no imports here")).unwrap();
+    othismo::iface::embed_schemas(&module(wat, iface), &format_bson::Bson, &schemas).unwrap()
 }
 
 /// A scratch directory holding an image, its messages and its scripts.

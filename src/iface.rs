@@ -1,8 +1,8 @@
 //! Headers: the declarations in `.oth` files, which declare protocols,
 //! traits and objects: what each object serves, what it needs and its
 //! documentation. See `docs/objects.md`. What a payload holds is its
-//! format's business, and its schemas are in files of their own (see
-//! [`crate::format`]).
+//! format's business, and its schemas are in files of their own (see the
+//! `format` crate).
 //!
 //! A file's declarations are parsed into a [`File`], then resolved into a
 //! [`Header`]: its imports followed, every name it mentions declared, and
@@ -11,7 +11,7 @@
 
 use crate::image::{self, Ident, Image, Pos, Source};
 pub use syntax::decl::*;
-use crate::format::{Bson, Format, Messages};
+use format::{Format, Formats, Schemas};
 use crate::ns::{Status, Verb};
 use crate::pattern::{self, Pattern};
 use crate::payload::{self, ANY, STAT, STAT_NAME};
@@ -320,29 +320,40 @@ pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
     embed_section(wasm, SECTION, header).context("encoding the header")
 }
 
-/// `wasm` with `schemas`, a format's, in their section, replacing any
-/// already there.
-pub fn embed_schemas<F: Format>(wasm: &[u8], schemas: &F::Schemas) -> Result<Vec<u8>> {
-    embed_section(wasm, F::SECTION, schemas).context("encoding the schemas")
+/// `wasm` with `schemas`, `format`'s, in its section, replacing any
+/// already there. A module without schemas has no section for them.
+pub fn embed_schemas(wasm: &[u8], format: &dyn Format, schemas: &Schemas) -> Result<Vec<u8>> {
+    embed_bytes(wasm, format.section(), (!schemas.0.is_empty()).then_some(&schemas.0[..]))
 }
 
-/// The schemas of format `F` inside `wasm`; none if it has no section for them.
-pub fn embedded_schemas<F: Format>(wasm: &[u8]) -> Result<F::Schemas> {
-    Ok(section(wasm, F::SECTION)?.unwrap_or_default())
+/// The schemas of `format` inside `wasm`; none if it has no section for them.
+pub fn embedded_schemas(wasm: &[u8], format: &dyn Format) -> Result<Schemas> {
+    let name = format.section();
+    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(name)) else { return Ok(Schemas::default()) };
+    format.load(section.payload).with_context(|| format!("its `{name}` section is malformed; rebuild it with this othismo's `embed`"))
 }
 
 /// `wasm` with `value`, as BSON, in the custom section `name`.
 fn embed_section(wasm: &[u8], name: &str, value: &impl Serialize) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bson::serialize_to_document(value)?.to_writer(&mut bytes)?;
+    embed_bytes(wasm, name, Some(&bytes))
+}
+
+/// `wasm` with `bytes` as the custom section `name`, or with no such
+/// section if `bytes` is `None`.
+fn embed_bytes(wasm: &[u8], name: &str, bytes: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut out = wasm[..8].to_vec();
     for section in sections(wasm)? {
         if section.custom != Some(name) {
             out.extend_from_slice(section.bytes);
         }
     }
+    let Some(bytes) = bytes else { return Ok(out) };
     let mut payload = Vec::new();
     leb128(&mut payload, name.len() as u64);
     payload.extend_from_slice(name.as_bytes());
-    bson::serialize_to_document(value)?.to_writer(&mut payload)?;
+    payload.extend_from_slice(bytes);
     out.push(0);
     leb128(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);
@@ -746,9 +757,9 @@ fn content_type(id: &Ident) -> Result<String> {
     }
     if !payload::valid(&id.name) {
         let hint = if id.name.contains('/') {
-            "it isn't a well-formed content type".to_string()
+            "it isn't a well-formed content type"
         } else {
-            format!("a header names a payload by its content type, such as `text/plain` or `{}`, not by a message type", payload::BSON)
+            "a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"
         };
         bail!(err_at(id, format!("`{}`: {hint}", id.name)));
     }
@@ -783,20 +794,27 @@ pub fn load(path: &Path) -> Result<Header> {
 }
 
 /// Reads `.oth` files and the headers inside modules, each once, following
-/// imports relative to the file that makes them.
+/// imports relative to the file that makes them, and schema files in the
+/// formats it knows.
 #[derive(Default)]
 pub struct Loader {
+    /// The formats whose schemas it reads.
+    pub formats: Formats,
     /// What to read instead of the file on disk, by path: for tests.
     pub files: BTreeMap<PathBuf, Vec<u8>>,
     /// Every `.oth` and schema file read, in the order they were first read.
     pub sources: Vec<PathBuf>,
     headers: BTreeMap<PathBuf, Header>,
-    schemas: BTreeMap<PathBuf, Messages>,
+    schemas: BTreeMap<(PathBuf, &'static str), Schemas>,
     /// The `.oth` files being resolved, to catch one that imports itself.
     loading: Vec<PathBuf>,
 }
 
 impl Loader {
+    pub fn new(formats: Formats) -> Loader {
+        Loader { formats, ..Loader::default() }
+    }
+
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
         match self.files.get(path) {
             Some(bytes) => Ok(bytes.clone()),
@@ -848,14 +866,15 @@ impl Loader {
         Ok(header)
     }
 
-    /// The message types at `path`: a BSON schema file, `.messages`, or the
-    /// schemas inside a module; a module with none has none.
-    pub fn schemas(&mut self, path: &Path) -> Result<Messages> {
-        if let Some(m) = self.schemas.get(path) {
+    /// `format`'s schemas at `path`: a schema file of its, or those inside
+    /// a module; a module with none has none.
+    pub fn schemas(&mut self, format: &dyn Format, path: &Path) -> Result<Schemas> {
+        let key = (path.to_path_buf(), format.content_type());
+        if let Some(m) = self.schemas.get(&key) {
             return Ok(m.clone());
         }
         let schemas = if path.extension().is_some_and(|e| e == "wasm") {
-            embedded_schemas::<Bson>(&self.read(path)?).with_context(|| path.display().to_string())?
+            embedded_schemas(&self.read(path)?, format).with_context(|| path.display().to_string())?
         } else {
             if self.loading.iter().any(|p| p == path) {
                 bail!("{} imports itself, through the files it imports", path.display());
@@ -866,11 +885,11 @@ impl Loader {
             }
             let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
             self.loading.push(path.to_path_buf());
-            let parsed = Bson::parse(&src, &mut |p| self.schemas(&join(&dir, p)));
+            let parsed = format.parse(&src, &mut |p| self.schemas(format, &join(&dir, p)));
             self.loading.pop();
             parsed.with_context(|| format!("in {}", path.display()))?
         };
-        self.schemas.insert(path.to_path_buf(), schemas.clone());
+        self.schemas.insert(key, schemas.clone());
         Ok(schemas)
     }
 

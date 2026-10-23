@@ -3,18 +3,17 @@
 //! made part of it, with its instances named under the instance's name, and
 //! every view, bind and export is worked out before anything runs.
 
-use crate::format::{self, Bson, Format, Messages};
 use crate::iface::{self, Header, Loader, Object, Trait};
 use crate::image::{self, Ident, Image, Literal, Pos, Value};
 use crate::ns::{self, Namespace, Resolved, Status, Verb};
 use crate::pattern::Pattern;
 use crate::payload::{self, Payload};
-use crate::wire;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use format::{AllSchemas, Formats};
 use std::path::{Path, PathBuf};
 
 /// The traits the runtime implements on the host. The image being run gets
@@ -44,9 +43,9 @@ const RENAMED: &[(&str, &str)] = &[
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
-    /// The BSON format's schemas: every message type the image's modules
-    /// declare, which its literals and slots are encoded with.
-    pub messages: Messages,
+    /// Each format's schemas, by its content type: every type the image's
+    /// modules declare, which its literals and slots are encoded with.
+    pub messages: AllSchemas,
     /// Each instance type's interface: a module's header, the runtime's,
     /// or for an instance of an image, what it needs and exports.
     pub interfaces: BTreeMap<String, Object>,
@@ -170,10 +169,10 @@ pub enum SlotValue {
 }
 
 impl Slot {
-    /// Whether its payloads are structured: some format encodes them from
-    /// their fields.
-    pub fn structured(&self) -> bool {
-        payload::fits(Bson::CONTENT_TYPE, &self.ty)
+    /// Whether its payloads are structured: one of `formats` encodes them
+    /// from their fields.
+    pub fn structured(&self, formats: &Formats) -> bool {
+        formats.for_type(&self.ty).is_some()
     }
 }
 
@@ -293,9 +292,10 @@ struct Builder<'l> {
     requests: Vec<Request>,
     /// The root's slots.
     slots: Vec<Slot>,
-    /// Every module's message types, and which module each came from.
-    messages: Messages,
-    message_from: BTreeMap<String, String>,
+    /// Every module's schemas, and which module each type came from, by
+    /// content type.
+    messages: AllSchemas,
+    message_from: BTreeMap<String, BTreeMap<String, String>>,
     modules: BTreeMap<String, String>,
 }
 
@@ -303,7 +303,7 @@ struct Builder<'l> {
 /// instantiates and everything its files import, reading each module's
 /// header from the module.
 pub fn load(path: &Path) -> Result<Program> {
-    load_with(path, &mut Loader::default())
+    load_with(path, &mut Loader::new(crate::formats()))
 }
 
 /// [`load`], reading every file through `loader`.
@@ -319,7 +319,7 @@ pub fn load_with(path: &Path, loader: &mut Loader) -> Result<Program> {
         pending: vec![],
         requests: vec![],
         slots: vec![],
-        messages: Messages::default(),
+        messages: AllSchemas::new(),
         message_from: BTreeMap::new(),
         modules: BTreeMap::new(),
     };
@@ -545,11 +545,12 @@ impl Builder<'_> {
         Ok(Arg::Payload(match literal {
             Literal::Text { ty: t, text, .. } => Payload::new(ty(t, payload::TEXT)?, text.as_bytes()),
             Literal::Tree { ty: None, pos, .. } if want.is_none() => {
-                bail!("{pos}: say what this payload is: `<content type> {{ ... }}`, such as `{} {{ ... }}`", Bson::CONTENT_TYPE)
+                let example = self.loader.formats.iter().next().map(|f| f.content_type()).unwrap_or("application/bson");
+                bail!("{pos}: say what this payload is: `<content type> {{ ... }}`, such as `{example} {{ ... }}`")
             }
             Literal::Tree { ty: t, value, pos } => {
                 let ty = ty(t, "")?;
-                let bytes = format::encode(&ty, &self.messages, value).map_err(|e| anyhow!("{pos}: {e}"))?;
+                let bytes = self.loader.formats.encode(&ty, &self.messages, value).map_err(|e| anyhow!("{pos}: {e}"))?;
                 Payload::new(ty, bytes)
             }
             Literal::File { ty: t, path, pos } => {
@@ -593,15 +594,20 @@ impl Builder<'_> {
             {
                 bail!("`{}` would come from both {prev} and {rel}; an image can't use two modules of one name", object.name);
             }
-            let schemas = self.loader.schemas(&module)?;
-            if origin.extension().is_some_and(|e| e == "oth") {
-                let source = origin.with_extension(Bson::EXTENSION);
-                let written = if self.loader.read(&source).is_ok() { self.loader.schemas(&source)? } else { Messages::default() };
-                if written.types != schemas.types {
-                    bail!("{} is stale: the message types inside it aren't {}'s; rebuild it", module.display(), source.display());
+            let formats = self.loader.formats.clone();
+            for f in formats.iter() {
+                let schemas = self.loader.schemas(f, &module)?;
+                if origin.extension().is_some_and(|e| e == "oth") {
+                    let source = origin.with_extension(f.extension());
+                    let written = if self.loader.read(&source).is_ok() { self.loader.schemas(f, &source)? } else { Default::default() };
+                    if !f.same(&written, &schemas) {
+                        bail!("{} is stale: the types inside it aren't {}'s; rebuild it", module.display(), source.display());
+                    }
                 }
+                let ty = f.content_type().to_string();
+                let from = self.message_from.entry(ty.clone()).or_default();
+                f.merge(self.messages.entry(ty).or_default(), from, &schemas, &object.name)?;
             }
-            Bson::merge(&mut self.messages, &mut self.message_from, &schemas, &object.name)?;
             return Ok(TypeRef::Wasm { object, module: rel });
         }
         if let Some(t) = scope.traits.get(&ty.name) {
@@ -715,11 +721,10 @@ impl Builder<'_> {
         let ns = self.namespace();
         for slot in &self.slots {
             if let Some(SlotValue::Tree(v)) = &slot.default
-                && slot.structured()
-                && let Value::Object(fields) = v
-                && fields.iter().any(|(k, _)| k.name == wire::TYPE_KEY)
+                && let Some(f) = self.loader.formats.for_type(&slot.ty)
             {
-                format::fields(&self.messages, v).map_err(|e| anyhow!("slot `{}`'s default: {e}", slot.name))?;
+                let schemas = self.messages.get(f.content_type()).cloned().unwrap_or_default();
+                f.check(&schemas, v).map_err(|e| anyhow!("slot `{}`'s default: {e}", slot.name))?;
             }
         }
 
@@ -1052,6 +1057,9 @@ fn content_type(id: &Ident) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire;
+    use format::Format;
+    use format_bson::Bson;
 
     /// The message types every scripted module declares, beside its own.
     const MESSAGES: &str = r#"
@@ -1091,9 +1099,9 @@ mod tests {
     fn module(src: &str, messages: &str) -> Vec<u8> {
         let file = iface::parse(src).unwrap();
         let header = iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap();
-        let schemas = Bson::parse(messages, &mut |_| unreachable!()).unwrap();
+        let schemas = Bson.parse(messages, &mut |_| unreachable!()).unwrap();
         let wasm = iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
-        iface::embed_schemas::<Bson>(&wasm, &schemas).unwrap()
+        iface::embed_schemas(&wasm, &Bson, &schemas).unwrap()
     }
 
     /// Puts module `ty`, with header `src`, at /check: its header and
@@ -1134,7 +1142,7 @@ mod tests {
     /// MESSAGES among its message types. A `Ghost` has no module.
     fn check_all(img: &str, modules: &[(&str, &str)], files: &[(&str, &str)]) -> Result<Program> {
         let dir = PathBuf::from("/check");
-        let mut loader = Loader::default();
+        let mut loader = Loader::new(crate::formats());
         for (name, src) in files {
             loader.files.insert(dir.join(name), src.as_bytes().to_vec());
         }
@@ -1440,7 +1448,8 @@ mod tests {
             &[("Greeter", greeter)],
         )
         .unwrap();
-        assert!(p.messages.types.contains_key("Hello"), "a module's message types are the image's to write");
+        let types = Bson::messages(&p.messages[format_bson::BSON]).types;
+        assert!(types.contains_key("Hello"), "a module's message types are the image's to write");
         assert_eq!(p.interfaces["Greeter"].serves[0].path.as_str(), "/greeting");
         let e = err(r#"needs /c Console  write /c application/bson { $type: "Hello" }"#);
         assert!(e.contains("no module in the image declares a message type `Hello`"), "only its modules': {e}");
@@ -1460,7 +1469,7 @@ mod tests {
         let (header, messages) = split(greeter);
         let header = exported(&header);
         let stale = |oth: &str, schemas: &str| {
-            let mut loader = Loader::default();
+            let mut loader = Loader::new(crate::formats());
             loader.files.insert("/s/Greeter.oth".into(), oth.as_bytes().to_vec());
             loader.files.insert("/s/Greeter.messages".into(), schemas.as_bytes().to_vec());
             loader.files.insert("/s/Greeter.wasm".into(), module(&header, &messages));
@@ -1470,10 +1479,10 @@ mod tests {
         let e = stale("export object Greeter { serves { /greeting write text/plain } }", &messages);
         assert!(e.contains("/s/Greeter.wasm is stale: the header inside it isn't /s/Greeter.oth's; rebuild it"), "{e}");
         let e = stale(&header, "message Hello { prefix: i32 }");
-        assert!(e.contains("/s/Greeter.wasm is stale: the message types inside it aren't /s/Greeter.messages's; rebuild it"), "{e}");
+        assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't /s/Greeter.messages's; rebuild it"), "{e}");
 
         // Or it is imported from the module itself.
-        let mut loader = Loader::default();
+        let mut loader = Loader::new(crate::formats());
         loader.files.insert("/m/Greeter.wasm".into(), module(&header, &messages));
         loader.files.insert("/m/test.oth".into(), br#"import { Greeter } from "./Greeter.wasm" instance g : Greeter"#.to_vec());
         let p = load_with(Path::new("/m/test.oth"), &mut loader).unwrap();

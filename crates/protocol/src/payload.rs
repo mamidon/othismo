@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 pub const TEXT: &str = "text/plain";
 /// Bytes with no more particular type.
 pub const OCTETS: &str = "application/octet-stream";
-/// A BSON document, which names its own type.
-pub const BSON: &str = "application/bson";
 /// A stat record, which headers can write as `Stat`.
 pub const STAT: &str = "application/x-othismo-stat";
 /// What headers write for a stat record's content type.

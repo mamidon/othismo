@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use othismo::format::{Bson, Format, Messages};
+use format::AllSchemas;
 use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -132,17 +132,19 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
     let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", source.display())));
     Ok((|| {
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let formats = othismo::formats();
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or_default();
         let ts = if source == Path::new("env") {
             Some(bindings::env(library.as_deref().unwrap_or("othismo")))
-        } else if source.extension().is_some_and(|e| e == Bson::EXTENSION) {
-            let schemas = iface::Loader::default().schemas(&source)?;
-            let library = library.as_deref().unwrap_or("othismo/bson");
-            (!schemas.declared.is_empty()).then(|| Bson::bindings(&schemas, &name, library))
-        } else if source.extension().is_some_and(|e| e == "oth") {
+        } else if let Some(f) = formats.for_extension(ext) {
+            let schemas = iface::Loader::new(formats.clone()).schemas(f, &source)?;
+            f.bindings(&schemas, &name, library.as_deref().unwrap_or("othismo/bson"))
+        } else if ext == "oth" {
             let header = iface::load(&source)?;
             bindings::namespace(&header, &name, library.as_deref().unwrap_or("othismo"), "othismo/env")
         } else {
-            anyhow::bail!("bindings come from a header (`.oth`), a schema file (`.{}`) or env", Bson::EXTENSION);
+            let exts: Vec<String> = formats.iter().map(|f| format!("`.{}`", f.extension())).collect();
+            anyhow::bail!("bindings come from a header (`.oth`), a schema file ({}) or env", exts.join(", "));
         };
         match ts {
             Some(ts) => std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display())),
@@ -153,18 +155,21 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
     })())
 }
 
-/// Puts `header` into `module`, and the message types in the `.messages`
-/// file beside the header, if there is one.
+/// Puts `header` into `module`, and the schemas in each schema file beside
+/// the header, such as its `.messages`, if there is one.
 fn embed(header: &Path, module: &Path) -> Result<()> {
     let name = module.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut loader = iface::Loader::default();
+    let formats = othismo::formats();
+    let mut loader = iface::Loader::new(formats.clone());
     let resolved = loader.header(header)?;
     iface::for_module(&resolved, &name).with_context(|| format!("{} can't be {name}'s header", header.display()))?;
-    let schemas = header.with_extension(Bson::EXTENSION);
-    let schemas = if schemas.exists() { loader.schemas(&schemas)? } else { Messages::default() };
     let wasm = std::fs::read(module).with_context(|| format!("reading {}", module.display()))?;
-    let wasm = iface::embed(&wasm, &resolved).with_context(|| module.display().to_string())?;
-    let wasm = iface::embed_schemas::<Bson>(&wasm, &schemas).with_context(|| module.display().to_string())?;
+    let mut wasm = iface::embed(&wasm, &resolved).with_context(|| module.display().to_string())?;
+    for f in formats.iter() {
+        let schemas = header.with_extension(f.extension());
+        let schemas = if schemas.exists() { loader.schemas(f, &schemas)? } else { Default::default() };
+        wasm = iface::embed_schemas(&wasm, f, &schemas).with_context(|| module.display().to_string())?;
+    }
     std::fs::write(module, wasm).with_context(|| format!("writing {}", module.display()))
 }
 
@@ -175,20 +180,24 @@ fn document(target: &str) -> Result<String> {
         return Ok(doc::env());
     }
     let env = iface::env();
+    let formats = othismo::formats();
     if let Some(o) = env.object(target).cloned().or_else(|| env.traits.get(target).map(|t| t.as_object())) {
-        return Ok(doc::object(&o, &Messages::default()));
+        return Ok(doc::object(&o, &formats, &AllSchemas::new()));
     }
-    let mut loader = iface::Loader::default();
-    let (header, schemas) = match ext {
-        Some("wasm") => (loader.header(path)?, loader.schemas(path)?),
-        Some("oth") => {
-            let schemas = path.with_extension(Bson::EXTENSION);
-            let schemas = if schemas.exists() { loader.schemas(&schemas)? } else { Messages::default() };
-            (loader.header(path)?, schemas)
+    let mut loader = iface::Loader::new(formats.clone());
+    let mut schemas = AllSchemas::new();
+    for f in formats.iter() {
+        let from = match ext {
+            Some("wasm") => path.to_path_buf(),
+            Some("oth") => path.with_extension(f.extension()),
+            _ => anyhow::bail!("{target} is not a module, a header or a built-in type"),
+        };
+        if ext == Some("wasm") || from.exists() {
+            schemas.insert(f.content_type().to_string(), loader.schemas(f, &from)?);
         }
-        _ => anyhow::bail!("{target} is not a module, a header or a built-in type"),
-    };
-    let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &schemas)).collect();
+    }
+    let header = loader.header(path)?;
+    let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &formats, &schemas)).collect();
     Ok(pages.join("\n"))
 }
 
@@ -203,7 +212,7 @@ fn test(args: &[String]) -> Result<Result<()>, Usage> {
         _ => return Err(Usage),
     };
     Ok(pack::load(image.as_ref()).and_then(|mut pack| {
-        slots::bind(&mut pack.program, &[])?;
+        slots::bind(&mut pack.program, &othismo::formats(), &[])?;
         let reports = suite::run(&pack, options)?;
         for r in &reports {
             println!("{} {} ... {}", r.suite, r.test, if r.passed { "ok" } else { "FAILED" });
@@ -249,9 +258,10 @@ fn run(args: &[String]) -> Result<Result<()>, Usage> {
         for set in sets {
             given.push(slots::parse_set(set)?);
         }
-        slots::bind(&mut pack.program, &given)?;
+        let formats = othismo::formats();
+        slots::bind(&mut pack.program, &formats, &given)?;
         if check_only {
-            print!("{}", pack::describe(&pack));
+            print!("{}", pack::describe(&pack, &formats));
             Ok(())
         } else {
             runtime::run(&pack, runtime::Io::std(), options)

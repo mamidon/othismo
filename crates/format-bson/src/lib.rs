@@ -1,50 +1,26 @@
-//! Payload formats: everything Othismo does with the bytes of payloads of
-//! one content type. It does all of it when a module or an image is built;
-//! the runtime uses none of it (see `docs/protocol.md`).
-//!
-//! A format is a [`Format`], and [`Bson`] is the first, for
-//! `application/bson`: its schemas are message types, written in `.messages`
-//! files beside a module's header.
+//! The BSON format, for `application/bson`: a payload is a BSON document
+//! whose first key, `$type`, names its message type. Its schemas are
+//! message types, written in `.messages` files beside a module's header.
+//! It is the format the SDK supports, and the protocol knows nothing of it.
 
-use crate::image::{Parser, Source, Tok, Value};
-use crate::messages::{FieldType, MessageType};
-use crate::payload;
-use crate::wire::{self, Message};
+pub mod bindings;
+pub mod messages;
+pub mod wire;
+
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use serde::de::DeserializeOwned;
+use format::{Format, Schemas};
+use messages::{FieldType, MessageType};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use syntax::image::{Parser, Source, Tok, Value};
+use wire::Message;
 
-/// What a format supplies: a schema language, when two schemas agree, an
-/// encoder for literals, bindings and documentation.
-pub trait Format {
-    /// A set of the format's schemas: every type a module or an image can name.
-    type Schemas: Clone + Default + PartialEq + Serialize + DeserializeOwned;
-    /// The content type it is for.
-    const CONTENT_TYPE: &'static str;
-    /// Its schema files' extension, beside a module's header.
-    const EXTENSION: &'static str;
-    /// The custom section a module's schemas travel in.
-    const SECTION: &'static str;
+/// The content type of a BSON payload.
+pub const BSON: &str = "application/bson";
 
-    /// Parses and resolves a schema file. `import` gives the schemas of a
-    /// file it imports from, by the path it writes.
-    fn parse(src: &str, import: &mut dyn FnMut(&str) -> Result<Self::Schemas>) -> Result<Self::Schemas>;
-    /// Adds `more`, from `origin`, to `all`. Where both have a type, they
-    /// must agree. `from` says where each of `all`'s came from.
-    fn merge(all: &mut Self::Schemas, from: &mut BTreeMap<String, String>, more: &Self::Schemas, origin: &str) -> Result<()>;
-    /// Encodes a literal, which `schemas` must allow.
-    fn encode(schemas: &Self::Schemas, value: &Value) -> Result<Vec<u8>, String>;
-    /// AssemblyScript bindings for the types a schema file declares.
-    fn bindings(schemas: &Self::Schemas, source: &str, library: &str) -> String;
-    /// A reference for the types a schema file declares, as Markdown under
-    /// headings at level `h`.
-    fn document(schemas: &Self::Schemas, h: &str) -> String;
-}
-
-/// BSON messages: a document whose first key, `$type`, names its type.
+/// BSON messages, as a [`Format`].
 pub struct Bson;
 
 /// A set of message types, and the ones declared where it was read.
@@ -55,13 +31,24 @@ pub struct Messages {
     pub declared: Vec<String>,
 }
 
-impl Format for Bson {
-    type Schemas = Messages;
-    const CONTENT_TYPE: &'static str = payload::BSON;
-    const EXTENSION: &'static str = "messages";
-    const SECTION: &'static str = "othismo.schema.bson";
+impl Bson {
+    /// The message types in `schemas`, which this format wrote.
+    pub fn messages(schemas: &Schemas) -> Messages {
+        if schemas.0.is_empty() {
+            return Messages::default();
+        }
+        let doc = Document::from_reader(&schemas.0[..]).expect("BSON's schemas are its own");
+        bson::deserialize_from_document(doc).expect("BSON's schemas are its own")
+    }
 
-    fn parse(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
+    /// `messages`, as schemas.
+    pub fn schemas(messages: &Messages) -> Schemas {
+        let mut out = vec![];
+        bson::serialize_to_document(messages).expect("message types serialize").to_writer(&mut out).expect("into a Vec");
+        Schemas(out)
+    }
+
+    pub fn parse_messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
         let mut p = Parser::new(src, true)?;
         let mut out = Messages::default();
         let mut from: BTreeMap<String, String> = BTreeMap::new();
@@ -122,7 +109,7 @@ impl Format for Bson {
         }
     }
 
-    fn merge(all: &mut Messages, from: &mut BTreeMap<String, String>, more: &Messages, origin: &str) -> Result<()> {
+    pub fn merge_messages(all: &mut Messages, from: &mut BTreeMap<String, String>, more: &Messages, origin: &str) -> Result<()> {
         for (name, ty) in &more.types {
             match all.types.get(name) {
                 Some(prev) if prev.fields != ty.fields => {
@@ -138,7 +125,7 @@ impl Format for Bson {
         Ok(())
     }
 
-    fn encode(schemas: &Messages, value: &Value) -> Result<Vec<u8>, String> {
+    pub fn encode_message(schemas: &Messages, value: &Value) -> Result<Vec<u8>, String> {
         let (type_name, fields) = fields(schemas, value)?;
         let ty = &schemas.types[&type_name];
         if let Some((missing, _)) = ty.fields.iter().find(|(n, _)| !fields.contains_key(n)) {
@@ -147,17 +134,13 @@ impl Format for Bson {
         Ok(Message { type_name, fields }.encode())
     }
 
-    fn bindings(schemas: &Messages, source: &str, library: &str) -> String {
-        crate::bindings::assemblyscript(schemas, source, library)
-    }
-
-    fn document(schemas: &Messages, h: &str) -> String {
+    pub fn document_messages(schemas: &Messages, h: &str) -> String {
         let mut out = String::new();
         let types: Vec<&MessageType> = schemas.declared.iter().filter_map(|t| schemas.types.get(t)).collect();
         if types.is_empty() {
             return out;
         }
-        writeln!(out, "{h} Messages\n\nPayloads of `{}`, each named by its `$type`.\n", Bson::CONTENT_TYPE).unwrap();
+        writeln!(out, "{h} Messages\n\nPayloads of `{}`, each named by its `$type`.\n", BSON).unwrap();
         for ty in types {
             writeln!(out, "{h}# `{}`\n", ty.name).unwrap();
             if !ty.doc.is_empty() {
@@ -176,6 +159,147 @@ impl Format for Bson {
         }
         out
     }
+}
+
+impl Format for Bson {
+    fn content_type(&self) -> &'static str {
+        BSON
+    }
+
+    fn extension(&self) -> &'static str {
+        "messages"
+    }
+
+    fn section(&self) -> &'static str {
+        "othismo.schema.bson"
+    }
+
+    fn load(&self, bytes: &[u8]) -> Result<Schemas> {
+        let messages: Messages = bson::deserialize_from_document(Document::from_reader(bytes)?)?;
+        Ok(Bson::schemas(&messages))
+    }
+
+    fn parse(&self, src: &str, import: &mut dyn FnMut(&str) -> Result<Schemas>) -> Result<Schemas> {
+        Ok(Bson::schemas(&Bson::parse_messages(src, &mut |p| import(p).map(|s| Bson::messages(&s)))?))
+    }
+
+    fn merge(&self, all: &mut Schemas, from: &mut BTreeMap<String, String>, more: &Schemas, origin: &str) -> Result<()> {
+        let mut types = Bson::messages(all);
+        Bson::merge_messages(&mut types, from, &Bson::messages(more), origin)?;
+        *all = Bson::schemas(&types);
+        Ok(())
+    }
+
+    fn same(&self, a: &Schemas, b: &Schemas) -> bool {
+        Bson::messages(a).types == Bson::messages(b).types
+    }
+
+    fn encode(&self, schemas: &Schemas, value: &Value) -> Result<Vec<u8>, String> {
+        Bson::encode_message(&Bson::messages(schemas), value)
+    }
+
+    fn check(&self, schemas: &Schemas, value: &Value) -> Result<(), String> {
+        match value {
+            Value::Object(fields) if !fields.iter().any(|(k, _)| k.name == wire::TYPE_KEY) => Ok(()),
+            _ => fields(&Bson::messages(schemas), value).map(|_| ()),
+        }
+    }
+
+    fn fields(&self, schemas: &Schemas, so_far: &[(String, Value)]) -> Vec<String> {
+        let mut out = vec![wire::TYPE_KEY.to_string()];
+        if let Some(ty) = type_of(so_far).and_then(|t| Bson::messages(schemas).types.get(t).cloned()) {
+            out.extend(ty.fields.iter().map(|(n, _)| n.clone()));
+        }
+        out
+    }
+
+    fn literal(&self, schemas: &Schemas, so_far: &[(String, Value)], field: &str, raw: &str) -> Result<Value, String> {
+        if field == wire::TYPE_KEY {
+            return Ok(Value::Str(raw.to_string()));
+        }
+        let messages = Bson::messages(schemas);
+        let Some(ty) = type_of(so_far).and_then(|t| messages.types.get(t)) else {
+            return Err(format!("give `{}` first, so that the field's type is known", wire::TYPE_KEY));
+        };
+        match ty.field(field) {
+            Some(t) => literal(t, raw),
+            None => Err(format!("`{}` has no field `{field}`", ty.name)),
+        }
+    }
+
+    fn show(&self, bytes: &[u8]) -> Option<Vec<(String, String)>> {
+        let m = Message::decode(bytes).ok()?;
+        let mut out = vec![(wire::TYPE_KEY.to_string(), json_value(&B::String(m.type_name.clone())))];
+        out.extend(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))));
+        Some(out)
+    }
+
+    fn bindings(&self, schemas: &Schemas, source: &str, library: &str) -> Option<String> {
+        let messages = Bson::messages(schemas);
+        (!messages.declared.is_empty()).then(|| bindings::assemblyscript(&messages, source, library))
+    }
+
+    fn document(&self, schemas: &Schemas, h: &str) -> String {
+        Bson::document_messages(&Bson::messages(schemas), h)
+    }
+}
+
+/// The type `$type` names among `fields`, if it does.
+fn type_of(fields: &[(String, Value)]) -> Option<&str> {
+    fields.iter().find_map(|(f, v)| match v {
+        Value::Str(t) if f == wire::TYPE_KEY => Some(t.as_str()),
+        _ => None,
+    })
+}
+
+/// Reads `text` as a literal for a field of type `t`.
+fn literal(t: FieldType, text: &str) -> std::result::Result<Value, String> {
+    let bad = || format!("`{text}` is not a valid {t}");
+    Ok(match t {
+        FieldType::String | FieldType::Bytes => Value::Str(text.to_string()),
+        FieldType::Bool => match text {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => return Err(bad()),
+        },
+        FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
+        _ => Value::Int(text.parse().map_err(|_| bad())?),
+    })
+}
+
+/// A BSON value as JSON-ish text.
+pub fn json_value(v: &B) -> String {
+    match v {
+        B::String(s) => json_string(s),
+        B::Boolean(b) => b.to_string(),
+        B::Int32(i) => i.to_string(),
+        B::Int64(i) => i.to_string(),
+        B::Double(x) if x.is_finite() => format!("{x:?}"),
+        B::Double(x) => json_string(&x.to_string()),
+        B::Binary(b) => match std::str::from_utf8(&b.bytes) {
+            Ok(s) => json_string(s),
+            Err(_) => format!("<{} bytes>", b.bytes.len()),
+        },
+        other => json_string(&other.to_string()),
+    }
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The type a BSON literal names with `$type`, and its fields as given,
@@ -230,21 +354,12 @@ pub fn field_bson(ty: &MessageType, field: &str, value: &Value) -> std::result::
     })
 }
 
-/// Encodes `value` as a payload of content type `ty`, with `messages` as
-/// the BSON format's schemas. Only a format can encode a structured literal.
-pub fn encode(ty: &str, messages: &Messages, value: &Value) -> Result<Vec<u8>, String> {
-    if payload::fits(Bson::CONTENT_TYPE, ty) {
-        return Bson::encode(messages, value);
-    }
-    Err(format!("no format writes `{ty}`; a structured literal needs one, and the runtime has {}", Bson::CONTENT_TYPE))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn messages(src: &str) -> Messages {
-        Bson::parse(src, &mut |p| bail!("no {p} here")).unwrap()
+        Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap()
     }
 
     fn value(src: &str) -> Value {
@@ -268,7 +383,7 @@ mod tests {
         assert_eq!(m.declared, ["Greeting", "Odd"]);
         let g = &m.types["Greeting"];
         assert_eq!((g.doc.as_str(), g.field_docs[0].as_str()), ("Configures a Greeter.", "Put before each name."));
-        let err = |src: &str| format!("{:#}", Bson::parse(src, &mut |p| bail!("no {p} here")).unwrap_err());
+        let err = |src: &str| format!("{:#}", Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap_err());
         assert!(err("message A { x: Strin }").contains("`Strin` is not a field type"));
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
         assert!(err("message A {} message A {}").contains("message `A` is declared twice"));
@@ -276,21 +391,21 @@ mod tests {
         assert!(err(r#"import { A } from "./a.messages""#).contains("no ./a.messages here"));
 
         let mut import = |_: &str| Ok(messages(GREETING));
-        let m = Bson::parse(r#"import { Greeting } from "./g.messages" message Mine { g: string }"#, &mut import).unwrap();
+        let m = Bson::parse_messages(r#"import { Greeting } from "./g.messages" message Mine { g: string }"#, &mut import).unwrap();
         assert_eq!(m.declared, ["Mine"], "imported types have their own bindings");
         assert!(m.types.contains_key("Greeting"));
-        let e = format!("{:#}", Bson::parse(r#"import { Greeting as G } from "./g.messages""#, &mut import).unwrap_err());
+        let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.messages""#, &mut import).unwrap_err());
         assert!(e.contains("can't be renamed"), "{e}");
     }
 
     #[test]
     fn literals_are_encoded_against_the_schemas() {
         let m = messages(GREETING);
-        let bytes = Bson::encode(&m, &value(r#"{ excited: true, $type: "Greeting", prefix: "Hi" }"#)).unwrap();
+        let bytes = Bson::encode_message(&m, &value(r#"{ excited: true, $type: "Greeting", prefix: "Hi" }"#)).unwrap();
         let msg = Message::decode(&bytes).unwrap();
         assert_eq!(msg.type_name, "Greeting");
         assert_eq!(msg.fields.keys().collect::<Vec<_>>(), ["prefix", "excited"], "in declared order");
-        let err = |src: &str| Bson::encode(&m, &value(src)).unwrap_err();
+        let err = |src: &str| Bson::encode_message(&m, &value(src)).unwrap_err();
         assert!(err(r#"{ $type: "Greeting", prefix: "Hi" }"#).contains("missing field `excited`"));
         assert!(err(r#"{ prefix: "Hi" }"#).contains("names its type with `$type"));
         assert!(err(r#"{ $type: "Nope" }"#).contains("no module in the image declares a message type `Nope`"));
@@ -298,6 +413,14 @@ mod tests {
         assert!(err(r#"{ $type: "Odd", a: 300, b: 1, c: 1, d: "x" }"#).contains("300 does not fit in u8"));
         assert!(err(r#"{ $type: "Odd", a: 1, b: [1], c: 1, d: "x" }"#).contains("fields are flat"));
         assert!(err(r#""text""#).contains("is written `{ $type"));
-        assert!(encode("text/plain", &m, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
+        let formats = format::Formats::new(vec![Box::new(Bson)]);
+        let all = format::AllSchemas::from([(BSON.to_string(), Bson::schemas(&m))]);
+        assert!(formats.encode("text/plain", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
+        assert!(formats.encode("application/bson", &all, &value(r#"{ $type: "Odd", a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
+        assert_eq!(Bson.fields(&Bson::schemas(&m), &[]), ["$type"]);
+        let so_far = [("$type".to_string(), Value::Str("Odd".into()))];
+        assert_eq!(Bson.fields(&Bson::schemas(&m), &so_far), ["$type", "a", "b", "c", "d"]);
+        assert_eq!(Bson.literal(&Bson::schemas(&m), &so_far, "a", "7"), Ok(Value::Int(7)));
+        assert!(Bson.literal(&Bson::schemas(&m), &[], "a", "7").unwrap_err().contains("give `$type` first"));
     }
 }
