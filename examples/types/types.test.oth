@@ -21,4 +21,6 @@ write /store/record Record {
   team: [{ name: "Bo", age: 1 }],
   env: { HOME: "/home", "Content-Type": "text/plain" },
   teams: { red: [{ name: "Cy", age: 2 }], blue: [] },
+  nick: "st",
+  rank: 2,
 }

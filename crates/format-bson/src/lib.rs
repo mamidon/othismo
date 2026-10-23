@@ -95,7 +95,7 @@ impl Bson {
     pub fn encode_message(schemas: &Messages, type_name: &str, value: &Value) -> Result<Vec<u8>, String> {
         let fields = fields(schemas, type_name, value)?;
         let ty = &schemas.types[type_name];
-        if let Some(missing) = ty.fields.iter().find(|f| !fields.contains_key(&f.name)) {
+        if let Some(missing) = ty.fields.iter().find(|f| !f.optional && !fields.contains_key(&f.name)) {
             return Err(format!("`{type_name}` is missing field `{}`", missing.name));
         }
         Ok(Message { type_name: type_name.to_string(), fields }.encode())
@@ -120,7 +120,8 @@ impl Bson {
             out.push_str("| Field | Type | |\n|---|---|---|\n");
             for (f, doc) in ty.fields.iter().zip(&ty.field_docs) {
                 let doc = doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|");
-                writeln!(out, "| `{}` | {} | {doc} |", f.name, f.ty).unwrap();
+                let optional = if f.optional { ", optional" } else { "" };
+                writeln!(out, "| `{}` | {}{optional} | {doc} |", f.name, f.ty).unwrap();
             }
             out.push('\n');
         }
@@ -165,9 +166,9 @@ impl Format for Bson {
         fields(&Bson::messages(schemas), ty, value).map(|_| ())
     }
 
-    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String> {
+    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<(String, bool)>, String> {
         let messages = Bson::messages(schemas);
-        Ok(message_type(&messages, ty)?.fields.iter().map(|f| f.name.clone()).collect())
+        Ok(message_type(&messages, ty)?.fields.iter().map(|f| (f.name.clone(), !f.optional)).collect())
     }
 
     fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String> {
@@ -300,7 +301,7 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
         (FieldType::Named(n), Value::Object(given)) => {
             let ty = message_type(schemas, n)?;
             let doc = document(schemas, ty, given, at)?;
-            if let Some(missing) = ty.fields.iter().find(|f| !doc.contains_key(&f.name)) {
+            if let Some(missing) = ty.fields.iter().find(|f| !f.optional && !doc.contains_key(&f.name)) {
                 return Err(format!("`{at}` is missing field `{}`", missing.name));
             }
             B::Document(doc)
@@ -434,6 +435,24 @@ mod tests {
     }
 
     #[test]
+    fn fields_may_be_optional() {
+        let m = messages(&format!("{NESTED} message Opt {{ nick?: string, n?: i32, p?: Person, must: bool }}"));
+        assert!(m.types["Opt"].fields[0].optional && !m.types["Opt"].fields[3].optional);
+        assert_ne!(m.types["Opt"], messages(&format!("{NESTED} message Opt {{ nick: string, n?: i32, p?: Person, must: bool }}")).types["Opt"], "optional is part of the type");
+        let bytes = Bson::encode_message(&m, "Opt", &value("{ must: true }")).unwrap();
+        assert_eq!(Message::decode(&bytes).unwrap().fields.keys().collect::<Vec<_>>(), ["must"], "left out, not null");
+        let bytes = Bson::encode_message(&m, "Opt", &value(r#"{ must: true, n: 2, nick: "x" }"#)).unwrap();
+        assert_eq!(Message::decode(&bytes).unwrap().fields.keys().collect::<Vec<_>>(), ["nick", "n", "must"]);
+        assert!(Bson::encode_message(&m, "Opt", &value("{ n: 2 }")).unwrap_err().contains("missing field `must`"));
+        let fields = Bson.fields(&Bson::schemas(&m), "Opt").unwrap();
+        assert_eq!(fields, [("nick".into(), false), ("n".into(), false), ("p".into(), false), ("must".into(), true)]);
+        let doc = Bson::document_messages(&m, "##");
+        assert!(doc.contains("| `nick` | string, optional |"), "{doc}");
+        let e = format!("{:#}", Bson::parse_messages("message A { x? i32 }", &mut |p| bail!("no {p} here")).unwrap_err());
+        assert!(e.contains("1:16: expected `:`, found `i32`"), "{e}");
+    }
+
+    #[test]
     fn importing_a_type_brings_the_types_it_names() {
         let mut import = |_: &str| Ok(messages(NESTED));
         let mut parse = |src: &str| Bson::parse_messages(src, &mut import);
@@ -467,7 +486,7 @@ mod tests {
         assert!(formats.encode("text/plain", "Odd", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
         assert!(formats.encode("application/bson", "Odd", &all, &value(r#"{ a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
         let schemas = Bson::schemas(&m);
-        assert_eq!(Bson.fields(&schemas, "Odd"), Ok(vec!["a".into(), "b".into(), "c".into(), "d".into()]));
+        assert_eq!(Bson.fields(&schemas, "Odd").unwrap().iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["a", "b", "c", "d"]);
         assert_eq!(Bson.literal(&schemas, "Odd", "a", "7"), Ok(Value::Int(7)));
         assert!(Bson.literal(&schemas, "Odd", "z", "7").unwrap_err().contains("`Odd` has no field `z`"));
         assert!(Bson.check(&schemas, "Greeting", &value(r#"{ prefix: "Hi" }"#)).is_ok(), "a default may leave fields out");

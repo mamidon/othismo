@@ -228,6 +228,9 @@ pub enum Tok {
     Star,
     /// `=`, before a slot's default.
     Eq,
+    /// `?`, which a format's schemas may use: BSON marks optional fields
+    /// with it.
+    Question,
     /// A content type: `text/plain`, `text/*`, `*/*`, `text/html;charset=utf-8`.
     Type(String),
     /// A `##` comment, which documents what follows. Only headers keep them.
@@ -255,6 +258,7 @@ impl std::fmt::Display for Tok {
             Tok::Arrow => write!(f, "`->`"),
             Tok::Star => write!(f, "`*`"),
             Tok::Eq => write!(f, "`=`"),
+            Tok::Question => write!(f, "`?`"),
             Tok::Type(s) => write!(f, "content type `{s}`"),
             Tok::Doc(_) => write!(f, "a `##` comment"),
             Tok::Raw(_) => write!(f, "a schemas block's body"),
@@ -330,8 +334,8 @@ pub fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
         } else if c == '[' || c == ']' {
             toks.push((if c == '[' { Tok::LBracket } else { Tok::RBracket }, pos));
             bump!();
-        } else if c == '=' {
-            toks.push((Tok::Eq, pos));
+        } else if c == '=' || c == '?' {
+            toks.push((if c == '=' { Tok::Eq } else { Tok::Question }, pos));
             bump!();
         } else if c == '{' && opens_schemas(&toks) {
             toks.push((Tok::LBrace, pos));

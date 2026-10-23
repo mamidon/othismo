@@ -15,6 +15,9 @@
 //! | a message type, `Person`    | document, without `$type` |
 //! | `[T]`, a list               | array |
 //! | `{T}`, a map                | document |
+//!
+//! An optional field, `name?: T`, is left out when it has no value; a
+//! reader takes a null as left out too.
 
 use crate::messages::FieldType;
 use anyhow::{Context, Result, bail};

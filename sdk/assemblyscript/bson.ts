@@ -38,6 +38,14 @@ export class Unknown extends Message {
   typeName(): string { return this.type; }
 }
 
+/**
+ * The value of an optional field of a type that can't be null, such as
+ * `i32`, when it has one: the field is `Box<i32> | null`.
+ */
+export class Box<T> {
+  constructor(public value: T) {}
+}
+
 type Decoder = (r: Reader) => Message;
 
 const decoders = new Map<string, Decoder>();
@@ -86,6 +94,8 @@ const BSON_DOCUMENT: u8 = 0x03;
 const BSON_ARRAY: u8 = 0x04;
 const BSON_BINARY: u8 = 0x05;
 const BSON_BOOL: u8 = 0x08;
+const BSON_NULL: u8 = 0x0A;
+const BSON_UNDEFINED: u8 = 0x06;
 const BSON_INT32: u8 = 0x10;
 const BSON_INT64: u8 = 0x12;
 
@@ -207,7 +217,7 @@ export class Writer {
  */
 function size(tag: u8, p: usize, end: usize, name: string): usize {
   switch (tag) {
-    case 0x06: case 0x0A: case 0x7F: case 0xFF: return 0; // undefined, null, max key, min key
+    case BSON_UNDEFINED: case BSON_NULL: case 0x7F: case 0xFF: return 0; // and max key, min key
     case BSON_BOOL: return 1;
     case BSON_INT32: return 4;
     case BSON_DOUBLE: case 0x09: case 0x11: case BSON_INT64: return 8; // and datetime, timestamp
@@ -311,6 +321,13 @@ export class Reader {
   /** A map field's entries, each under its key. */
   map(name: string): Reader {
     return this.doc(name);
+  }
+
+  /** Whether an optional field is there: present, and not null. */
+  has(name: string): bool {
+    if (!this.fields.has(name)) return false;
+    const tag = this.fields.get(name).tag;
+    return tag != BSON_NULL && tag != BSON_UNDEFINED;
   }
 
   /** Every field's name, in order. */

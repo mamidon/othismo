@@ -87,9 +87,13 @@ pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> 
                     if ty.field(&fname.name).is_some() {
                         bail!("{}: `{}` has two fields called `{}`", fname.pos, name.name, fname.name);
                     }
+                    let optional = *p.peek() == Tok::Question;
+                    if optional {
+                        p.next();
+                    }
                     p.expect(Tok::Colon)?;
                     let fty = field_type(&mut p, &mut refs)?;
-                    ty.fields.push(Field::new(fname.name, fty));
+                    ty.fields.push(Field { optional, ..Field::new(fname.name, fty) });
                     ty.field_docs.push(field_doc);
                     if *p.peek() == Tok::Comma {
                         p.next();

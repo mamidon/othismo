@@ -104,11 +104,14 @@ impl fmt::Display for FieldType {
 pub struct Field {
     pub name: String,
     pub ty: FieldType,
+    /// `name?: T`: a value may leave it out.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 impl Field {
     pub fn new(name: impl Into<String>, ty: FieldType) -> Field {
-        Field { name: name.into(), ty }
+        Field { name: name.into(), ty, optional: false }
     }
 }
 

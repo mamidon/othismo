@@ -21,6 +21,10 @@ export schemas application/bson {
     ## Maps, from strings to anything a field can be.
     env: {string}
     teams: {[Person]}
+    ## Optional fields, which a record may leave out.
+    nick?: string
+    rank?: i32
+    boss?: Person
   }
 
   ## Someone.

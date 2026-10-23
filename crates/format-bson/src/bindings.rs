@@ -2,7 +2,7 @@
 //! type, with its encoder and decoder.
 
 use crate::Messages;
-use crate::messages::{FieldType, MessageType};
+use crate::messages::{Field, FieldType, MessageType};
 use format::Bindings;
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -13,9 +13,6 @@ use std::fmt::Write;
 /// the server bases and clients: `fromPayload`, the message in a payload
 /// if it is one of this type, and `toPayload`.
 pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bindings {
-    let imports = format!(
-        "import {{ Payload }} from \"{library}\"\nimport {{ Message, Reader, Writer, bson, registerMessage }} from \"{library}/bson\"\n"
-    );
     // And every type their fields name, which have to be classes too.
     let mut all: Vec<String> = vec![];
     for name in types {
@@ -25,6 +22,11 @@ pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bi
             }
         }
     }
+    let boxed = all.iter().flat_map(|t| &schemas.types[t].fields).any(|f| f.optional && is_value(&f.ty));
+    let imports = format!(
+        "import {{ Payload }} from \"{library}\"\nimport {{ {}Message, Reader, Writer, bson, registerMessage }} from \"{library}/bson\"\n",
+        if boxed { "Box, " } else { "" }
+    );
     let mut code = String::new();
     let mut helpers = Helpers::default();
     for name in &all {
@@ -50,10 +52,10 @@ fn class(out: &mut String, ty: &MessageType, helpers: &mut Helpers) {
     writeln!(out, "export class {name} extends Message {{").unwrap();
     for (f, fdoc) in ty.fields.iter().zip(&ty.field_docs) {
         doc(out, "  ", fdoc);
-        writeln!(out, "  {}: {}", f.name, as_type(&f.ty)).unwrap();
+        writeln!(out, "  {}: {}", f.name, field_type(f)).unwrap();
     }
     if !ty.fields.is_empty() {
-        let params: Vec<String> = ty.fields.iter().map(|f| format!("{}: {}", f.name, as_type(&f.ty))).collect();
+        let params: Vec<String> = ty.fields.iter().map(|f| format!("{}: {}", f.name, field_type(f))).collect();
         writeln!(out, "\n  constructor({}) {{\n    super()", params.join(", ")).unwrap();
         for f in &ty.fields {
             writeln!(out, "    this.{0} = {0}", f.name).unwrap();
@@ -66,7 +68,7 @@ fn class(out: &mut String, ty: &MessageType, helpers: &mut Helpers) {
     writeln!(out, "    const m = bson.decode(p)\n    return m instanceof {name} ? changetype<{name}>(m) : null\n  }}").unwrap();
     writeln!(out, "  toPayload(): Payload {{ return bson.payload(this) }}\n").unwrap();
     writeln!(out, "  typeName(): string {{ return \"{name}\" }}").unwrap();
-    let writes: Vec<String> = ty.fields.iter().map(|f| helpers.write(&format!("\"{}\"", f.name), &format!("this.{}", f.name), &f.ty)).collect();
+    let writes: Vec<String> = ty.fields.iter().map(|f| helpers.write_field(f)).collect();
     match writes.as_slice() {
         [] => out.push_str("  encode(w: Writer): void {}\n"),
         [one] => writeln!(out, "  encode(w: Writer): void {{ {one} }}").unwrap(),
@@ -78,7 +80,7 @@ fn class(out: &mut String, ty: &MessageType, helpers: &mut Helpers) {
             out.push_str("  }\n");
         }
     }
-    let reads: Vec<String> = ty.fields.iter().map(|f| helpers.read(&format!("\"{}\"", f.name), &f.ty)).collect();
+    let reads: Vec<String> = ty.fields.iter().map(|f| helpers.read_field(f)).collect();
     writeln!(out, "  static decode(r: Reader): {name} {{ return new {name}({}) }}", reads.join(", ")).unwrap();
     out.push_str("}\n");
     writeln!(out, "registerMessage(\"{name}\", (r: Reader): Message => {name}.decode(r))").unwrap();
@@ -99,6 +101,22 @@ fn doc(out: &mut String, indent: &str, text: &str) {
             writeln!(out, "{indent} */").unwrap();
         }
     }
+}
+
+/// A field's type in AssemblyScript. An optional field may be null, so one
+/// of a type that can't be, such as `i32`, is boxed.
+fn field_type(f: &Field) -> String {
+    match (f.optional, is_value(&f.ty)) {
+        (false, _) => as_type(&f.ty),
+        (true, false) => format!("{} | null", as_type(&f.ty)),
+        (true, true) => format!("Box<{}> | null", as_type(&f.ty)),
+    }
+}
+
+/// Whether AssemblyScript keeps `t` by value, so that it can't be null.
+fn is_value(t: &FieldType) -> bool {
+    use FieldType::*;
+    matches!(t, Bool | I8 | I16 | I32 | I64 | U8 | U16 | U32 | U64 | F32 | F64)
 }
 
 fn as_type(t: &FieldType) -> String {
@@ -140,6 +158,29 @@ fn mangle(t: &FieldType) -> String {
 }
 
 impl Helpers {
+    /// The statement that writes field `f` in `encode`: an optional one
+    /// only if it isn't null.
+    fn write_field(&mut self, f: &Field) -> String {
+        let (key, this) = (format!("\"{}\"", f.name), format!("this.{}", f.name));
+        match (f.optional, is_value(&f.ty)) {
+            (false, _) => self.write(&key, &this, &f.ty),
+            (true, false) => format!("if ({this} !== null) {}", self.write(&key, &format!("{this}!"), &f.ty)),
+            (true, true) => format!("if ({this} !== null) {}", self.write(&key, &format!("{this}!.value"), &f.ty)),
+        }
+    }
+
+    /// The expression that reads field `f` in `decode`: null for an
+    /// optional one that is missing, or null on the wire.
+    fn read_field(&mut self, f: &Field) -> String {
+        let key = format!("\"{}\"", f.name);
+        let read = self.read(&key, &f.ty);
+        match (f.optional, is_value(&f.ty)) {
+            (false, _) => read,
+            (true, false) => format!("r.has({key}) ? <{}>{read} : null", field_type(f)),
+            (true, true) => format!("r.has({key}) ? <{}>new Box<{}>({read}) : null", field_type(f), as_type(&f.ty)),
+        }
+    }
+
     /// The `Writer` call that writes `value`, of type `t`, as key `key` of
     /// `w`, following `wire.rs`'s mapping.
     fn write(&mut self, key: &str, value: &str, t: &FieldType) -> String {
@@ -249,10 +290,12 @@ mod tests {
             message Nested { greeting: Greeting }
             message Lists { names: [string], grid: [[u8]], people: [Greeting] }
             message Maps { env: {string}, groups: {[Greeting]} }
+            message Opt { nick?: string, n?: u8, g?: Greeting }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
-        assert_eq!(imports, "import { Payload } from \"othismo\"\nimport { Message, Reader, Writer, bson, registerMessage } from \"othismo/bson\"\n");
+        let plain = assemblyscript(&schemas, &["Greeting".into()], "othismo").imports;
+        assert_eq!(plain, "import { Payload } from \"othismo\"\nimport { Message, Reader, Writer, bson, registerMessage } from \"othismo/bson\"\n");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */
@@ -300,6 +343,13 @@ registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
         assert!(out.contains("new Maps(__read_map_string(r.map(\"env\")), __read_map_list_Greeting(r.map(\"groups\")))"), "{out}");
         assert!(out.contains("  const keys = v.keys()\n  for (let i = 0; i < keys.length; i++) w.array(keys[i], __write_list_Greeting(v.get(keys[i])))\n"), "{out}");
         assert!(out.contains("  for (let i = 0; i < keys.length; i++) out.set(keys[i], r.string(keys[i]))\n"), "{out}");
+        assert!(imports.contains("import { Box, Message, Reader"), "{imports}");
+        assert!(out.contains("  nick: string | null\n  n: Box<u8> | null\n  g: Greeting | null\n"), "{out}");
+        assert!(out.contains("constructor(nick: string | null, n: Box<u8> | null, g: Greeting | null)"), "{out}");
+        assert!(out.contains("    if (this.nick !== null) w.string(\"nick\", this.nick!)\n    if (this.n !== null) w.i32(\"n\", <i32>this.n!.value)\n"), "{out}");
+        let read = "new Opt(r.has(\"nick\") ? <string | null>r.string(\"nick\") : null, r.has(\"n\") ? <Box<u8> | null>new Box<u8>(<u8>r.i64(\"n\")) : null, r.has(\"g\") ? <Greeting | null>Greeting.decode(r.doc(\"g\")) : null)";
+        assert!(out.contains(read), "{out}");
+        assert!(!assemblyscript(&schemas, &["Greeting".into()], "othismo").imports.contains("Box"), "only when it is used");
         let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;
         assert!(only.find("class Nested") < only.find("class Greeting"), "the types a field names come with it: {only}");
         assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");

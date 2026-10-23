@@ -2,7 +2,7 @@
 
 import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 import { Payload } from "othismo"
-import { Message, Reader, Writer, bson, registerMessage } from "othismo/bson"
+import { Box, Message, Reader, Writer, bson, registerMessage } from "othismo/bson"
 
 /** A field of each type. */
 export class Record extends Message {
@@ -17,8 +17,12 @@ export class Record extends Message {
   /** Maps, from strings to anything a field can be. */
   env: Map<string, string>
   teams: Map<string, Array<Person>>
+  /** Optional fields, which a record may leave out. */
+  nick: string | null
+  rank: Box<i32> | null
+  boss: Person | null
 
-  constructor(name: string, count: i32, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>, env: Map<string, string>, teams: Map<string, Array<Person>>) {
+  constructor(name: string, count: i32, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>, env: Map<string, string>, teams: Map<string, Array<Person>>, nick: string | null, rank: Box<i32> | null, boss: Person | null) {
     super()
     this.name = name
     this.count = count
@@ -28,6 +32,9 @@ export class Record extends Message {
     this.team = team
     this.env = env
     this.teams = teams
+    this.nick = nick
+    this.rank = rank
+    this.boss = boss
   }
 
   /** The `Record` in `p`, or null if it holds none. */
@@ -47,8 +54,11 @@ export class Record extends Message {
     w.array("team", __write_list_Person(this.team))
     w.map("env", __write_map_string(this.env))
     w.map("teams", __write_map_list_Person(this.teams))
+    if (this.nick !== null) w.string("nick", this.nick!)
+    if (this.rank !== null) w.i32("rank", this.rank!.value)
+    if (this.boss !== null) w.doc("boss", this.boss!)
   }
-  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team")), __read_map_string(r.map("env")), __read_map_list_Person(r.map("teams"))) }
+  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team")), __read_map_string(r.map("env")), __read_map_list_Person(r.map("teams")), r.has("nick") ? <string | null>r.string("nick") : null, r.has("rank") ? <Box<i32> | null>new Box<i32>(r.i32("rank")) : null, r.has("boss") ? <Person | null>Person.decode(r.doc("boss")) : null) }
 }
 registerMessage("Record", (r: Reader): Message => Record.decode(r))
 
