@@ -7,7 +7,6 @@ pub mod doc;
 pub mod env;
 pub mod format;
 pub mod iface;
-pub mod image;
 pub mod messages;
 pub mod pack;
 pub mod render;
@@ -18,3 +17,4 @@ pub mod tree;
 pub mod wire;
 
 pub use protocol::{ns, pattern, payload};
+pub use syntax::image;

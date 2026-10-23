@@ -826,6 +826,7 @@ dependencies = [
  "protocol",
  "serde",
  "sha2",
+ "syntax",
  "wasmtime",
  "wat",
 ]
@@ -1193,6 +1194,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "syntax"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "serde",
 ]
 
 [[package]]

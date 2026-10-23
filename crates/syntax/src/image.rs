@@ -2,8 +2,8 @@
 //! alike: declarations (message types, protocols, traits and objects, see
 //! [`crate::iface`]) and an image's instances, views and requests.
 
-use crate::iface;
-use crate::ns::Verb;
+use crate::decl as iface;
+use protocol::ns::Verb;
 use anyhow::{Result, bail};
 
 /// A source position, 1-based.
@@ -205,7 +205,7 @@ impl std::fmt::Display for Value {
 // Lexer
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Tok {
+pub enum Tok {
     Ident(String),
     /// Starts with `/`: `/www`, `/hosts/localhost`.
     Path(String),
@@ -257,7 +257,7 @@ impl std::fmt::Display for Tok {
 
 /// Tokenizes `src`. With `docs`, `##` comments are kept as [`Tok::Doc`];
 /// otherwise every comment is dropped.
-pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
+pub fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
     let chars: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
     let (mut i, mut line, mut col) = (0, 1, 1);
@@ -425,30 +425,30 @@ fn push_type(toks: &mut Vec<(Tok, Pos)>, mut ty: String, pos: Pos, end: Pos) {
 /// Words that can never be names. Member keywords (`mount`, `include`,
 /// `readonly` and `at`) only mean something inside an instance block, `as`
 /// only in an import, and the verbs only where a request can start.
-pub(crate) const KEYWORDS: &[&str] = &["import", "export", "from", "require", "instance", "true", "false"];
+pub const KEYWORDS: &[&str] = &["import", "export", "from", "require", "instance", "true", "false"];
 
 /// Words that start a declaration at the top of a file, besides the verbs.
 const DECLS: &[&str] = &["import", "export", "require", "instance", "mount", "message", "protocol", "trait", "object"];
 
-pub(crate) struct Parser {
+pub struct Parser {
     toks: Vec<(Tok, Pos)>,
     i: usize,
 }
 
 impl Parser {
-    pub(crate) fn new(src: &str, docs: bool) -> Result<Parser> {
+    pub fn new(src: &str, docs: bool) -> Result<Parser> {
         Ok(Parser { toks: lex(src, docs)?, i: 0 })
     }
 
-    pub(crate) fn peek(&self) -> &Tok {
+    pub fn peek(&self) -> &Tok {
         &self.toks[self.i].0
     }
 
-    pub(crate) fn pos(&self) -> Pos {
+    pub fn pos(&self) -> Pos {
         self.toks[self.i].1
     }
 
-    pub(crate) fn next(&mut self) -> (Tok, Pos) {
+    pub fn next(&mut self) -> (Tok, Pos) {
         let t = self.toks[self.i].clone();
         if self.i + 1 < self.toks.len() {
             self.i += 1;
@@ -456,11 +456,11 @@ impl Parser {
         t
     }
 
-    pub(crate) fn is_kw(&self, kw: &str) -> bool {
+    pub fn is_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
     }
 
-    pub(crate) fn expect(&mut self, want: Tok) -> Result<Pos> {
+    pub fn expect(&mut self, want: Tok) -> Result<Pos> {
         let (tok, pos) = self.next();
         if tok != want {
             bail!("{pos}: expected {want}, found {tok}");
@@ -468,7 +468,7 @@ impl Parser {
         Ok(pos)
     }
 
-    pub(crate) fn expect_kw(&mut self, kw: &str) -> Result<Pos> {
+    pub fn expect_kw(&mut self, kw: &str) -> Result<Pos> {
         let (tok, pos) = self.next();
         match tok {
             Tok::Ident(s) if s == kw => Ok(pos),
@@ -477,7 +477,7 @@ impl Parser {
     }
 
     /// A plain identifier: not a keyword and (unless `dotted`) no dots.
-    pub(crate) fn ident(&mut self, what: &str, dotted: bool) -> Result<Ident> {
+    pub fn ident(&mut self, what: &str, dotted: bool) -> Result<Ident> {
         let (tok, pos) = self.next();
         match tok {
             Tok::Ident(name) if !KEYWORDS.contains(&name.as_str()) && (dotted || !name.contains('.')) => {
@@ -488,7 +488,7 @@ impl Parser {
     }
 
     /// `a, b, c` — one or more identifiers separated by commas.
-    pub(crate) fn ident_list(&mut self, what: &str) -> Result<Vec<Ident>> {
+    pub fn ident_list(&mut self, what: &str) -> Result<Vec<Ident>> {
         let mut out = vec![self.ident(what, false)?];
         while *self.peek() == Tok::Comma {
             self.next();
@@ -497,7 +497,7 @@ impl Parser {
         Ok(out)
     }
 
-    pub(crate) fn path(&mut self) -> Result<Path> {
+    pub fn path(&mut self) -> Result<Path> {
         match self.next() {
             (Tok::Path(path), pos) => Ok(Path { path, pos }),
             (other, pos) => bail!("{pos}: expected a path starting with `/`, found {other}"),
@@ -633,7 +633,7 @@ impl Parser {
 
     /// `"text"`, `<content type> "text"`, `<content type> { ... }`,
     /// `<content type> from "<file>"`, `{ ... }`, or a slot's name.
-    pub(crate) fn literal(&mut self) -> Result<Literal> {
+    pub fn literal(&mut self) -> Result<Literal> {
         let pos = self.pos();
         Ok(match self.peek().clone() {
             Tok::Str(text) => {
@@ -678,7 +678,7 @@ impl Parser {
 
     /// A value: a string, a number, `true`, `false`, `{ name: value, ... }`
     /// or `[ value, ... ]`.
-    pub(crate) fn value(&mut self) -> Result<Value> {
+    pub fn value(&mut self) -> Result<Value> {
         Ok(match self.next() {
             (Tok::Str(s), _) => Value::Str(s),
             (Tok::Int(i), _) => Value::Int(i),
@@ -723,7 +723,7 @@ impl Parser {
 
     /// `import { A, B as C } from env`, or `import Image, { ... } from
     /// "./file.oth"`, or `import Image from "./file.oth"`.
-    pub(crate) fn import(&mut self) -> Result<Import> {
+    pub fn import(&mut self) -> Result<Import> {
         let pos = self.expect_kw("import")?;
         let mut default = None;
         if let Tok::Ident(_) = self.peek() {
