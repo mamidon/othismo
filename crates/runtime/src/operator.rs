@@ -30,6 +30,11 @@ pub enum Command {
     /// or `None` for the root image. Its answers come back as
     /// [`Notice::Answer`]s carrying `id`, the last one marked done.
     Request { id: u64, from: Option<usize>, verb: Verb, path: String, body: Option<Payload> },
+    /// Asks instance `inst` itself, as the operator, about `path` in the
+    /// tree it serves, as [`crate::Runtime::ask`] does: how the shell sees
+    /// inside served trees, whoever it is looking from. Only a safe verb
+    /// can be sent this way: looking changes nothing. Answered as a request.
+    Look { id: u64, inst: usize, verb: Verb, path: String },
     /// Gives up on request `id`. It is answered `ok done` straight away,
     /// and anything its server says after that is dropped.
     Cancel { id: u64 },

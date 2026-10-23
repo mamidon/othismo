@@ -582,6 +582,14 @@ impl<'p> Runtime<'p> {
                 };
                 shared.request(Requester::Operator { id, operator: image.is_some() }, to, verb, body);
             }
+            Command::Look { id, inst, verb, path } => {
+                let to = match ns::clean(&path) {
+                    _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::Invalid),
+                    Ok(path) => Ok(Resolved { inst, path, read_only: false }),
+                    Err(status) => Err(status),
+                };
+                self.shared.borrow_mut().request(Requester::Operator { id, operator: true }, to, verb, None);
+            }
             Command::Cancel { id } => self.shared.borrow_mut().cancel_operated(id),
             Command::Snapshot => {
                 let snapshot = self.snapshot();

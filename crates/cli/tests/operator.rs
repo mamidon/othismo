@@ -194,3 +194,26 @@ fn a_stream_ends_when_the_operator_cancels_it() {
     assert!(op.snapshot().instances.iter().all(|i| i.name != "cons" || i.pending == 0), "and closed");
     op.stop();
 }
+
+#[test]
+fn the_operator_can_look_inside_any_served_tree() {
+    let op = Operated::start("static/static.test.oth");
+    let files = op.index("web.files");
+    let look = |verb: Verb, path: &str| {
+        assert!(op.op.send(Command::Look { id: 99, inst: files, verb, path: path.into() }));
+        let mut answers = vec![];
+        loop {
+            let a = op.answer(99);
+            let done = a.done;
+            answers.push(a);
+            if done {
+                return answers;
+            }
+        }
+    };
+    let listed = look(Verb::List, "/");
+    assert!(listed.len() > 2, "what web.files serves, though nothing looks from a view that has it: {listed:?}");
+    assert_eq!(status(&look(Verb::Write, "/x")), Status::Invalid, "looking changes nothing");
+    assert_eq!(status(&look(Verb::List, "/../x")), Status::Invalid);
+    op.stop();
+}
