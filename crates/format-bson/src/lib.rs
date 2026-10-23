@@ -10,7 +10,7 @@ pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use format::{Bindings, Format, Schemas};
+use format::{Bindings, FieldDoc, Format, MessageDoc, Schemas};
 use messages::{FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
@@ -221,6 +221,28 @@ impl Format for Bson {
         Some(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))).collect())
     }
 
+    fn describe(&self, schemas: &Schemas, ty: &str) -> Result<MessageDoc, String> {
+        let messages = Bson::messages(schemas);
+        let t = message_type(&messages, ty)?;
+        let fields = t
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, (name, ft))| FieldDoc {
+                name: name.clone(),
+                ty: ft.to_string(),
+                examples: match ft {
+                    FieldType::Bool => vec!["true".into(), "false".into()],
+                    FieldType::String | FieldType::Bytes => vec!["\"\"".into()],
+                    FieldType::F32 | FieldType::F64 => vec!["0.0".into()],
+                    _ => vec!["0".into()],
+                },
+                doc: t.field_docs.get(i).cloned().unwrap_or_default(),
+            })
+            .collect();
+        Ok(MessageDoc { name: t.name.clone(), doc: t.doc.clone(), fields })
+    }
+
     fn declared(&self, schemas: &Schemas) -> Vec<String> {
         Bson::messages(schemas).declared
     }
@@ -333,6 +355,21 @@ mod tests {
     fn value(src: &str) -> Value {
         let mut p = Parser::new(src, false).unwrap();
         p.value().unwrap()
+    }
+
+    #[test]
+    fn a_message_type_is_described_field_by_field() {
+        let schemas = Bson.parse("## Configures it.\nmessage Greeting {\n  ## Before each name.\n  prefix: string\n  excited: bool\n  times: u8\n}", &mut |p| bail!("no {p} here")).unwrap();
+        let d = Bson.describe(&schemas, "Greeting").unwrap();
+        assert_eq!(d.doc, "Configures it.");
+        let fields: Vec<(&str, &str, Vec<&str>, &str)> =
+            d.fields.iter().map(|f| (f.name.as_str(), f.ty.as_str(), f.examples.iter().map(String::as_str).collect(), f.doc.as_str())).collect();
+        assert_eq!(fields, [
+            ("prefix", "string", vec!["\"\""], "Before each name."),
+            ("excited", "bool", vec!["true", "false"], ""),
+            ("times", "u8", vec!["0"], ""),
+        ]);
+        assert!(Bson.describe(&schemas, "Nope").is_err());
     }
 
     const GREETING: &str = r#"
