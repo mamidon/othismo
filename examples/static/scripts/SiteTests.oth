@@ -2,7 +2,7 @@ import { Dialer, TestSuite } from env
 
 ## Tests the static site over HTTP, through its listener run in memory: each
 ## test dials in with one request, and checks the response's status line.
-object SiteTests : TestSuite {
+export object SiteTests : TestSuite {
   ## The site's listener, in memory, to dial.
   needs /net Dialer
 }

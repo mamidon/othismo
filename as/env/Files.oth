@@ -1,0 +1,12 @@
+import { File, Dir } from "./bodies.oth"
+
+## Read-only access to one directory on the host, and nothing above it.
+##
+## A file's content type comes from its extension. Reading a directory
+## answers `is_directory`, and a listing is sorted by name.
+export trait Files {
+  ## Configured by the image only, with the directory to serve, relative
+  ## to the image.
+  /     operator write text/plain, File, Dir
+  /**   File, Dir
+}

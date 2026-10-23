@@ -1,5 +1,5 @@
-import { Data, Entry, Outcome } from "othismo/env"
-import { Request, Response, Server, Status, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo/ns"
+import { Errno, OCTETS, Payload, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { SiteTestsServer, net } from "./SiteTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -18,30 +18,25 @@ const CASES: Case[] = [
 ]
 
 /**
- * The site's tests. Listing /tests names them; invoking /tests/<name> dials
- * the site with that case's request, and answers how the response began
- * once the server hangs up.
+ * The site's tests. Listing /tests names them; writing /tests/<name> dials
+ * the site with that case's request, and once the server hangs up, answers
+ * ok if the response began as it should, or an error saying how it began.
  */
-class SiteTests extends Server {
-  serve(req: Request): void {
-    if (req.path == "/tests" && req.verb == Verb.List) {
-      for (let i = 0; i < CASES.length; i++) req.stream(new Entry(CASES[i].name, "file"))
-      req.end()
+class SiteTests extends SiteTestsServer {
+  listTests(req: Request): void {
+    for (let i = 0; i < CASES.length; i++) req.stream(Stat.file(CASES[i].name).payload())
+    req.end()
+  }
+
+  writeTests(req: Request, name: string): void {
+    for (let i = 0; i < CASES.length; i++) {
+      const c = CASES[i]
+      if (c.name != name) continue
+      const request = c.line + "\r\nHost: " + c.host + "\r\n\r\n"
+      net.createDial(new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
       return
     }
-    if (req.path.startsWith("/tests/") && req.verb == Verb.Invoke) {
-      const name = req.path.slice("/tests/".length)
-      for (let i = 0; i < CASES.length; i++) {
-        const c = CASES[i]
-        if (c.name != name) continue
-        const request = c.line + "\r\nHost: " + c.host + "\r\n\r\n"
-        ns.create("/net/dial", new Data("", String.UTF8.encode(request)), new Check(req, c))
-        return
-      }
-      req.fail(Status.NotFound)
-      return
-    }
-    req.fail(Status.NotSupported)
+    req.fail(Errno.NotFound)
   }
 }
 
@@ -55,12 +50,12 @@ class Check extends Then {
 
   answer(res: Response): void {
     const body = res.body
-    if (body instanceof Data) this.got += String.UTF8.decode((body as Data).data)
+    if (body !== null) this.got += body.asText()
     if (!res.done) return
     const line = this.got.split("\r\n")[0]
-    if (!res.ok) this.req.reply(new Outcome(false, "dialing failed with status " + res.status.toString()))
-    else if (line.startsWith(this.c.want)) this.req.reply(new Outcome(true, ""))
-    else this.req.reply(new Outcome(false, "expected `" + this.c.want + "...`, got `" + line + "`"))
+    if (!res.ok) this.req.fail(Errno.Invalid, "dialing failed with errno " + res.status.toString())
+    else if (line.startsWith(this.c.want)) this.req.end()
+    else this.req.fail(Errno.Invalid, "expected `" + this.c.want + "...`, got `" + line + "`")
   }
 }
 

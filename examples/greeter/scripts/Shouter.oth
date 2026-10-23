@@ -1,12 +1,10 @@
-import { Line } from env
-
 ## Writes each line it is given to the console, in capitals.
-object Shouter {
+export object Shouter {
   needs /dev/cons {
-    /  write Line
+    /  write text/plain
   }
 
   serves {
-    /  write Line
+    /  write text/plain
   }
 }

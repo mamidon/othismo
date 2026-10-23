@@ -15,7 +15,7 @@ struct Server {
 }
 
 impl Server {
-    /// Runs examples/static/static.img listening on an ephemeral port.
+    /// Runs examples/static/static.oth listening on an ephemeral port.
     fn start(name: &str) -> Server {
         Server::start_with(name, false)
     }
@@ -30,7 +30,7 @@ impl Server {
         let dir = std::env::temp_dir().join(format!("othismo_http_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut image = example.join("static.img");
+        let mut image = example.join("static.oth");
         if built {
             let rti = dir.join("static.rti");
             let status = Command::new(env!("CARGO_BIN_EXE_othismo"))
@@ -42,7 +42,7 @@ impl Server {
         }
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_othismo"))
-            .args(["--set", "listen.address=127.0.0.1:0"])
+            .args(["--set", "listen=127.0.0.1:0"])
             .arg(image)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -178,7 +178,7 @@ fn cannot_climb_out_of_the_files_root() {
     let srv = Server::start("escape");
     assert_eq!(srv.get("/../Cargo.toml").status, 400);
     assert_eq!(srv.get("/%2e%2e/%2e%2e/Cargo.toml").status, 400);
-    assert_eq!(srv.get("/docs/../../static.img").status, 400);
+    assert_eq!(srv.get("/docs/../../static.oth").status, 400);
 }
 
 #[test]

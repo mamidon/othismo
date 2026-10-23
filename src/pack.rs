@@ -1,7 +1,7 @@
 //! A built image: a checked [`Program`] plus everything it needs from disk,
 //! held in memory. The runtime only ever runs a `Pack`.
 //!
-//! A pack comes from building a `.img` ([`build`]) or from opening a sealed
+//! A pack comes from building a `.oth` ([`build`]) or from opening a sealed
 //! `.rti` file ([`open`]). The file is a magic number, a BSON manifest and
 //! the blobs it refers to (see `docs/images.md`):
 //!
@@ -12,6 +12,7 @@
 //! Blobs are named by the SHA-256 of their contents and stored once.
 
 use crate::check::{self, Kind, Program};
+use crate::wire::{self, Message};
 use crate::render;
 use crate::tree::{Node, Tree};
 use anyhow::{Context, Result, bail};
@@ -22,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 /// The magic number: `RTIMAGE`, then the format version.
-pub const MAGIC: &[u8; 8] = b"RTIMAGE\x05";
+pub const MAGIC: &[u8; 8] = b"RTIMAGE\x06";
 
 /// The format version, bumped whenever the manifest's layout changes. An
 /// image built in another format is refused, with a request to rebuild it.
@@ -42,7 +43,7 @@ pub struct Pack {
     /// Each `Packed.Files` instance's files, by instance name.
     pub trees: BTreeMap<String, Tree>,
     pub blobs: BTreeMap<Hash, Rc<[u8]>>,
-    /// The directory holding the image, `.img` or `.rti`. Relative host
+    /// The directory holding the image, `.oth` or `.rti`. Relative host
     /// paths (a `FilesRoot`) resolve against it.
     pub dir: PathBuf,
     /// Notes from building, for `build -v`: each path an include replaced.
@@ -148,47 +149,68 @@ fn hash(bytes: &[u8]) -> Hash {
 }
 
 /// [`check::describe`], after each slot's value and where its fields came
-/// from, and saying what each environment object touches on the host and
-/// what each packed instance holds.
+/// from, and what the image takes from the host: each of its needs, and
+/// what it touches there. Each object in memory says what it holds.
 pub fn describe(pack: &Pack) -> String {
     let p = &pack.program;
     let mut out = String::new();
     for slot in &p.slots {
-        let fields: Vec<String> = match &slot.value {
-            Some(value) => slot
-                .origins
-                .iter()
-                .map(|(f, origin)| format!("{f}: {} ({origin})", render::json_value(&value.fields[f])))
-                .collect(),
-            None => vec!["unbound".into()],
-        };
-        out.push_str(&format!("slot {} : {} {{ {} }}\n", slot.name, slot.type_name, fields.join(", ")));
+        out.push_str(&describe_slot(slot));
+        out.push('\n');
     }
     if !p.slots.is_empty() {
         out.push('\n');
     }
-    let config = |inst: &check::Instance, field: &str| {
-        let config = inst.config.as_ref().and_then(|c| c.message().ok());
-        config.and_then(|c| c.fields.get_str(field).ok()).unwrap_or("?").to_string()
+    let config = |inst: &check::Instance| inst.config.as_ref().and_then(|c| c.text().ok()).unwrap_or_else(|| "?".into());
+    let host = |i: usize| -> Option<String> {
+        let inst = &p.instances[i];
+        Some(match &inst.kind {
+            Kind::Console => "reads stdin, writes stdout".to_string(),
+            Kind::Tcp => format!("listens on {}", config(inst)),
+            Kind::Files => format!("reads host files under {}", config(inst)),
+            _ => return None,
+        })
     };
+    let needs: Vec<usize> = (0..p.instances.len()).filter(|&i| host(i).is_some()).collect();
+    if !needs.is_empty() {
+        out.push_str("from the host:\n");
+        let width = needs.iter().map(|&i| p.instances[i].name.len()).max().unwrap_or(0);
+        for &i in &needs {
+            out.push_str(&format!("  {:width$}  {}\n", p.instances[i].name, host(i).unwrap()));
+        }
+        out.push('\n');
+    }
     let about = |i: usize| {
         let inst = &p.instances[i];
         Some(match &inst.kind {
-            Kind::Wasm { .. } => return None,
-            Kind::Console if inst.in_memory => "a console in memory".to_string(),
-            Kind::Console => "reads stdin, writes stdout".to_string(),
-            Kind::Tcp if inst.in_memory => "listens in memory, for /dial".to_string(),
-            Kind::Tcp => format!("listens on {}", config(inst, "address")),
-            Kind::Files if inst.in_memory => format!("serves a snapshot of host files under {}, taken at start", config(inst, "path")),
-            Kind::Files => format!("reads host files under {}", config(inst, "path")),
+            Kind::MemoryConsole => "a console in memory".to_string(),
+            Kind::MemoryListener => "listens in memory, for /dial".to_string(),
             Kind::Packed { .. } => {
                 let (files, size) = pack.trees.get(&inst.name)?.size();
                 format!("serves {files} built-in file{}, {}", if files == 1 { "" } else { "s" }, human_size(size))
             }
+            _ => return None,
         })
     };
-    out.push_str(&check::describe(p, &about));
+    out.push_str(&check::describe(p, &about, &|i| host(i).is_some()));
     out
+}
+
+/// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a structured
+/// slot, each field's value and where it came from.
+fn describe_slot(slot: &check::Slot) -> String {
+    let ty = &slot.ty;
+    let origin = |f: &str| slot.origins.iter().find(|(name, _)| name == f).map(|(_, o)| o.as_str()).unwrap_or("?");
+    let Some(value) = &slot.value else { return format!("slot {} : {ty} (unbound)", slot.name) };
+    if slot.structured() {
+        let fields = value.payload().ok().and_then(|p| Message::decode(&p.bytes).ok());
+        let Some(m) = fields else { return format!("slot {} : {ty} (unreadable)", slot.name) };
+        let mut shown = vec![format!("{}: {} ({})", wire::TYPE_KEY, render::json_value(&bson::Bson::String(m.type_name.clone())), origin(wire::TYPE_KEY))];
+        shown.extend(m.fields.iter().map(|(f, v)| format!("{f}: {} ({})", render::json_value(v), origin(f))));
+        return format!("slot {} : {ty} {{ {} }}", slot.name, shown.join(", "));
+    }
+    let text = value.text().unwrap_or_default();
+    format!("slot {} : {ty} = {} ({})", slot.name, render::json_value(&bson::Bson::String(text)), origin(""))
 }
 
 fn human_size(bytes: u64) -> String {
@@ -210,7 +232,7 @@ pub fn is_sealed_file(path: &Path) -> bool {
     std::fs::File::open(path).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head)).is_ok() && is_sealed(&head)
 }
 
-/// Opens a sealed image if `path` is one, and otherwise builds the `.img`
+/// Opens a sealed image if `path` is one, and otherwise builds the `.oth`
 /// at `path` in memory.
 pub fn load(path: &Path) -> Result<Pack> {
     if is_sealed_file(path) { open(path) } else { build(path, BuildOptions::default()) }
@@ -228,7 +250,7 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     if !is_sealed(bytes) {
         bail!("not a built image (bad magic number)");
     }
-    let rebuild = "rebuild it from its .img with this othismo's `build`";
+    let rebuild = "rebuild it from its .oth with this othismo's `build`";
     if bytes[7] != VERSION {
         bail!("it was built by another version of othismo (format {}, and this one reads {VERSION}); {rebuild}", bytes[7]);
     }
@@ -268,7 +290,7 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     }
     for inst in &pack.program.instances {
         match &inst.kind {
-            Kind::Wasm { type_name } if !pack.modules.contains_key(type_name) => {
+            Kind::Wasm { type_name, .. } if !pack.modules.contains_key(type_name) => {
                 bail!("instance `{}`: module {type_name} is missing", inst.name)
             }
             Kind::Packed { .. } if !pack.trees.contains_key(&inst.name) => {
@@ -313,17 +335,17 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
 
     let mut sources = pack.program.sources.clone();
     for inst in pack.program.instances.clone() {
-        let Kind::Wasm { type_name } = &inst.kind else { continue };
+        let Kind::Wasm { type_name, module } = &inst.kind else { continue };
         if pack.modules.contains_key(type_name) {
             continue;
         }
-        let module = module_path(&dir.join(&inst.dir), type_name);
+        let module = dir.join(module);
         let bytes = std::fs::read(&module).with_context(|| {
             format!("instance `{}`: cannot read {} (did you compile {type_name}.ts?)", inst.name, module.display())
         })?;
         let hash = pack.add(bytes);
         pack.modules.insert(type_name.clone(), hash);
-        sources.push(module.with_extension("iface"));
+        sources.push(module.with_extension("oth"));
         sources.push(module.with_extension("ts"));
     }
 
@@ -336,11 +358,6 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         }
     }
     Ok(pack)
-}
-
-/// Where instance type `type_name` is compiled to, next to the image.
-pub fn module_path(dir: &Path, type_name: &str) -> PathBuf {
-    dir.join("scripts").join(format!("{type_name}.wasm"))
 }
 
 /// A source's name in the pack: its path relative to the image, with `..`

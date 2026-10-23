@@ -1,0 +1,9 @@
+## Something with tests to run, which `othismo test` finds by this trait and
+## runs, each in a fresh run of the image.
+export trait TestSuite {
+  ## The tests, a stat record each.
+  /tests          list
+  ## Runs a test, and answers `ok` if it passed, or an error, conventionally
+  ## `invalid`, whose description says why it didn't.
+  /tests/{name}   write
+}

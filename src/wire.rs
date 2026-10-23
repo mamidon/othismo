@@ -1,4 +1,4 @@
-//! The message wire format shared with the AssemblyScript library.
+//! The BSON format's wire layout, shared with the AssemblyScript library.
 //!
 //! A message is one BSON document. Its first key is `$type`, holding the
 //! message type's name; the remaining keys are its fields. Field types map
@@ -13,7 +13,7 @@
 //! | f32, f64                    | double  |
 //! | bytes                       | binary (generic subtype) |
 
-use crate::messages::{FieldType, MessageType};
+use crate::messages::FieldType;
 use anyhow::{Context, Result, bail};
 use bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
@@ -47,33 +47,6 @@ impl Message {
         doc.to_writer(&mut out).expect("writing BSON to a Vec cannot fail");
         out
     }
-
-    /// Verifies the fields match `ty`'s declaration exactly.
-    pub fn check_shape(&self, ty: &MessageType) -> Result<()> {
-        for (name, fty) in &ty.fields {
-            let Some(v) = self.fields.get(name) else {
-                bail!("`{}` is missing field `{name}`", self.type_name);
-            };
-            let ok = match (fty, v) {
-                (FieldType::String, Bson::String(_)) => true,
-                (FieldType::Bool, Bson::Boolean(_)) => true,
-                (FieldType::F32 | FieldType::F64, Bson::Double(_)) => true,
-                (FieldType::Bytes, Bson::Binary(_)) => true,
-                (t, Bson::Int32(i)) => t.int_range().is_some_and(|(lo, hi)| (lo..=hi).contains(&(*i as i128))),
-                // u64 travels as the bit pattern of an int64, so any value is valid.
-                (FieldType::U64, Bson::Int64(_)) => true,
-                (t, Bson::Int64(i)) => t.int_range().is_some_and(|(lo, hi)| (lo..=hi).contains(&(*i as i128))),
-                _ => false,
-            };
-            if !ok {
-                bail!("`{}.{name}` should be {fty}, got {v}", self.type_name);
-            }
-        }
-        if let Some(extra) = self.fields.keys().find(|k| ty.field(k).is_none()) {
-            bail!("`{}` has unexpected field `{extra}`", self.type_name);
-        }
-        Ok(())
-    }
 }
 
 /// The BSON value a `bytes` field is carried as.
@@ -103,14 +76,5 @@ mod tests {
         let raw = Document::from_reader(&bytes[..]).unwrap();
         assert_eq!(raw.keys().next().unwrap(), TYPE_KEY);
         assert_eq!(Message::decode(&bytes).unwrap(), msg);
-    }
-
-    #[test]
-    fn shape_check() {
-        let ty = MessageType::new("P", vec![("x".into(), FieldType::U8)]);
-        let mut fields = Document::new();
-        fields.insert("x", 300);
-        let msg = Message { type_name: "P".into(), fields };
-        assert!(msg.check_shape(&ty).is_err());
     }
 }

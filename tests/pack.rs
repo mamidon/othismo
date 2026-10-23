@@ -2,12 +2,12 @@
 
 mod common;
 
-use common::{Fixture, module};
+use common::{Fixture, module, module_with};
 use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-const A: &str = "object A { needs /dev/cons { / write Opaque }  serves { / invoke Opaque } }";
+const A: &str = "export object A { needs /dev/cons { / write */* }  serves { / write */* } }";
 
 /// Modules aren't run here, so they needn't do anything; they only need headers.
 fn a() -> Vec<u8> {
@@ -16,18 +16,19 @@ fn a() -> Vec<u8> {
 
 fn fixture(name: &str) -> Fixture {
     let f = Fixture::new(name);
-    f.file("messages.iface", "message Ping {}\n")
-        .file("scripts/A.wasm", a())
-        .file("scripts/A.iface", A)
+    f.file("scripts/A.wasm", a())
+        .file("scripts/A.oth", A)
         .file("scripts/A.ts", "// A's source\n")
         .file("scripts/B.wasm", module("(module)", "object B {}"))
         .file(
-            "test.img",
-            r#"import { Ping } from "./messages.iface"
-            instance cons : Console
-            instance a : A { mount /dev/cons cons }  mount /a a  invoke /a Ping
+            "test.oth",
+            r#"import { A } from "./scripts/A.oth"
+            import { B } from "./scripts/B.wasm"
+            import { Console } from env
+            needs /dev/cons Console
+            instance a : A { bind /dev/cons /dev/cons }  mount /a a  write /a "ping"
             instance b : B { mount /a a readonly }
-            instance a2 : A { mount /dev/cons cons }"#,
+            instance a2 : A { bind /dev/cons /dev/cons }"#,
         );
     f
 }
@@ -52,7 +53,7 @@ fn sealing_round_trips_and_is_reproducible() {
     let sources: Vec<&str> = built.sources.keys().map(String::as_str).collect();
     assert_eq!(
         sources,
-        ["messages.iface", "scripts/A.iface", "scripts/A.ts", "test.img"],
+        ["scripts/A.oth", "scripts/A.ts", "test.oth"],
         "B has no header file or TypeScript, which is fine: its module carries its header"
     );
 }
@@ -83,7 +84,7 @@ fn corrupt_and_truncated_files_are_refused() {
     let e = err(&old);
     let want = format!("built by another version of othismo (format 1, and this one reads {}); rebuild it", pack::VERSION);
     assert!(e.contains(&want), "{e}");
-    assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
+    assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .oth");
 }
 
 #[test]
@@ -94,7 +95,7 @@ fn load_tells_built_images_from_sources() {
     let loaded = pack::load(&rti).unwrap();
     assert_eq!(loaded.dir, f.dir);
     assert!(loaded.program.sources.is_empty());
-    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 2);
+    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 2, "the image and A's header");
 
     let e = format!("{:#}", pack::build(&rti, BuildOptions::default()).unwrap_err());
     assert!(e.contains("is already built"), "{e}");
@@ -109,12 +110,12 @@ fn unpacking_writes_modules_and_sources() {
     assert_eq!(std::fs::read(out.join("modules/A.wasm")).unwrap(), a());
     assert!(out.join("modules/B.wasm").exists());
     assert_eq!(read("sources/scripts/A.ts"), "// A's source\n");
-    assert!(read("sources/test.img").contains("instance a2 : A"));
+    assert!(read("sources/test.oth").contains("instance a2 : A"));
 }
 
-/// An image whose only instance is `files : Packed.Files { <includes> }`.
+/// An image whose only instance is `files : PackedFiles { <includes> }`.
 fn packed(f: &Fixture, includes: &str) -> anyhow::Result<Pack> {
-    f.file("test.img", format!("instance files : Packed.Files {{ {includes} }}"));
+    f.file("test.oth", format!("import {{ PackedFiles }} from env instance files : PackedFiles {{ {includes} }}"));
     pack::build(&f.image(), BuildOptions::default())
 }
 
@@ -243,34 +244,33 @@ fn packed_trees_survive_sealing_and_unpacking() {
 fn slots_are_sealed_unbound_and_described_once_bound() {
     let f = Fixture::new("pack_slots");
     f.file(
-        "test.img",
-        r#"require listen : Listen { address: "127.0.0.1:8080" }
-        require root : FilesRoot
-        instance net   : Listener
-        instance files : Files
-        mount /net net
-        mount /files files
-        control /net listen
-        control /files root
-        instance cons  : Console"#,
+        "test.oth",
+        r#"import { Console, Files, Listener } from env
+        require listen : text/plain = "127.0.0.1:8080"
+        require root : text/plain
+        needs /net   Listener
+        needs /files Files
+        needs /cons  Console
+        write /net listen
+        write /files root"#,
     );
     let sealed = pack::build(&f.image(), BuildOptions::default()).unwrap().seal();
     let mut opened = pack::unseal(&sealed, f.dir.clone()).unwrap();
     let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &[]).unwrap_err());
-    assert!(e.ends_with("root.path: required, not provided"), "{e}");
+    assert!(e.ends_with("root: required, not provided"), "{e}");
 
-    let given = Given { origin: "--set".into(), slot: "root".into(), field: "path".into(), value: GivenValue::Text("www".into()) };
+    let given = Given { origin: "--set".into(), slot: "root".into(), field: None, value: GivenValue::Text("www".into()) };
     slots::bind(&mut opened.program, &[given]).unwrap();
     assert_eq!(
         pack::describe(&opened),
-        "slot listen : Listen { address: \"127.0.0.1:8080\" (default) }\n\
-         slot root : FilesRoot { path: \"www\" (--set) }\n\
+        "slot listen : text/plain = \"127.0.0.1:8080\" (default)\n\
+         slot root : text/plain = \"www\" (--set)\n\
          \n\
-         the image sees /net → net, /files → files\n\
-         \n\
-         net    listens on 127.0.0.1:8080\n\
-         files  reads host files under www\n\
-         cons   reads stdin, writes stdout\n"
+         from the host:\n\
+         \x20 /net    listens on 127.0.0.1:8080\n\
+         \x20 /files  reads host files under www\n\
+         \x20 /cons   reads stdin, writes stdout\n\
+         \n"
     );
 }
 
@@ -278,15 +278,18 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
 fn the_cli_layers_value_files_then_set() {
     let f = Fixture::new("pack_cli_values");
     f.file(
-        "test.img",
-        r#"require listen : Listen { address: "127.0.0.1:8080" }
-        require info : Info
-        instance net : Listener
-        mount /net net
-        control /net listen"#,
+        "test.oth",
+        r#"import { A } from "./scripts/A.wasm"
+        import { Listener } from env
+        require listen : text/plain = "127.0.0.1:8080"
+        require info : application/bson = { $type: "Info" }
+        instance a : A
+        needs /net Listener
+        write /net listen"#,
     )
-    .file("a.vals", "listen { address: \"a\" }\ninfo { kind: \"file\", size: 1, mime: \"\" }")
-    .file("b.vals", "info { size: 2 }");
+    .file("scripts/A.wasm", module_with("(module)", "object A {}", "message Info { kind: string, size: i64, mime: string }"))
+    .file("a.vals", "listen = \"a\"\ninfo = { kind: \"file\", size: 1, mime: \"\" }")
+    .file("b.vals", "info = { size: 2 }");
     let check = |extra: &[&str]| {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_othismo"))
             .current_dir(&f.dir)
@@ -297,16 +300,19 @@ fn the_cli_layers_value_files_then_set() {
             .unwrap();
         (out.status.code(), String::from_utf8(out.stdout).unwrap() + &String::from_utf8(out.stderr).unwrap())
     };
-    let (code, out) = check(&["--set", "listen.address=0.0.0.0:0", "--with", "a.vals", "--with", "b.vals"]);
+    let (code, out) = check(&["--set", "listen=0.0.0.0:0", "--with", "a.vals", "--with", "b.vals"]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.starts_with("slot listen : Listen { address: \"0.0.0.0:0\" (--set) }\n"), "{out}");
-    assert!(out.contains("slot info : Info { kind: \"file\" (a.vals:2:8), size: 2 (b.vals:1:8), mime: \"\" (a.vals:2:31) }"), "{out}");
+    assert!(out.starts_with("slot listen : text/plain = \"0.0.0.0:0\" (--set)\n"), "{out}");
+    assert!(
+        out.contains("slot info : application/bson { $type: \"Info\" (default), kind: \"file\" (a.vals:2:10), size: 2 (b.vals:1:10), mime: \"\" (a.vals:2:33) }"),
+        "{out}"
+    );
 
     let (code, out) = check(&[]);
     assert_eq!(code, Some(1));
     assert!(out.contains("info.kind: required, not provided"), "{out}");
     let (code, out) = check(&["--set", "nonsense"]);
     assert_eq!(code, Some(1));
-    assert!(out.contains("expected slot.field=value"), "{out}");
+    assert!(out.contains("expected slot=value or slot.field=value"), "{out}");
     assert_eq!(check(&["--set"]).0, Some(2), "a missing argument is a usage error");
 }

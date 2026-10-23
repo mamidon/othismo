@@ -2,13 +2,14 @@
 //! `othismo doc` prints, and what the site's reference pages are made of.
 
 use crate::check;
-use crate::iface::{self, Entry, Header, Object};
-use crate::messages::MessageType;
+use crate::format::{Bson, Format, Messages};
+use crate::iface::{self, Entry, Object};
 use std::fmt::Write;
 
 /// An object's page: its guide, or its `##` comment if it has none, then
-/// the reference for what it serves and needs, and for `types`.
-pub fn object(o: &Object, header: &Header, types: &[String]) -> String {
+/// the reference for what it serves and needs, and for the message types
+/// its module declares.
+pub fn object(o: &Object, schemas: &Messages) -> String {
     let mut out = String::new();
     let guide = o.guide.as_deref().unwrap_or(&o.doc);
     if !guide.trim_start().starts_with("# ") {
@@ -19,7 +20,7 @@ pub fn object(o: &Object, header: &Header, types: &[String]) -> String {
     }
     out.push_str("## Reference\n\n");
     reference(&mut out, o, "###");
-    messages(&mut out, header, types, "###");
+    out.push_str(&Bson::document(schemas, "###"));
     out
 }
 
@@ -29,11 +30,11 @@ pub fn env() -> String {
     let env = iface::env();
     let mut out = String::from(
         "# Built-in objects\n\n\
-         The objects the runtime implements, which are the only way any object reaches the world \
-         outside the image, and the shapes and message types they use. An image declares one by \
-         its trait, `instance net : Listener`, and the runtime picks how to run it; `Packed.Files` \
-         is declared by its own name. They are declared in the runtime's own header, `env`, and \
-         this page is generated from it.\n\n",
+         The objects the runtime implements, and the shapes they are made of. Console, Listener and \
+         Files are the only way any object reaches the world outside the image: the image being run \
+         gets one by needing it, `needs /net/tcp Listener`, and the runtime picks how to run it. The \
+         others touch nothing outside the image, and any image can declare one by its name. They are \
+         declared in the runtime's own header, `env`, and this page is generated from it.\n\n",
     );
     let runs = check::NATIVE.iter().map(|name| env.traits[*name].as_object()).chain(env.objects.iter().cloned());
     for o in runs {
@@ -59,21 +60,6 @@ pub fn env() -> String {
             writeln!(out, "| `{}` | {} | {} |", p.name, reqs.join(", "), cell(&p.doc)).unwrap();
         }
         out.push('\n');
-    }
-    messages(&mut out, env, &env.declared, "##");
-    out
-}
-
-/// The message types an object's requests name, in order of first use.
-pub fn types_used(o: &Object) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    let entries = o.serves.iter().chain(o.needs.iter().flat_map(|n| &n.entries));
-    for r in entries.flat_map(|e| &e.requests) {
-        for ty in [r.body.as_deref(), r.answer.as_ref().map(|a| a.ty.as_str())].into_iter().flatten() {
-            if ty != iface::OPAQUE && !out.iter().any(|t| t == ty) {
-                out.push(ty.to_string());
-            }
-        }
     }
     out
 }
@@ -108,29 +94,6 @@ fn entries(out: &mut String, entries: &[Entry]) {
     out.push('\n');
 }
 
-fn messages(out: &mut String, header: &Header, types: &[String], h: &str) {
-    let types: Vec<&MessageType> = types.iter().filter_map(|t| header.messages.get(t)).collect();
-    if types.is_empty() {
-        return;
-    }
-    writeln!(out, "{h} Messages\n").unwrap();
-    for ty in types {
-        writeln!(out, "{h}# `{}`\n", ty.name).unwrap();
-        if !ty.doc.is_empty() {
-            writeln!(out, "{}\n", ty.doc).unwrap();
-        }
-        if ty.fields.is_empty() {
-            out.push_str("No fields.\n\n");
-            continue;
-        }
-        out.push_str("| Field | Type | |\n|---|---|---|\n");
-        for ((name, fty), doc) in ty.fields.iter().zip(&ty.field_docs) {
-            writeln!(out, "| `{name}` | {fty} | {} |", cell(doc)).unwrap();
-        }
-        out.push('\n');
-    }
-}
-
 /// Documentation for a table cell: one line, with `|` escaped.
 fn cell(doc: &str) -> String {
     doc.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|")
@@ -140,29 +103,31 @@ fn cell(doc: &str) -> String {
 mod tests {
     use super::*;
 
-    fn header(src: &str) -> Header {
+    fn header(src: &str) -> iface::Header {
         let file = iface::parse(src).unwrap();
         iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| Ok("# The Guide\n\nAll about it.".into())).unwrap()
     }
 
-    const SITE: &str = r#"
-        import { Data, Info } from env
+    const HITS: &str = r#"
         ## A count.
         message Hits {
           ## So far; never | less.
           n: u64
         }
+    "#;
+
+    const SITE: &str = r#"
         ## Serves a site.
         ##
         ## From its files.
         object Site {
           ## The files.
-          needs /files { /** read -> Data, stat -> Info }
+          needs /files { /** read -> */*, stat }
           serves {
             ## How many,
             ## so far.
-            /hits  read -> Hits
-            /**    read -> Data
+            /hits  read -> application/bson
+            /**    read -> */*
           }
         }
     "#;
@@ -170,29 +135,26 @@ mod tests {
     #[test]
     fn documents_an_object_from_its_header() {
         let h = header(SITE);
-        let out = object(&h.objects[0], &h, &h.declared);
+        let out = object(&h.objects[0], &Bson::parse(HITS, &mut |_| unreachable!()).unwrap());
         assert!(out.starts_with("# Site\n\nServes a site.\n\nFrom its files.\n\n## Reference\n\n### Serves\n\n"), "{out}");
-        assert!(out.contains("| `/hits` | `read -> Hits` | How many, so far. |\n| `/**` | `read -> Data` |  |\n"), "{out}");
+        assert!(out.contains("| `/hits` | `read -> application/bson` | How many, so far. |\n| `/**` | `read -> */*` |  |\n"), "{out}");
         assert!(out.contains("### Needs\n\n#### `/files`\n\nThe files.\n\n| Path | Requests | |"), "{out}");
-        assert!(out.contains("### Messages\n\n#### `Hits`\n\nA count.\n\n| Field | Type | |\n|---|---|---|\n| `n` | u64 | So far; never \\| less. |"), "{out}");
-        assert!(!out.contains("`Data`\n"), "imported types are documented where they are declared");
+        assert!(out.contains("### Messages\n\nPayloads of `application/bson`, each named by its `$type`.\n\n#### `Hits`\n\nA count.\n\n| Field | Type | |\n|---|---|---|\n| `n` | u64 | So far; never \\| less. |"), "{out}");
     }
 
     #[test]
     fn a_guide_replaces_the_comment() {
         let h = header(r#"object Big { guide "./Big.md" }"#);
-        assert_eq!(object(&h.objects[0], &h, &[]), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
+        assert_eq!(object(&h.objects[0], &Messages::default()), "# The Guide\n\nAll about it.\n\n## Reference\n\n");
     }
 
     #[test]
     fn documents_the_built_in_objects() {
         let out = env();
         assert!(out.starts_with("# Built-in objects\n\n"), "{out}");
-        for o in ["## Console", "## Listener", "## Files", "## Packed.Files", "## Shapes", "### `FileTree`", "## Messages", "### `Accepted`"] {
+        for o in ["## Console", "## Listener", "## Files", "## PackedFiles", "## MemoryListener", "## Shapes", "### `FileTree`"] {
             assert!(out.contains(&format!("{o}\n")), "{o}: {out}");
         }
-        assert!(out.contains("| `Connection` | `watch -> Data*`, `write Data`, `remove` |"), "{out}");
-        let console = iface::env().traits["Console"].as_object();
-        assert_eq!(types_used(&console), ["Line"]);
+        assert!(out.contains("| `Connection` | `watch -> application/octet-stream*`, `write application/octet-stream` |"), "{out}");
     }
 }

@@ -1,14 +1,15 @@
 version: '3'
 
-# Every examples/<name>/<name>.img is an example; its objects are the
+# Every examples/<name>/<name>.oth is an example; its objects are the
 # scripts/*.ts next to it, compiled to scripts/*.wasm. Each object's header
-# is its scripts/<Type>.iface, embedded in the .wasm once it is compiled, and
-# the bindings generated from a header are committed next to it, as
-# <Type>.iface.ts.
+# is its scripts/<Type>.oth, and its message types, if it has any, are in
+# scripts/<Type>.messages; both are embedded in the .wasm once it is
+# compiled. The bindings generated from them are committed next to them, as
+# <Type>.oth.ts and <Type>.messages.ts.
 vars:
   # Each example is a directory holding an image named after it.
   EXAMPLES:
-    sh: for dir in examples/*/; do name=$(basename "$dir"); [ -f "$dir$name.img" ] && echo "$name"; done; true
+    sh: for dir in examples/*/; do name=$(basename "$dir"); [ -f "$dir$name.oth" ] && echo "$name"; done; true
   BIN: target/debug/othismo
 
 tasks:
@@ -30,11 +31,11 @@ tasks:
       - cargo test {{.CLI_ARGS}}
 
   test:e2e:
-    desc: Compile every example's objects, then run each examples/*/*.test.img with othismo test
+    desc: Compile every example's objects, then run each examples/*/*.test.oth with othismo test
     deps: [wasm, build]
     vars:
       TEST_IMAGES:
-        sh: ls examples/*/*.test.img
+        sh: ls examples/*/*.test.oth
     cmds:
       - for: { var: TEST_IMAGES }
         cmd: '{{.BIN}} test {{.ITEM}}'
@@ -44,7 +45,7 @@ tasks:
     deps: [npm, build]
     sources:
       - docs/*.md
-      - as/env/*.iface
+      - as/env/*.oth
       - src/doc.rs
       - examples/static/site.mjs
     cmds:
@@ -83,7 +84,7 @@ tasks:
       - fly deploy
 
   bindings:
-    desc: Regenerate the AssemblyScript bindings from every header
+    desc: Regenerate the AssemblyScript bindings from every header and schema file
     cmds:
       - task: bindings:env
       - for: { var: EXAMPLES }
@@ -115,12 +116,12 @@ tasks:
         task: wasm:one
         vars: { NAME: '{{.ITEM}}' }
 
-  # The runtime's own bindings, which the library imports as "othismo/env".
+  # The runtime's clients and server bases, which modules import as "othismo/env".
   bindings:env:
     internal: true
     deps: [build]
     sources:
-      - as/env/*.iface
+      - as/env/*.oth
       - src/**/*.rs
     generates:
       - as/env.ts
@@ -136,7 +137,7 @@ tasks:
         cmd: '{{.BIN}} bindings {{.ITEM}}'
     vars:
       HEADERS:
-        sh: ls examples/{{.NAME}}/scripts/*.iface
+        sh: find examples/{{.NAME}}/scripts -name '*.messages' -o -name '*.oth'
 
   wasm:one:
     internal: true
@@ -145,32 +146,34 @@ tasks:
     sources:
       - as/*.ts
       # What embed writes into each module: the header format and env's types.
-      - as/env/*.iface
+      - as/env/*.oth
       - src/iface.rs
-      - examples/{{.NAME}}/scripts/*.iface
+      - examples/{{.NAME}}/scripts/*.oth
+      - examples/{{.NAME}}/scripts/*.messages
       - examples/{{.NAME}}/scripts/*.md
       - examples/{{.NAME}}/scripts/*.ts
-      - exclude: examples/{{.NAME}}/scripts/*.iface.ts
+      - exclude: examples/{{.NAME}}/scripts/*.messages.ts
+      - exclude: examples/{{.NAME}}/scripts/*.oth.ts
     generates:
       - examples/{{.NAME}}/scripts/*.wasm
     cmds:
       - task: bindings:one
         vars: { NAME: '{{.NAME}}' }
       - for: { var: SCRIPTS }
-        cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.iface {{trimSuffix ".ts" .ITEM}}.wasm
+        cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.oth {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
-        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.iface\.ts$'
+        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v -e '\.messages\.ts$' -e '\.oth\.ts$'
 
-  # Seals examples/<NAME>/<NAME>.img into a .rti with the othismo that
+  # Seals examples/<NAME>/<NAME>.oth into a .rti with the othismo that
   # `build` just made, so the two always match.
   image:
     internal: true
     label: image:{{.NAME}}
     preconditions:
-      - sh: test -f examples/{{.NAME}}/{{.NAME}}.img
+      - sh: test -f examples/{{.NAME}}/{{.NAME}}.oth
         msg: 'no example named "{{.NAME}}"; examples are: {{.EXAMPLES | splitLines | join ", "}}'
     cmds:
       - task: wasm:one
         vars: { NAME: '{{.NAME}}' }
-      - '{{.BIN}} build examples/{{.NAME}}/{{.NAME}}.img -o examples/{{.NAME}}/{{.NAME}}.rti'
+      - '{{.BIN}} build examples/{{.NAME}}/{{.NAME}}.oth -o examples/{{.NAME}}/{{.NAME}}.rti'

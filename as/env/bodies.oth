@@ -1,0 +1,20 @@
+# The runtime's own header, `env`, is this directory: the shapes every tree
+# of files shares, here, and one file for each trait the runtime implements,
+# with its in-memory stand-in. The image being run gets the real ones by
+# its needs, `needs /net/tcp Listener`, and the runtime picks how to run
+# them; the stand-ins are objects any image can declare. The runtime embeds
+# every file and joins them into `env`.
+#
+# Payloads are named by their content types. `stat` and `list` answer stat
+# records, which the protocol defines, so they are written bare.
+
+## Something read whole.
+export protocol File { read -> */*, stat }
+
+## Something listed.
+export protocol Dir { list, stat }
+
+## A tree of files, read-only.
+export trait FileTree {
+  /**   File, Dir
+}

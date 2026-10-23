@@ -1,35 +1,37 @@
-//! Headers: `.iface` files declaring a module's message types, what it
-//! serves, what it needs and its documentation. See `docs/objects.md`.
+//! Headers: the declarations in `.oth` files, which declare protocols,
+//! traits and objects: what each object serves, what it needs and its
+//! documentation. See `docs/objects.md`. What a payload holds is its
+//! format's business, and its schemas are in files of their own (see
+//! [`crate::format`]).
 //!
-//! A header is parsed into a [`File`], then resolved into a [`Header`]: its
-//! imports followed, every type it mentions declared, and its guide read in.
-//! A resolved header stands on its own, so it can travel inside a module.
+//! A file's declarations are parsed into a [`File`], then resolved into a
+//! [`Header`]: its imports followed, every name it mentions declared, and
+//! its guides read in. A resolved header stands on its own, so it can
+//! travel inside a module.
 
-use crate::image::{self, Ident, Import, Parser, Pos, Source, Tok};
-use crate::messages::{FieldType, MessageType};
+use crate::image::{self, Ident, Image, Import, Parser, Pos, Source, Tok};
+use crate::format::{Bson, Format, Messages};
 use crate::ns::{Status, Verb};
 use crate::pattern::{self, Pattern};
+use crate::payload::{self, ANY, STAT, STAT_NAME};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The reserved type that stands for any message.
-pub const OPAQUE: &str = "Opaque";
-
 /// The runtime's own header, one file at a time: the bodies its objects
-/// share, then each trait it implements with the types it adds,
-/// Packed.Files, and TestSuite. A file may import from the files before it.
+/// share, then each trait it implements with its stand-in in memory,
+/// PackedFiles, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
-    ("bodies.iface", include_str!("../as/env/bodies.iface")),
-    ("Console.iface", include_str!("../as/env/Console.iface")),
-    ("Listener.iface", include_str!("../as/env/Listener.iface")),
-    ("Files.iface", include_str!("../as/env/Files.iface")),
-    ("Packed.Files.iface", include_str!("../as/env/Packed.Files.iface")),
-    ("TestSuite.iface", include_str!("../as/env/TestSuite.iface")),
+    ("bodies.oth", include_str!("../as/env/bodies.oth")),
+    ("Console.oth", include_str!("../as/env/Console.oth")),
+    ("Listener.oth", include_str!("../as/env/Listener.oth")),
+    ("Files.oth", include_str!("../as/env/Files.oth")),
+    ("PackedFiles.oth", include_str!("../as/env/PackedFiles.oth")),
+    ("TestSuite.oth", include_str!("../as/env/TestSuite.oth")),
 ];
 
 /// The runtime's header, `env`: every file in `as/env/`, joined.
@@ -43,19 +45,20 @@ pub fn env() -> &'static Header {
             let mut earlier = |s: &Source| -> Result<Header> {
                 let found = match s {
                     Source::Path(p) => done.get(p.strip_prefix("./").unwrap_or(p)),
-                    Source::Module(_) => None,
+                    Source::Env => None,
                 };
                 found.cloned().ok_or_else(|| anyhow::anyhow!("env/{name} can only import from the env files before it"))
             };
             let header = resolve(&file, &mut earlier, &|_| bail!("env has no guides"))
                 .unwrap_or_else(|e| panic!("env/{name} resolves: {e:#}"));
-            env.messages.extend(header.messages.clone());
-            env.declared.extend(header.declared.iter().cloned());
             env.protocols.extend(header.protocols.clone());
             env.traits.extend(header.traits.clone());
             env.objects.extend(header.objects.iter().cloned());
             done.insert(name, header);
         }
+        // Everything in it can be imported.
+        env.exports = env.protocols.keys().chain(env.traits.keys()).cloned().collect();
+        env.exports.extend(env.objects.iter().map(|o| o.name.clone()));
         env
     })
 }
@@ -65,17 +68,24 @@ pub fn env() -> &'static Header {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Header {
-    /// Every message type the header can name: its own and its imports.
-    pub messages: BTreeMap<String, MessageType>,
-    /// The ones it declares itself, in order.
-    pub declared: Vec<String>,
     /// Every protocol the header can name, its own and its imports.
     #[serde(default)]
     pub protocols: BTreeMap<String, Protocol>,
     /// Every trait the header can name, its own and its imports.
     #[serde(default)]
     pub traits: BTreeMap<String, Trait>,
+    /// The objects it declares itself.
     pub objects: Vec<Object>,
+    /// The objects it imports, by the names it gives them.
+    #[serde(default)]
+    pub imported: BTreeMap<String, Object>,
+    /// The names it exports: its own declarations written `export`, and
+    /// imported ones it names in `export { ... }`.
+    #[serde(default)]
+    pub exports: Vec<String>,
+    /// An image's top-level needs: what it needs from whoever instantiates it.
+    #[serde(default)]
+    pub needs: Vec<Need>,
 }
 
 /// `protocol <Name> { ... }`: the requests one path takes, with any
@@ -108,14 +118,21 @@ pub struct Object {
     pub guide: Option<String>,
     pub needs: Vec<Need>,
     pub serves: Vec<Entry>,
+    /// The file it was read from: a `.oth` file, whose module is the `.wasm`
+    /// beside it, or a module. `None` for the runtime's own.
+    #[serde(skip)]
+    pub origin: Option<PathBuf>,
 }
 
-/// `needs <mount point pattern> { entries }`
+/// `needs <mount point pattern> { entries }`, or `needs <mount point> <Trait>`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Need {
     pub at: Pattern,
     pub doc: String,
     pub entries: Vec<Entry>,
+    /// The trait it names, if it is a trait's whole tree.
+    #[serde(default)]
+    pub shape: Option<String>,
 }
 
 /// A path pattern and the requests it takes.
@@ -126,25 +143,37 @@ pub struct Entry {
     pub requests: Vec<Request>,
 }
 
-/// `<verb> [Body] [-> Answer[*]]`
+/// `[operator] <verb> [content type] [-> content type[*]]`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
+    /// Only whoever runs the image may make it.
+    #[serde(default)]
+    pub operator: bool,
     pub verb: Verb,
+    /// The content type of the payload it takes, if it takes one.
     pub body: Option<String>,
-    /// `None`: answered with a status alone.
+    /// `None`: answered with a status alone. `stat` and `list` always
+    /// answer stat records, so they are written bare.
     pub answer: Option<Answer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Answer {
+    /// The answer's content type.
     pub ty: String,
-    /// `Type*`: any number of answers, the last one marked done.
+    /// `type*`: any number of answers, the last one marked done.
     pub stream: bool,
 }
 
 impl Header {
+    /// The object it declares itself as `name`.
     pub fn object(&self, name: &str) -> Option<&Object> {
         self.objects.iter().find(|o| o.name == name)
+    }
+
+    /// The object `name` stands for in it: its own, or one it imports.
+    pub fn object_named(&self, name: &str) -> Option<&Object> {
+        self.object(name).or_else(|| self.imported.get(name))
     }
 }
 
@@ -152,7 +181,15 @@ impl Trait {
     /// An object that serves the trait's tree and needs nothing: how the
     /// runtime sees an instance declared by the trait.
     pub fn as_object(&self) -> Object {
-        Object { name: self.name.clone(), doc: self.doc.clone(), traits: vec![], guide: None, needs: vec![], serves: self.entries.clone() }
+        Object {
+            name: self.name.clone(),
+            doc: self.doc.clone(),
+            traits: vec![],
+            guide: None,
+            needs: vec![],
+            serves: self.entries.clone(),
+            origin: None,
+        }
     }
 }
 
@@ -160,6 +197,11 @@ impl Object {
     /// The entry serving `path`, a clean path in the object's served tree.
     pub fn serving(&self, path: &str) -> Option<&Entry> {
         pattern::best(&self.serves, |e| &e.path, path)
+    }
+
+    /// Whether `other` has the same shape: what it serves, needs and declares.
+    pub fn same_shape(&self, other: &Object) -> bool {
+        self.name == other.name && self.traits == other.traits && self.needs == other.needs && self.serves == other.serves
     }
 
     /// The `needs` block for the mount point `at`.
@@ -175,9 +217,9 @@ impl Need {
 }
 
 impl Entry {
-    /// The request a `verb` with a body of type `body` fits: `NotSupported`
-    /// if the entry doesn't take the verb, and `Invalid` if it does but not
-    /// with that body.
+    /// The request a `verb` with a payload of content type `body` fits, as
+    /// the checker sees it: `NotSupported` if the entry doesn't take the
+    /// verb, and `Invalid` if it does but not with that payload.
     pub fn takes(&self, verb: Verb, body: Option<&str>) -> Result<&Request, Status> {
         let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
         if with_verb.peek().is_none() {
@@ -185,35 +227,58 @@ impl Entry {
         }
         with_verb.find(|r| body_fits(r.body.as_deref(), body)).ok_or(Status::Invalid)
     }
+
+    /// Whether the entry takes `verb` from a sender that is the operator or
+    /// not: all the runtime asks, since it never looks at payloads.
+    /// `Forbidden` if only the operator may make it.
+    pub fn takes_verb(&self, verb: Verb, operator: bool) -> Result<(), Status> {
+        let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
+        if with_verb.peek().is_none() {
+            return Err(Status::NotSupported);
+        }
+        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::Forbidden) }
+    }
+
+    /// Whether `verb` may be answered more than once here.
+    pub fn streams(&self, verb: Verb) -> bool {
+        self.requests.iter().any(|r| r.verb == verb && r.answer.as_ref().is_some_and(|a| a.stream))
+    }
 }
 
-/// Whether a body of type `given` fits where `want` is declared.
+/// Whether a payload of content type `given` fits where `want` is declared.
 pub fn body_fits(want: Option<&str>, given: Option<&str>) -> bool {
     match (want, given) {
         (None, None) => true,
-        (Some(w), Some(g)) => w == OPAQUE || w == g,
+        (Some(w), Some(g)) => payload::fits(w, g),
         _ => false,
     }
 }
 
 impl Request {
     /// Whether this request, as a server serves it, meets `need`: the same
-    /// verb and body, and an answer of the same type. `Opaque` goes both
-    /// ways: a server taking `Opaque` takes any body, and a need for an
-    /// `Opaque` answer accepts any answer, or none.
+    /// verb, a payload the server takes, and an answer the need takes.
+    /// Wildcards go one way: a server taking `*/*` takes any payload, and a
+    /// need for a `*/*` answer accepts any answer, or none; but a server
+    /// that only promises `*/*` doesn't meet a need for `text/plain`.
     pub fn meets(&self, need: &Request) -> bool {
-        let body = match (&self.body, &need.body) {
-            (None, None) => true,
-            (Some(s), Some(n)) => s == OPAQUE || s == n,
-            _ => false,
-        };
         let answer = match (&self.answer, &need.answer) {
-            (_, Some(n)) if n.ty == OPAQUE && self.answer.as_ref().is_none_or(|s| s.stream == n.stream) => true,
+            (_, Some(n)) if n.ty == ANY && self.answer.as_ref().is_none_or(|s| s.stream == n.stream) => true,
             (None, None) => true,
-            (Some(s), Some(n)) => s.ty == n.ty && s.stream == n.stream,
+            (Some(s), Some(n)) => payload::fits(&n.ty, &s.ty) && s.stream == n.stream,
             _ => false,
         };
-        self.verb == need.verb && body && answer
+        let operator = !self.operator || need.operator;
+        self.verb == need.verb && operator && body_fits(self.body.as_deref(), need.body.as_deref()) && answer
+    }
+
+    /// Whether the verb's answer is set by the protocol: `stat` and `list`
+    /// answer stat records, and are written bare.
+    fn implied(verb: Verb) -> Option<Answer> {
+        match verb {
+            Verb::Stat => Some(Answer { ty: STAT.into(), stream: false }),
+            Verb::List => Some(Answer { ty: STAT.into(), stream: true }),
+            _ => None,
+        }
     }
 }
 
@@ -226,12 +291,18 @@ impl fmt::Display for Entry {
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.operator {
+            f.write_str("operator ")?;
+        }
         write!(f, "{}", self.verb)?;
         if let Some(b) = &self.body {
             write!(f, " {b}")?;
         }
-        if let Some(a) = &self.answer {
-            write!(f, " -> {}{}", a.ty, if a.stream { "*" } else { "" })?;
+        if let Some(a) = &self.answer
+            && Request::implied(self.verb).is_none()
+        {
+            let ty = if a.ty == STAT { STAT_NAME } else { &a.ty };
+            write!(f, " -> {ty}{}", if a.stream { "*" } else { "" })?;
         }
         Ok(())
     }
@@ -241,44 +312,65 @@ impl fmt::Display for Request {
 // In modules
 
 /// The custom section a module's header travels in, as BSON.
-pub const SECTION: &str = "othismo.iface";
+pub const SECTION: &str = "othismo.oth";
 
 /// `wasm` with `header` in its [`SECTION`], replacing any already there.
 pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
+    embed_section(wasm, SECTION, header).context("encoding the header")
+}
+
+/// `wasm` with `schemas`, a format's, in their section, replacing any
+/// already there.
+pub fn embed_schemas<F: Format>(wasm: &[u8], schemas: &F::Schemas) -> Result<Vec<u8>> {
+    embed_section(wasm, F::SECTION, schemas).context("encoding the schemas")
+}
+
+/// The schemas of format `F` inside `wasm`; none if it has no section for them.
+pub fn embedded_schemas<F: Format>(wasm: &[u8]) -> Result<F::Schemas> {
+    Ok(section(wasm, F::SECTION)?.unwrap_or_default())
+}
+
+/// `wasm` with `value`, as BSON, in the custom section `name`.
+fn embed_section(wasm: &[u8], name: &str, value: &impl Serialize) -> Result<Vec<u8>> {
     let mut out = wasm[..8].to_vec();
     for section in sections(wasm)? {
-        if section.custom != Some(SECTION) {
+        if section.custom != Some(name) {
             out.extend_from_slice(section.bytes);
         }
     }
     let mut payload = Vec::new();
-    leb128(&mut payload, SECTION.len() as u64);
-    payload.extend_from_slice(SECTION.as_bytes());
-    let doc = bson::serialize_to_document(header).context("encoding the header")?;
-    doc.to_writer(&mut payload).context("encoding the header")?;
+    leb128(&mut payload, name.len() as u64);
+    payload.extend_from_slice(name.as_bytes());
+    bson::serialize_to_document(value)?.to_writer(&mut payload)?;
     out.push(0);
     leb128(&mut out, payload.len() as u64);
     out.extend_from_slice(&payload);
     Ok(out)
 }
 
+/// What the custom section `name` of `wasm` holds, if it has one.
+fn section<T: serde::de::DeserializeOwned>(wasm: &[u8], name: &str) -> Result<Option<T>> {
+    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(name)) else { return Ok(None) };
+    let malformed = || format!("its `{name}` section is malformed; rebuild it with this othismo's `embed`");
+    let doc = bson::Document::from_reader(section.payload).with_context(malformed)?;
+    Ok(Some(bson::deserialize_from_document(doc).with_context(malformed)?))
+}
+
 /// Checks that `header` is fit for module `name`: it declares exactly one
-/// object, named for the module.
+/// object, named for the module, and exports it.
 pub fn for_module(header: &Header, name: &str) -> Result<()> {
     match header.objects.as_slice() {
+        [o] if o.name == name && !header.exports.contains(&o.name) => bail!("it doesn't export `{name}`; write `export object {name}`"),
         [o] if o.name == name => Ok(()),
         [o] => bail!("it declares object `{}`, but the module is `{name}`", o.name),
-        [] => bail!("it declares no object; a module's header declares `object {name}`"),
-        _ => bail!("it declares {} objects; a module's header declares just `object {name}`", header.objects.len()),
+        [] => bail!("it declares no object; a module's header declares `export object {name}`"),
+        _ => bail!("it declares {} objects; a module's header declares just `export object {name}`", header.objects.len()),
     }
 }
 
 /// The header in `wasm`'s [`SECTION`], if it has one.
 pub fn embedded(wasm: &[u8]) -> Result<Option<Header>> {
-    let Some(section) = sections(wasm)?.into_iter().find(|s| s.custom == Some(SECTION)) else { return Ok(None) };
-    let malformed = || format!("its `{SECTION}` section is malformed; rebuild it with this othismo's `embed`");
-    let doc = bson::Document::from_reader(section.payload).with_context(malformed)?;
-    Ok(Some(bson::deserialize_from_document(doc).with_context(malformed)?))
+    section(wasm, SECTION)
 }
 
 struct Section<'a> {
@@ -346,14 +438,18 @@ fn read_leb128(bytes: &[u8], i: &mut usize) -> Result<usize> {
 // ---------------------------------------------------------------------------
 // Parsed
 
-/// A parsed header file.
+/// A `.oth` file's declarations: what it imports, declares and exports.
 #[derive(Debug, Clone, PartialEq)]
 pub struct File {
     pub imports: Vec<Import>,
-    pub messages: Vec<MessageDecl>,
     pub protocols: Vec<ProtocolDecl>,
     pub traits: Vec<TraitDecl>,
     pub objects: Vec<ObjectDecl>,
+    /// What it exports: declarations written `export`, and imported ones
+    /// named in `export { ... }`.
+    pub exports: Vec<Ident>,
+    /// Top-level `needs`: what an image needs from whoever instantiates it.
+    pub needs: Vec<NeedDecl>,
 }
 
 /// `protocol <Name> { <item>, ... }`: the requests one path takes.
@@ -422,6 +518,7 @@ pub struct EntryDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestDecl {
+    pub operator: bool,
     pub verb: Verb,
     pub pos: Pos,
     pub body: Option<Ident>,
@@ -429,13 +526,15 @@ pub struct RequestDecl {
     pub answer: Option<(Ident, bool)>,
 }
 
+/// The declarations in a `.oth` file. Anything else in it is an image, which
+/// importing its declarations leaves alone.
 pub fn parse(src: &str) -> Result<File> {
-    Parser::new(src, true)?.header()
+    Ok(image::parse(src)?.header)
 }
 
 impl Parser {
     /// Consecutive `##` lines, joined; empty if there are none.
-    fn docs(&mut self) -> String {
+    pub(crate) fn docs(&mut self) -> String {
         let mut lines = vec![];
         while let Tok::Doc(line) = self.peek() {
             lines.push(line.clone());
@@ -444,37 +543,14 @@ impl Parser {
         lines.join("\n")
     }
 
-    fn no_docs(&mut self, doc: &str, pos: Pos) -> Result<()> {
+    pub(crate) fn no_docs(&mut self, doc: &str, pos: Pos) -> Result<()> {
         if !doc.is_empty() {
             bail!("{pos}: a `##` comment documents what follows it, and nothing documentable does");
         }
         Ok(())
     }
 
-    fn header(&mut self) -> Result<File> {
-        let mut file = File { imports: vec![], messages: vec![], protocols: vec![], traits: vec![], objects: vec![] };
-        loop {
-            let doc = self.docs();
-            let pos = self.pos();
-            match self.peek().clone() {
-                Tok::Eof => {
-                    self.no_docs(&doc, pos)?;
-                    return Ok(file);
-                }
-                Tok::Ident(kw) if kw == "import" => {
-                    self.no_docs(&doc, pos)?;
-                    file.imports.push(self.import()?);
-                }
-                Tok::Ident(kw) if kw == "message" => file.messages.push(self.message(doc)?),
-                Tok::Ident(kw) if kw == "protocol" => file.protocols.push(self.protocol(doc)?),
-                Tok::Ident(kw) if kw == "trait" => file.traits.push(self.trait_decl(doc)?),
-                Tok::Ident(kw) if kw == "object" => file.objects.push(self.object(doc)?),
-                other => bail!("{pos}: expected `import`, `message`, `protocol`, `trait` or `object`, found {other}"),
-            }
-        }
-    }
-
-    fn message(&mut self, doc: String) -> Result<MessageDecl> {
+    pub(crate) fn message(&mut self, doc: String) -> Result<MessageDecl> {
         self.expect_kw("message")?;
         let name = self.ident("message name", false)?;
         self.expect(Tok::LBrace)?;
@@ -497,7 +573,7 @@ impl Parser {
         }
     }
 
-    fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {
+    pub(crate) fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {
         self.expect_kw("protocol")?;
         let name = self.ident("protocol name", false)?;
         self.expect(Tok::LBrace)?;
@@ -514,14 +590,14 @@ impl Parser {
         Ok(ProtocolDecl { name, doc, items })
     }
 
-    fn trait_decl(&mut self, doc: String) -> Result<TraitDecl> {
+    pub(crate) fn trait_decl(&mut self, doc: String) -> Result<TraitDecl> {
         self.expect_kw("trait")?;
         let name = self.ident("trait name", false)?;
         let entries = self.entries()?;
         Ok(TraitDecl { name, doc, entries })
     }
 
-    fn object(&mut self, doc: String) -> Result<ObjectDecl> {
+    pub(crate) fn object(&mut self, doc: String) -> Result<ObjectDecl> {
         self.expect_kw("object")?;
         let name = self.ident("object name", true)?;
         let mut traits = vec![];
@@ -539,19 +615,7 @@ impl Parser {
                     self.no_docs(&doc, pos)?;
                     return Ok(obj);
                 }
-                Tok::Ident(kw) if kw == "needs" => {
-                    let at = self.path()?;
-                    // `needs /net/tcp Listener` is the trait's whole tree.
-                    let entries = match self.peek() {
-                        Tok::Ident(_) => {
-                            let name = self.ident("trait name", false)?;
-                            let path = image::Path { path: "/".into(), pos: name.pos };
-                            vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
-                        }
-                        _ => self.entries()?,
-                    };
-                    obj.needs.push(NeedDecl { at, doc, entries });
-                }
+                Tok::Ident(kw) if kw == "needs" => obj.needs.push(self.need(doc)?),
                 Tok::Ident(kw) if kw == "serves" => {
                     self.no_docs(&doc, pos)?;
                     obj.serves.extend(self.entries()?);
@@ -569,6 +633,21 @@ impl Parser {
                 other => bail!("{pos}: expected `needs`, `serves`, `guide` or `}}`, found {other}"),
             }
         }
+    }
+
+    /// What follows `needs`: `<mount point> <trait>` for the trait's whole
+    /// tree, or `<mount point> { entries }`.
+    pub(crate) fn need(&mut self, doc: String) -> Result<NeedDecl> {
+        let at = self.path()?;
+        let entries = match self.peek() {
+            Tok::Ident(_) => {
+                let name = self.ident("trait name", false)?;
+                let path = image::Path { path: "/".into(), pos: name.pos };
+                vec![EntryDecl { path, doc: String::new(), items: vec![Item::Named(name)] }]
+            }
+            _ => self.entries()?,
+        };
+        Ok(NeedDecl { at, doc, entries })
     }
 
     /// `{ <path> <request>, ... }`, each path optionally documented.
@@ -596,12 +675,32 @@ impl Parser {
     /// A request, which starts with a verb, or a protocol's or trait's name.
     fn item(&mut self) -> Result<Item> {
         match self.peek() {
-            Tok::Ident(w) if Verb::from_keyword(w).is_none() => Ok(Item::Named(self.ident("protocol or trait name", false)?)),
+            Tok::Ident(w) if w == "control" => bail!(
+                "{}: `control` is gone: mark a request only whoever runs the image may make with `operator`, \
+                 e.g. `operator write text/plain`",
+                self.pos()
+            ),
+            Tok::Ident(w) if w != OPERATOR && Verb::from_keyword(w).is_none() => {
+                Ok(Item::Named(self.ident("protocol or trait name", false)?))
+            }
             _ => Ok(Item::Request(self.request()?)),
         }
     }
 
+    /// A content type, or a name standing for one, such as `Stat`.
+    fn content_type(&mut self, what: &str) -> Result<Ident> {
+        match self.next() {
+            (Tok::Type(name), pos) => Ok(Ident { name, pos }),
+            (Tok::Ident(name), pos) if !image::KEYWORDS.contains(&name.as_str()) => Ok(Ident { name, pos }),
+            (other, pos) => bail!("{pos}: expected {what}, such as `text/plain`, found {other}"),
+        }
+    }
+
     fn request(&mut self) -> Result<RequestDecl> {
+        let operator = self.is_kw(OPERATOR);
+        if operator {
+            self.next();
+        }
         let (tok, pos) = self.next();
         let verb = match &tok {
             Tok::Ident(w) => Verb::from_keyword(w),
@@ -612,12 +711,13 @@ impl Parser {
             bail!("{pos}: expected a verb ({}), found {tok}", verbs.join(", "));
         };
         let body = match self.peek() {
-            Tok::Ident(w) if Verb::from_keyword(w).is_none() => Some(self.ident("body type", false)?),
+            Tok::Type(_) => Some(self.content_type("content type")?),
+            Tok::Ident(w) if Verb::from_keyword(w).is_none() => Some(self.ident("content type", false)?),
             _ => None,
         };
         let answer = if *self.peek() == Tok::Arrow {
             self.next();
-            let ty = self.ident("answer type", false)?;
+            let ty = self.content_type("the answer's content type")?;
             let stream = *self.peek() == Tok::Star;
             if stream {
                 self.next();
@@ -626,9 +726,12 @@ impl Parser {
         } else {
             None
         };
-        Ok(RequestDecl { verb, pos, body, answer })
+        Ok(RequestDecl { operator, verb, pos, body, answer })
     }
 }
+
+/// Marks a request only whoever runs the image may make.
+const OPERATOR: &str = "operator";
 
 // ---------------------------------------------------------------------------
 // Resolving
@@ -644,33 +747,50 @@ pub fn resolve(
     import: &mut dyn FnMut(&Source) -> Result<Header>,
     guide: &dyn Fn(&str) -> Result<String>,
 ) -> Result<Header> {
-    let mut messages: BTreeMap<String, MessageType> = BTreeMap::new();
     let mut protocols: BTreeMap<String, Protocol> = BTreeMap::new();
     let mut traits: BTreeMap<String, Trait> = BTreeMap::new();
+    let mut imported: BTreeMap<String, Object> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
     for imp in &file.imports {
-        let header = import(&imp.from).with_context(|| format!("{}: importing from {}", imp.pos, imp.from))?;
-        for name in &imp.names {
-            reserve(name)?;
-            if let Some(prev) = from.insert(name.name.clone(), imp.from.to_string()) {
-                bail!(err_at(name, format!("`{}` is already imported from {prev}", name.name)));
+        if let Some(d) = &imp.default {
+            reserve(d)?;
+            if let Some(prev) = from.insert(d.name.clone(), imp.from.to_string()) {
+                bail!(err_at(d, format!("`{}` is already imported from {prev}", d.name)));
             }
-            if let Some(ty) = header.messages.get(&name.name) {
-                messages.insert(name.name.clone(), ty.clone());
-            } else if let Some(p) = header.protocols.get(&name.name) {
-                protocols.insert(name.name.clone(), p.clone());
+        }
+        if imp.names.is_empty() {
+            continue;
+        }
+        let header = import(&imp.from).with_context(|| format!("{}: importing from {}", imp.pos, imp.from))?;
+        for n in &imp.names {
+            let (name, local) = (&n.name, &n.local);
+            reserve(local)?;
+            if let Some(prev) = from.insert(local.name.clone(), imp.from.to_string()) {
+                bail!(err_at(local, format!("`{}` is already imported from {prev}", local.name)));
+            }
+            let declared = header.protocols.contains_key(&name.name)
+                || header.traits.contains_key(&name.name)
+                || header.object_named(&name.name).is_some();
+            if !declared {
+                bail!(err_at(name, format!("{} has no protocol, trait or object `{}`", imp.from, name.name)));
+            }
+            if !header.exports.contains(&name.name) {
+                bail!(err_at(name, format!("{} doesn't export `{}`", imp.from, name.name)));
+            }
+            if let Some(p) = header.protocols.get(&name.name) {
+                protocols.insert(local.name.clone(), p.clone());
             } else if let Some(t) = header.traits.get(&name.name) {
-                traits.insert(name.name.clone(), t.clone());
-            } else {
-                bail!(err_at(name, format!("{} has no message type, protocol or trait `{}`", imp.from, name.name)));
+                traits.insert(local.name.clone(), t.clone());
+            } else if let Some(o) = header.object_named(&name.name) {
+                imported.insert(local.name.clone(), o.clone());
             }
         }
     }
 
-    // A name means one thing, whether a message type, a protocol or a trait.
-    let mut names: Vec<(&Ident, &str)> = file.messages.iter().map(|m| (&m.name, "message")).collect();
-    names.extend(file.protocols.iter().map(|p| (&p.name, "protocol")));
+    // A name means one thing, whether a protocol, a trait or an object.
+    let mut names: Vec<(&Ident, &str)> = file.protocols.iter().map(|p| (&p.name, "protocol")).collect();
     names.extend(file.traits.iter().map(|t| (&t.name, "trait")));
+    names.extend(file.objects.iter().map(|o| (&o.name, "object")));
     for (i, &(name, kind)) in names.iter().enumerate() {
         reserve(name)?;
         if let Some(prev) = from.get(&name.name) {
@@ -684,29 +804,7 @@ pub fn resolve(
         }
     }
 
-    for m in &file.messages {
-        let mut fields: Vec<(String, FieldType)> = vec![];
-        for f in &m.fields {
-            if fields.iter().any(|(n, _)| *n == f.name.name) {
-                bail!(err_at(&f.name, format!("`{}` has two fields called `{}`", m.name.name, f.name.name)));
-            }
-            let Some(ty) = FieldType::from_name(&f.ty.name) else {
-                bail!(err_at(
-                    &f.ty,
-                    format!(
-                        "`{}` is not a field type; fields are string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64 or bytes",
-                        f.ty.name
-                    )
-                ));
-            };
-            fields.push((f.name.name.clone(), ty));
-        }
-        let field_docs = m.fields.iter().map(|f| f.doc.clone()).collect();
-        messages.insert(m.name.name.clone(), MessageType { name: m.name.name.clone(), fields, doc: m.doc.clone(), field_docs });
-    }
-
     let mut shapes = Shapes {
-        messages: &messages,
         protocol_decls: file.protocols.iter().map(|p| (p.name.name.as_str(), p)).collect(),
         trait_decls: file.traits.iter().map(|t| (t.name.name.as_str(), t)).collect(),
         protocols,
@@ -722,21 +820,11 @@ pub fn resolve(
 
     let mut objects: Vec<Object> = vec![];
     for o in &file.objects {
-        if objects.iter().any(|prev| prev.name == o.name.name) {
-            bail!(err_at(&o.name, format!("object `{}` is declared twice", o.name.name)));
-        }
         let guide = match &o.guide {
             Some((path, pos)) => Some(guide(path).with_context(|| format!("{pos}: reading the guide {path:?}"))?),
             None => None,
         };
-        let mut needs: Vec<Need> = vec![];
-        for n in &o.needs {
-            let at = pattern(&n.at)?;
-            if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
-                bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
-            }
-            needs.push(Need { at, doc: n.doc.clone(), entries: shapes.entries(&n.entries)? });
-        }
+        let needs = shapes.needs(&o.needs)?;
         let mut serves = shapes.entries(&o.serves)?;
         for t in &o.traits {
             let Shape::Trait(entries) = shapes.named(t)? else {
@@ -747,11 +835,22 @@ pub fn resolve(
             }
         }
         let traits = o.traits.iter().map(|t| t.name.clone()).collect();
-        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves });
+        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves, origin: None });
     }
-    let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
+    let image_needs = shapes.needs(&file.needs)?;
+    let mut exports: Vec<String> = vec![];
+    for e in &file.exports {
+        let known = names.iter().any(|(n, _)| n.name == e.name) || from.contains_key(&e.name);
+        if !known {
+            bail!(err_at(e, format!("`{}` is neither declared nor imported here, so it can't be exported", e.name)));
+        }
+        if exports.contains(&e.name) {
+            bail!(err_at(e, format!("`{}` is exported twice", e.name)));
+        }
+        exports.push(e.name.clone());
+    }
     let Shapes { protocols, traits, .. } = shapes;
-    Ok(Header { messages, declared, protocols, traits, objects })
+    Ok(Header { protocols, traits, objects, imported, exports, needs: image_needs })
 }
 
 /// What a protocol's or a trait's name stands for, written out.
@@ -763,7 +862,6 @@ enum Shape {
 /// Resolves a header's protocols and traits, each the first time it is
 /// named, so they can be declared in any order.
 struct Shapes<'a> {
-    messages: &'a BTreeMap<String, MessageType>,
     protocol_decls: BTreeMap<&'a str, &'a ProtocolDecl>,
     trait_decls: BTreeMap<&'a str, &'a TraitDecl>,
     protocols: BTreeMap<String, Protocol>,
@@ -817,7 +915,7 @@ impl Shapes<'_> {
                 },
             };
             for req in reqs {
-                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body) {
+                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body && prev.operator == req.operator) {
                     Some((prev, prev_written)) if *prev_written && written => bail!("{pos}: {at} takes `{req}` twice"),
                     Some((prev, _)) if *prev == req => {}
                     Some((prev, _)) => bail!("{pos}: {at} takes `{prev}` and `{req}`, which disagree"),
@@ -829,18 +927,45 @@ impl Shapes<'_> {
     }
 
     fn request(&self, r: &RequestDecl) -> Result<Request> {
-        let ty = |id: &Ident| -> Result<String> {
-            if id.name != OPAQUE && !self.messages.contains_key(&id.name) {
-                bail!(err_at(id, format!("unknown message type `{}`; is it imported?", id.name)));
+        if let Some(implied) = Request::implied(r.verb) {
+            if r.body.is_some() || r.answer.is_some() {
+                bail!("{}: `{}` takes nothing and answers {}; write it bare", r.pos, r.verb, if implied.stream { "a stream of stat records" } else { "a stat record" });
             }
-            Ok(id.name.clone())
-        };
-        let body = r.body.as_ref().map(ty).transpose()?;
+            return Ok(Request { operator: r.operator, verb: r.verb, body: None, answer: Some(implied) });
+        }
+        let body = r.body.as_ref().map(content_type).transpose()?;
         let answer = match &r.answer {
-            Some((id, stream)) => Some(Answer { ty: ty(id)?, stream: *stream }),
+            Some((id, stream)) => Some(Answer { ty: content_type(id)?, stream: *stream }),
             None => None,
         };
-        Ok(Request { verb: r.verb, body, answer })
+        Ok(Request { operator: r.operator, verb: r.verb, body, answer })
+    }
+
+    /// The needs blocks `decls` stand for. An object can't make the
+    /// operator's requests, so a need never includes them, even where it
+    /// names a trait that serves some.
+    fn needs(&mut self, decls: &[NeedDecl]) -> Result<Vec<Need>> {
+        let mut needs: Vec<Need> = vec![];
+        for n in decls {
+            let at = pattern(&n.at)?;
+            if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
+                bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
+            }
+            let mut entries = self.entries(&n.entries)?;
+            for e in &mut entries {
+                e.requests.retain(|r| !r.operator);
+            }
+            entries.retain(|e| !e.requests.is_empty());
+            let shape = match n.entries.as_slice() {
+                [e] if e.path.path == "/" => match e.items.as_slice() {
+                    [Item::Named(id)] => self.traits.get(&id.name).map(|t| t.name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            needs.push(Need { at, doc: n.doc.clone(), entries, shape });
+        }
+        Ok(needs)
     }
 
     /// The entries `decls` stand for, with each trait's tree put at its path.
@@ -905,10 +1030,26 @@ fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
 }
 
 fn reserve(name: &Ident) -> Result<()> {
-    if name.name == OPAQUE {
-        bail!(err_at(name, format!("`{OPAQUE}` is reserved: it stands for any message")));
+    if name.name == STAT_NAME {
+        bail!(err_at(name, format!("`{STAT_NAME}` is reserved: it stands for a stat record's content type, {STAT}")));
     }
     Ok(())
+}
+
+/// The content type `id` writes: as it is, or `Stat` for a stat record's.
+fn content_type(id: &Ident) -> Result<String> {
+    if id.name == STAT_NAME {
+        return Ok(STAT.into());
+    }
+    if !payload::valid(&id.name) {
+        let hint = if id.name.contains('/') {
+            "it isn't a well-formed content type".to_string()
+        } else {
+            format!("a header names a payload by its content type, such as `text/plain` or `{}`, not by a message type", payload::BSON)
+        };
+        bail!(err_at(id, format!("`{}`: {hint}", id.name)));
+    }
+    Ok(id.name.clone())
 }
 
 fn pattern(p: &image::Path) -> Result<Pattern> {
@@ -920,29 +1061,138 @@ fn same(a: &Pattern, b: &Pattern) -> bool {
     a.specificity(b) == Ordering::Equal && a.covers(b) && b.covers(a)
 }
 
-/// Reads and resolves the header at `path`. `from env` is the runtime's
-/// header, `from Name` is `Name.iface` next to this one, and a quoted path
-/// is relative to this one.
-pub fn load(path: &Path) -> Result<Header> {
-    load_depth(path, 0)
+/// `dir` followed by the relative path `rel`, without its `.` segments.
+pub fn join(dir: &Path, rel: &str) -> PathBuf {
+    let mut out = dir.to_path_buf();
+    for c in Path::new(rel).components() {
+        match c {
+            std::path::Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
-fn load_depth(path: &Path, depth: usize) -> Result<Header> {
-    if depth > 16 {
-        bail!("headers import each other in a loop");
-    }
-    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let file = parse(&src).with_context(|| format!("parsing {}", path.display()))?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let mut import = |s: &Source| -> Result<Header> {
-        match s {
-            Source::Module(m) if m.name == "env" => Ok(env().clone()),
-            Source::Module(m) => load_depth(&dir.join(format!("{}.iface", m.name)), depth + 1),
-            Source::Path(p) => load_depth(&dir.join(p), depth + 1),
+/// Reads and resolves the header at `path`: a `.oth` file's declarations,
+/// or the header inside a module.
+pub fn load(path: &Path) -> Result<Header> {
+    Loader::default().header(path)
+}
+
+/// Reads `.oth` files and the headers inside modules, each once, following
+/// imports relative to the file that makes them.
+#[derive(Default)]
+pub struct Loader {
+    /// What to read instead of the file on disk, by path: for tests.
+    pub files: BTreeMap<PathBuf, Vec<u8>>,
+    /// Every `.oth` and schema file read, in the order they were first read.
+    pub sources: Vec<PathBuf>,
+    headers: BTreeMap<PathBuf, Header>,
+    schemas: BTreeMap<PathBuf, Messages>,
+    /// The `.oth` files being resolved, to catch one that imports itself.
+    loading: Vec<PathBuf>,
+}
+
+impl Loader {
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        match self.files.get(path) {
+            Some(bytes) => Ok(bytes.clone()),
+            None => std::fs::read(path).with_context(|| format!("reading {}", path.display())),
         }
-    };
-    let guide = |p: &str| -> Result<String> { Ok(std::fs::read_to_string(dir.join(p))?) };
-    resolve(&file, &mut import, &guide).with_context(|| format!("in {}", path.display()))
+    }
+
+    /// The `.oth` file at `path`, parsed whole.
+    pub fn image(&mut self, path: &Path) -> Result<Image> {
+        let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
+        if !self.sources.iter().any(|p| p == path) {
+            self.sources.push(path.to_path_buf());
+        }
+        image::parse(&src).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// The header at `path`: a `.oth` file's declarations, or the header
+    /// inside a module (`.wasm`).
+    pub fn header(&mut self, path: &Path) -> Result<Header> {
+        if let Some(h) = self.headers.get(path) {
+            return Ok(h.clone());
+        }
+        let header = match path.extension().and_then(|e| e.to_str()) {
+            Some("wasm") => {
+                let Ok(wasm) = self.read(path) else {
+                    let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                    bail!("cannot read {} (did you compile {name}.ts?)", path.display());
+                };
+                let mut header = embedded(&wasm)
+                    .with_context(|| path.display().to_string())?
+                    .ok_or_else(|| anyhow::anyhow!("{} has no header; embed one with `othismo embed`", path.display()))?;
+                for o in &mut header.objects {
+                    o.origin = Some(path.to_path_buf());
+                }
+                header
+            }
+            Some("oth") => {
+                if self.loading.iter().any(|p| p == path) {
+                    bail!("{} imports itself, through the files it imports", path.display());
+                }
+                self.loading.push(path.to_path_buf());
+                let header = self.image(path).and_then(|img| self.resolve(&img.header, path));
+                self.loading.pop();
+                header?
+            }
+            _ => bail!("{} is neither a `.oth` file nor a module (`.wasm`)", path.display()),
+        };
+        self.headers.insert(path.to_path_buf(), header.clone());
+        Ok(header)
+    }
+
+    /// The message types at `path`: a BSON schema file, `.messages`, or the
+    /// schemas inside a module; a module with none has none.
+    pub fn schemas(&mut self, path: &Path) -> Result<Messages> {
+        if let Some(m) = self.schemas.get(path) {
+            return Ok(m.clone());
+        }
+        let schemas = if path.extension().is_some_and(|e| e == "wasm") {
+            embedded_schemas::<Bson>(&self.read(path)?).with_context(|| path.display().to_string())?
+        } else {
+            if self.loading.iter().any(|p| p == path) {
+                bail!("{} imports itself, through the files it imports", path.display());
+            }
+            let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
+            if !self.sources.iter().any(|p| p == path) {
+                self.sources.push(path.to_path_buf());
+            }
+            let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            self.loading.push(path.to_path_buf());
+            let parsed = Bson::parse(&src, &mut |p| self.schemas(&join(&dir, p)));
+            self.loading.pop();
+            parsed.with_context(|| format!("in {}", path.display()))?
+        };
+        self.schemas.insert(path.to_path_buf(), schemas.clone());
+        Ok(schemas)
+    }
+
+    /// Resolves `file`, the declarations of the `.oth` file at `path`.
+    pub fn resolve(&mut self, file: &File, path: &Path) -> Result<Header> {
+        let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        // Guides are read first, since resolving borrows the loader for imports.
+        let mut guides: BTreeMap<String, Result<String, String>> = BTreeMap::new();
+        for (g, _) in file.objects.iter().filter_map(|o| o.guide.as_ref()) {
+            let text = self.read(&dir.join(g)).map_err(|e| format!("{e:#}")).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()));
+            guides.insert(g.clone(), text);
+        }
+        let guide = |g: &str| -> Result<String> { guides[g].clone().map_err(|e| anyhow::anyhow!(e)) };
+        let mut import = |s: &Source| -> Result<Header> {
+            match s {
+                Source::Env => Ok(env().clone()),
+                Source::Path(p) => self.header(&join(&dir, p)),
+            }
+        };
+        let mut header = resolve(file, &mut import, &guide).with_context(|| format!("in {}", path.display()))?;
+        for o in &mut header.objects {
+            o.origin = Some(path.to_path_buf());
+        }
+        Ok(header)
+    }
 }
 
 #[cfg(test)]
@@ -950,32 +1200,20 @@ mod tests {
     use super::*;
 
     const GREETER: &str = r#"
-        import { Line } from env
-
-        ## Configures a Greeter.
-        message Greeting {
-          ## Put before each name.
-          prefix: string
-          ## End with `!` rather than `.`.
-          excited: bool
-        }
-
-        message Stats { lines: i32, chars: i64, average: f64 }
-
         ## Greets every name typed on the console.
         ##
         ## And reports statistics.
         object Greeter {
           ## The console, for names and greetings.
           needs /dev/cons {
-            /  watch -> Line*, write Opaque
+            /  watch -> text/plain*, write */*
           }
-          needs /shouter { / write Line }
+          needs /shouter { / write text/plain }
 
           serves {
             ## Configures the greeting.
-            /greeting  write Greeting
-            /stats     read -> Stats
+            /greeting  write application/bson
+            /stats     read -> application/bson
           }
         }
     "#;
@@ -984,7 +1222,7 @@ mod tests {
         let file = parse(src)?;
         let mut import = |s: &Source| -> Result<Header> {
             match s {
-                Source::Module(m) if m.name == "env" => Ok(env().clone()),
+                Source::Env => Ok(env().clone()),
                 other => bail!("no {other} here"),
             }
         };
@@ -996,30 +1234,28 @@ mod tests {
     }
 
     const SHAPES: &str = r#"
-        import { Data, Entry, Info, Text } from env
-
         ## A site, declared before the trees it is made of.
-        trait Site {
-          /hits     read -> Text
+        export trait Site {
+          /hits     read -> text/plain
           ## The static files.
           /static   Tree
           /**       File
         }
 
-        trait Tree {
+        export trait Tree {
           /     Dir
           /**   File, Dir
         }
 
-        protocol File { read -> Data, stat -> Info }
+        export protocol File { read -> */*, stat }
         protocol Dir {
-          list -> Entry*,
-          stat -> Info,
+          list,
+          stat,
         }
 
         object S : Site {
           needs /files Tree
-          serves { /hits read -> Text }
+          serves { /hits read -> text/plain }
         }
     "#;
 
@@ -1027,18 +1263,13 @@ mod tests {
     fn protocols_and_traits_are_written_out() {
         let h = resolve_str(SHAPES).unwrap();
         let show = |entries: &[Entry]| -> Vec<String> { entries.iter().map(|e| e.to_string()).collect() };
-        assert_eq!(h.protocols["Dir"].requests.iter().map(|r| r.to_string()).collect::<Vec<_>>(), ["list -> Entry*", "stat -> Info"]);
-        assert_eq!(show(&h.traits["Tree"].entries), ["/ list -> Entry*, stat -> Info", "/** read -> Data, stat -> Info, list -> Entry*"]);
+        assert_eq!(h.protocols["Dir"].requests.iter().map(|r| r.to_string()).collect::<Vec<_>>(), ["list", "stat"]);
+        assert_eq!(show(&h.traits["Tree"].entries), ["/ list, stat", "/** read -> */*, stat, list"]);
         let s = h.object("S").unwrap();
         assert_eq!(s.traits, ["Site"]);
         assert_eq!(
             show(&s.serves),
-            [
-                "/hits read -> Text",
-                "/static list -> Entry*, stat -> Info",
-                "/static/** read -> Data, stat -> Info, list -> Entry*",
-                "/** read -> Data, stat -> Info",
-            ],
+            ["/hits read -> text/plain", "/static list, stat", "/static/** read -> */*, stat, list", "/** read -> */*, stat"],
             "its own `/hits` agrees with Site's, so it is listed once"
         );
         assert_eq!(s.serves[1].doc, "The static files.", "the trait's root takes the doc of where it is put");
@@ -1047,58 +1278,61 @@ mod tests {
 
     #[test]
     fn protocols_and_traits_can_be_imported() {
-        let file = parse("import { Tree, File } from Shapes object T { needs /f Tree serves { /x File } }").unwrap();
+        let file = parse(r#"import { Tree as Files, File } from "./shapes.oth" object T { needs /f Files serves { /x File } }"#).unwrap();
         let mut import = |_: &Source| resolve_str(SHAPES);
         let h = resolve(&file, &mut import, &|_| unreachable!()).unwrap();
         assert_eq!(h.object("T").unwrap().needs[0].entries.len(), 2);
-        assert_eq!(h.object("T").unwrap().serves[0].to_string(), "/x read -> Data, stat -> Info");
+        assert_eq!(h.object("T").unwrap().serves[0].to_string(), "/x read -> */*, stat");
+        assert_eq!(h.traits["Files"].name, "Tree", "a renamed trait is the same trait");
+
+        let unexported = parse(r#"import { Dir } from "./shapes.oth""#).unwrap();
+        let e = format!("{:#}", resolve(&unexported, &mut import, &|_| unreachable!()).unwrap_err());
+        assert!(e.contains("\"./shapes.oth\" doesn't export `Dir`"), "{e}");
     }
 
     #[test]
     fn shapes_must_agree_where_they_meet() {
-        let env = "import { Data, Text } from env ";
-        let e = err(&format!("{env} protocol A {{ read -> Data }} protocol B {{ read -> Text }} object O {{ serves {{ /x A, B }} }}"));
-        assert!(e.contains("`/x` takes `read -> Data` and `read -> Text`, which disagree"), "{e}");
-        let e = err(&format!("{env} trait T {{ /x read -> Data }} trait U {{ /x read -> Text }} object O : T, U {{}}"));
-        assert!(e.contains("`/x` is given twice, as `/x read -> Data` and as `/x read -> Text`; where traits meet they must agree exactly"), "{e}");
-        let e = err(&format!("{env} trait T {{ /x read -> Data }} object O : T {{ serves {{ /x read -> Data, stat }} }}"));
+        let e = err("protocol A { read -> text/plain } protocol B { read -> text/html } object O { serves { /x A, B } }");
+        assert!(e.contains("`/x` takes `read -> text/plain` and `read -> text/html`, which disagree"), "{e}");
+        let e = err("trait T { /x read -> text/plain } trait U { /x read -> text/html } object O : T, U {}");
+        assert!(e.contains("`/x` is given twice, as `/x read -> text/plain` and as `/x read -> text/html`; where traits meet they must agree exactly"), "{e}");
+        let e = err("trait T { /x read -> text/plain } object O : T { serves { /x read -> text/plain, stat } }");
         assert!(e.contains("where traits meet they must agree exactly"), "{e}");
-        assert!(resolve_str(&format!("{env} protocol A {{ read -> Data }} protocol B {{ read -> Data }} object O {{ serves {{ /x A, B }} }}")).is_ok());
+        assert!(resolve_str("protocol A { read -> */* } protocol B { read -> */* } object O { serves { /x A, B } }").is_ok());
     }
 
     #[test]
     fn rejects_misused_shapes() {
-        let env = "import { Data } from env ";
         assert!(err("protocol A { B } protocol B { A }").contains("`A` contains itself"));
-        assert!(err(&format!("{env} trait T {{ /x read -> Data }} object O {{ serves {{ /x T, read }} }}")).contains("`T` is a trait; it stands alone"));
-        assert!(err(&format!("{env} trait T {{ /x read -> Data }} object O {{ serves {{ /a/** T }} }}")).contains("a trait can't be put under `/a/**`"));
+        assert!(err("trait T { /x read } object O { serves { /x T, read } }").contains("`T` is a trait; it stands alone"));
+        assert!(err("trait T { /x read } object O { serves { /a/** T } }").contains("a trait can't be put under `/a/**`"));
         assert!(err("protocol P { read } object O : P {}").contains("`P` is a protocol; an object declares traits"));
         assert!(err("object O : Nope {}").contains("unknown protocol or trait `Nope`"));
-        assert!(err("message X {} protocol X { read }").contains("`X` is declared as a message and as a protocol"));
+        assert!(err("object X {} protocol X { read }").contains("`X` is declared as a protocol and as a object"));
         assert!(err("trait X { / read } trait X { / stat }").contains("trait `X` is declared twice"));
-        assert!(err(&format!("{env} protocol Data {{ read }}")).contains("`Data` is imported from env, and declared here too"));
+        assert!(err("import { File } from env protocol File { read }").contains("`File` is imported from env, and declared here too"));
         assert!(err("protocol P { read, read }").contains("protocol `P` takes `read` twice"));
     }
 
     #[test]
     fn parses_and_resolves_a_header() {
         let h = resolve_str(GREETER).unwrap();
-        assert_eq!(h.messages.keys().collect::<Vec<_>>(), ["Greeting", "Line", "Stats"], "its own types and its imports");
-        assert_eq!(h.declared, ["Greeting", "Stats"]);
-        let g = &h.messages["Greeting"];
-        assert_eq!(g.doc, "Configures a Greeter.");
-        assert_eq!(g.fields, [("prefix".into(), FieldType::String), ("excited".into(), FieldType::Bool)]);
-        assert_eq!(g.field_docs, ["Put before each name.", "End with `!` rather than `.`."]);
-
         let o = h.object("Greeter").unwrap();
         assert_eq!(o.doc, "Greets every name typed on the console.\n\nAnd reports statistics.");
         assert_eq!(o.needs.len(), 2);
         assert_eq!((o.needs[0].at.as_str(), o.needs[0].doc.as_str()), ("/dev/cons", "The console, for names and greetings."));
         let reqs: Vec<String> = o.needs[0].entries[0].requests.iter().map(|r| r.to_string()).collect();
-        assert_eq!(reqs, ["watch -> Line*", "write Opaque"]);
+        assert_eq!(reqs, ["watch -> text/plain*", "write */*"]);
         assert_eq!(o.serves[0].doc, "Configures the greeting.");
-        assert_eq!(o.serves[1].requests[0].to_string(), "read -> Stats");
+        assert_eq!(o.serves[1].requests[0].to_string(), "read -> application/bson");
         assert_eq!(o.guide, None);
+    }
+
+    #[test]
+    fn needs_leave_out_the_operators_requests() {
+        let h = resolve_str("trait T { / operator write text/plain  /x operator remove, read } object A { needs /t T }").unwrap();
+        let entries: Vec<String> = h.objects[0].needs[0].entries.iter().map(|e| e.to_string()).collect();
+        assert_eq!(entries, ["/x read"]);
     }
 
     #[test]
@@ -1114,77 +1348,84 @@ mod tests {
             assert!(env.traits.contains_key(name), "{name}");
         }
         let objects: Vec<&str> = env.objects.iter().map(|o| o.name.as_str()).collect();
-        assert_eq!(objects, ["Packed.Files"], "the rest are declared by trait");
-        assert!(env.messages.contains_key("Line"));
+        assert_eq!(objects, ["MemoryConsole", "MemoryListener", "PackedFiles"], "the rest are needed by trait");
     }
 
     #[test]
     fn rejects_mistakes() {
-        assert!(err("message A { x: Strin }").contains("`Strin` is not a field type"));
-        assert!(err("message A { x: ArrayBuffer }").contains("not a field type"), "headers write `bytes`");
-        assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
-        assert!(err("message A {} message A {}").contains("declared twice"));
-        assert!(err("message Opaque {}").contains("reserved"));
-        assert!(err("import { Line } from env message Line { text: string }").contains("imported from env, and declared here too"));
-        assert!(err("import { Nope } from env").contains("env has no message type, protocol or trait `Nope`"));
-        assert!(err("import { X } from Other").contains("no Other here"));
-        assert!(err("object A { serves { /x read -> Nope } }").contains("unknown message type `Nope`"));
+        assert!(err("message A { x: i32 }").contains("message types are declared in a schema file"));
+        assert!(err("protocol Stat { read }").contains("reserved"));
+        assert!(err("import { Nope } from env").contains("env has no protocol, trait or object `Nope`"));
+        assert!(err(r#"import { X } from "./other.oth""#).contains("no \"./other.oth\" here"));
+        assert!(err("import { X } from Other").contains("import from a file, relative to this one, such as `from \"./scripts/Other.oth\"`"));
+        assert!(err("protocol P { read } export { P, Q }").contains("`Q` is neither declared nor imported here"));
+        assert!(err("export protocol P { read } export { P }").contains("`P` is exported twice"));
+        assert!(err("object A {} object A {}").contains("object `A` is declared twice"));
+        let e = err("object A { serves { /x write Greeting } }");
+        assert!(e.contains("`Greeting`: a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"), "{e}");
+        assert!(err("object A { serves { /x read -> text/ } }").contains("isn't a well-formed content type"));
         assert!(err("object A { serves { /x read, read } }").contains("takes `read` twice"));
         assert!(err("object A { serves { /{a} read /{b} stat } }").contains("already listed"));
         assert!(err("object A { needs /** { / read } needs /** { / stat } }").contains("one block per mount point"));
         assert!(err("object A { serves { /a/**/b read } }").contains("`**` can only come last"));
         assert!(err("object A { serves { /x frob } }").contains("unknown protocol or trait `frob`"));
         assert!(err("object A { serves { /x } }").contains("expected a verb"));
+        assert!(err("object A { serves { /x stat -> Stat } }").contains("`stat` takes nothing and answers a stat record; write it bare"));
+        assert!(err("object A { serves { /x list text/plain } }").contains("answers a stream of stat records"));
         assert!(err("## nothing\n").contains("documents what follows"));
-        assert!(err("## an import\nimport { Line } from env").contains("documents what follows"));
+        assert!(err("## an import\nimport { File } from env").contains("documents what follows"));
         assert!(err("object A { guide \"a\" guide \"b\" }").contains("names its guide twice"));
     }
 
     #[test]
-    fn requests_take_bodies_by_type() {
-        let h = resolve_str("message T {} object A { serves { /h control Text, control, read -> Opaque*, write Opaque } }")
-            .err()
-            .map(|e| e.to_string());
-        assert!(h.unwrap().contains("unknown message type `Text`"));
-        let h = resolve_str(
-            "import { Text } from env message T {} object A { serves { /h control Text, control, read -> Opaque*, write Opaque } }",
-        )
-        .unwrap();
+    fn requests_take_payloads_by_content_type() {
+        let h = resolve_str("object A { serves { /h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat } }").unwrap();
         let e = &h.objects[0].serves[0];
-        assert_eq!(e.takes(Verb::Control, Some("Text")).unwrap().body.as_deref(), Some("Text"));
-        assert_eq!(e.takes(Verb::Control, None).unwrap().body, None);
-        assert_eq!(e.takes(Verb::Control, Some("T")), Err(Status::Invalid));
-        assert_eq!(e.takes(Verb::Write, Some("T")).unwrap().body.as_deref(), Some(OPAQUE));
+        assert_eq!(e.takes(Verb::Remove, Some("text/plain")).unwrap().body.as_deref(), Some("text/plain"));
+        assert_eq!(e.takes(Verb::Remove, None).unwrap().body, None);
+        assert_eq!(e.takes(Verb::Remove, Some("application/bson")), Err(Status::Invalid));
+        assert_eq!(e.takes(Verb::Write, Some("image/png")).unwrap().body.as_deref(), Some(ANY));
         assert_eq!(e.takes(Verb::Write, None), Err(Status::Invalid));
+        assert_eq!(e.takes(Verb::Create, Some("text/html")).unwrap().answer.as_ref().unwrap().ty, STAT);
         assert_eq!(e.takes(Verb::Stat, None), Err(Status::NotSupported));
+        assert_eq!(e.takes_verb(Verb::Read, false), Ok(()));
+        assert_eq!(e.takes_verb(Verb::Remove, false), Err(Status::Forbidden), "only the operator may remove");
+        assert_eq!(e.takes_verb(Verb::Remove, true), Ok(()));
+        assert_eq!(e.takes_verb(Verb::Stat, true), Err(Status::NotSupported));
+        assert!(e.streams(Verb::Read) && !e.streams(Verb::Write));
+        assert_eq!(e.to_string(), "/h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat");
+        assert!(err("object A { serves { /h control text/plain } }").contains("`control` is gone"));
     }
 
     #[test]
-    fn opaque_meets_needs_in_one_direction() {
+    fn wildcards_meet_needs_in_one_direction() {
         let r = |src: &str| {
-            let h = resolve_str(&format!("import {{ Line, Data }} from env object A {{ serves {{ / {src} }} }}")).unwrap();
+            let h = resolve_str(&format!("object A {{ serves {{ / {src} }} }}")).unwrap();
             h.objects[0].serves[0].requests[0].clone()
         };
-        assert!(r("write Opaque").meets(&r("write Line")), "a server taking anything takes a Line");
-        assert!(!r("write Line").meets(&r("write Opaque")), "but a need to send anything isn't met by one taking Lines");
-        assert!(r("read -> Data").meets(&r("read -> Opaque")));
-        assert!(r("remove").meets(&r("remove -> Opaque")), "no answer is fine where any is");
-        assert!(!r("read -> Opaque").meets(&r("read -> Data")));
-        assert!(!r("watch -> Line").meets(&r("watch -> Line*")), "a stream isn't a single answer");
-        assert!(!r("watch -> Line*").meets(&r("watch -> Opaque")));
-        assert!(r("watch -> Line*").meets(&r("watch -> Opaque*")));
-        assert!(!r("write Line").meets(&r("write")));
+        assert!(r("write */*").meets(&r("write text/plain")), "a server taking anything takes text");
+        assert!(r("write text/*").meets(&r("write text/plain")));
+        assert!(!r("write text/plain").meets(&r("write */*")), "but a need to send anything isn't met by one taking text");
+        assert!(r("read -> text/html").meets(&r("read -> */*")));
+        assert!(r("read -> text/html").meets(&r("read -> text/*")));
+        assert!(r("remove").meets(&r("remove -> */*")), "no answer is fine where any is");
+        assert!(!r("read -> */*").meets(&r("read -> text/html")));
+        assert!(!r("watch -> text/plain").meets(&r("watch -> text/plain*")), "a stream isn't a single answer");
+        assert!(!r("watch -> text/plain*").meets(&r("watch -> */*")));
+        assert!(r("watch -> text/plain*").meets(&r("watch -> */**")));
+        assert!(!r("write text/plain").meets(&r("write")));
         assert!(!r("read").meets(&r("stat")));
+        assert!(r("list").meets(&r("list")));
+        assert!(!r("operator write */*").meets(&r("write text/plain")), "an object's need is never met by the operator's request");
     }
 
     #[test]
     fn picks_the_most_specific_entry_and_need() {
         let h = resolve_str(
-            "import { Data, Text } from env
-            object A {
-              needs /net/tcp { /{conn} write Data }
-              needs /** { /** read -> Opaque }
-              serves { /hits read -> Text  /** read -> Data }
+            "object A {
+              needs /net/tcp { /{conn} write application/octet-stream }
+              needs /** { /** read -> */* }
+              serves { /hits read -> text/plain  /** read -> */* }
             }",
         )
         .unwrap();

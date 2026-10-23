@@ -1,0 +1,18 @@
+## Greets every name typed on the console, reports running statistics
+## there, and has `/shouter` shout each greeting.
+export object Greeter {
+  ## The console: the names, and where greetings and statistics go.
+  needs /dev/cons {
+    /  watch -> text/plain*, write text/plain
+  }
+  ## Something to shout each greeting.
+  needs /shouter {
+    /  write text/plain
+  }
+
+  serves {
+    ## How to greet: a `Greeting`, a prefix and whether to be excited
+    ## about it.
+    /greeting  write application/bson
+  }
+}

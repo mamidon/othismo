@@ -1,8 +1,11 @@
 # Echoes every line typed on stdin. Echo can see exactly one thing: the
 # console, at /dev/cons.
 
-instance echo : Echo {
-  mount /dev/cons cons
-}
+import { Echo } from "./scripts/Echo.oth"
+import { Console } from env
 
-instance cons : Console
+needs /dev/cons Console
+
+instance echo : Echo {
+  bind /dev/cons /dev/cons
+}

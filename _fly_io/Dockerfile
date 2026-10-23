@@ -1,4 +1,4 @@
-# Builds the image we ship to fly.io: docs.img, sealed into docs.rti, and the
+# Builds the image we ship to fly.io: docs.oth, sealed into docs.rti, and the
 # othismo that runs it. Build from the repository root:
 #
 #   docker build -f _fly_io/Dockerfile -t othismo-docs .
@@ -19,7 +19,7 @@ COPY as/env/ as/env/
 RUN cargo build --release --locked
 
 # 2. Node: compile the site's objects to Wasm and embed their headers, render
-#    the docs to HTML, and seal docs.img.
+#    the docs to HTML, and seal docs.oth.
 FROM node:20-bookworm-slim AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
@@ -30,14 +30,14 @@ COPY docs/ docs/
 COPY examples/static/ examples/static/
 RUN for m in HttpServer StaticSite; do \
       npx asc examples/static/scripts/$m.ts -o examples/static/scripts/$m.wasm --optimize \
-      && othismo embed examples/static/scripts/$m.iface examples/static/scripts/$m.wasm || exit 1; \
+      && othismo embed examples/static/scripts/$m.oth examples/static/scripts/$m.wasm || exit 1; \
     done \
  && node examples/static/site.mjs
-COPY _fly_io/docs.img /ship/docs.img
+COPY _fly_io/docs.oth /ship/docs.oth
 RUN mkdir -p /ship/scripts \
  && cp examples/static/scripts/HttpServer.wasm examples/static/scripts/StaticSite.wasm /ship/scripts/ \
  && cp -r examples/static/public /ship/public \
- && othismo build /ship/docs.img -o /ship/docs.rti \
+ && othismo build /ship/docs.oth -o /ship/docs.rti \
  && othismo --check /ship/docs.rti
 
 # 3. What runs: the binary and the one built image, nothing else.

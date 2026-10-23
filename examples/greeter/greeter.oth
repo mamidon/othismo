@@ -1,18 +1,20 @@
 # Greets each name typed on stdin, shouts the greeting back, and reports
 # running statistics. Exercises a startup request, a request between two
 # objects, and a view with more than one mount.
-import { Greeting } from Greeter
+import { Greeter } from "./scripts/Greeter.oth"
+import { Shouter } from "./scripts/Shouter.oth"
+import { Console } from env
+
+needs /dev/cons Console
 
 instance greeter : Greeter {
-  mount /dev/cons cons
+  bind /dev/cons /dev/cons
   mount /shouter shouter
 }
 
 instance shouter : Shouter {
-  mount /dev/cons cons
+  bind /dev/cons /dev/cons
 }
 
-instance cons : Console
-
 mount /greeter greeter
-write /greeter/greeting Greeting { prefix: "Hello, ", excited: true }
+write /greeter/greeting application/bson { $type: "Greeting", prefix: "Hello, ", excited: true }

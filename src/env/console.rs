@@ -1,13 +1,10 @@
 //! `Console`, run on the host's stdin and stdout.
 
-use super::{Event, Reply, What, msg};
-use crate::messages::MessageType;
+use super::{Event, Reply, What};
 use crate::ns::{Status, Verb};
+use crate::payload::Payload;
 use crate::render;
-use crate::wire::Message;
 use anyhow::{Context, Result};
-use bson::doc;
-use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::sync::mpsc::Sender;
 
@@ -24,15 +21,7 @@ impl Console {
         !self.watchers.is_empty()
     }
 
-    pub(super) fn serve(
-        &mut self,
-        req: u32,
-        verb: Verb,
-        path: &str,
-        body: Option<&Message>,
-        out: &mut dyn Write,
-        messages: &BTreeMap<String, MessageType>,
-    ) -> Result<Vec<Reply>> {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
         if path != "/" {
             return Ok(vec![Reply::fail(req, Status::NotFound)]);
         }
@@ -42,9 +31,8 @@ impl Console {
                 self.watchers.push(req);
                 vec![]
             }
-            (Verb::Write, Some(m)) => {
-                let line = render::render(m, messages);
-                writeln!(out, "{line}").and_then(|_| out.flush()).context("writing stdout")?;
+            (Verb::Write, Some(p)) => {
+                writeln!(out, "{}", render::line(p)).and_then(|_| out.flush()).context("writing stdout")?;
                 vec![Reply::end(req)]
             }
             (Verb::Write, None) => vec![Reply::fail(req, Status::Invalid)],
@@ -58,9 +46,7 @@ impl Console {
 
     pub(super) fn on_event(&mut self, what: What) -> Vec<Reply> {
         match what {
-            What::Line(text) => {
-                self.watchers.iter().map(|&w| Reply::more(w, msg("Line", doc! { "text": text.clone() }))).collect()
-            }
+            What::Line(text) => self.watchers.iter().map(|&w| Reply::more(w, Payload::text(&text))).collect(),
             What::Eof => {
                 self.eof = true;
                 self.watchers.drain(..).map(Reply::end).collect()
@@ -82,19 +68,19 @@ pub struct MemoryConsole {
 }
 
 impl MemoryConsole {
-    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Message>) -> Vec<Reply> {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>) -> Vec<Reply> {
         match (path, verb, body) {
             ("/", Verb::Watch, _) => {
                 self.watchers.push(req);
                 vec![]
             }
-            ("/", Verb::Write, Some(m)) => {
-                let mut replies: Vec<Reply> = self.printed.iter().map(|&w| Reply::more(w, m.clone())).collect();
+            ("/", Verb::Write, Some(p)) => {
+                let mut replies: Vec<Reply> = self.printed.iter().map(|&w| Reply::more(w, p.clone())).collect();
                 replies.push(Reply::end(req));
                 replies
             }
-            ("/typed", Verb::Write, Some(m)) => {
-                let mut replies: Vec<Reply> = self.watchers.iter().map(|&w| Reply::more(w, m.clone())).collect();
+            ("/typed", Verb::Write, Some(p)) => {
+                let mut replies: Vec<Reply> = self.watchers.iter().map(|&w| Reply::more(w, p.clone())).collect();
                 replies.push(Reply::end(req));
                 replies
             }
@@ -153,19 +139,18 @@ mod tests {
     fn console_streams_lines_to_watchers_until_eof() {
         let mut c = EnvObject::Console(Console::default());
         let mut out = Vec::new();
-        let messages = BTreeMap::new();
-        assert!(c.serve(1, Verb::Watch, "/", None, &mut out, &messages).unwrap().is_empty());
-        assert!(c.serve(2, Verb::Watch, "/", None, &mut out, &messages).unwrap().is_empty());
+        assert!(c.serve(1, Verb::Watch, "/", None, &mut out).unwrap().is_empty());
+        assert!(c.serve(2, Verb::Watch, "/", None, &mut out).unwrap().is_empty());
         assert_eq!(c.cancel(2), [Reply::end(2)]);
         let r = c.on_event(What::Line("hi".into()));
-        assert_eq!(r, [Reply::more(1, msg("Line", doc! { "text": "hi" }))]);
+        assert_eq!(r, [Reply::more(1, Payload::text("hi"))]);
         assert_eq!(c.on_event(What::Eof), [Reply::end(1)]);
-        assert_eq!(c.serve(3, Verb::Watch, "/", None, &mut out, &messages).unwrap(), [Reply::end(3)]);
+        assert_eq!(c.serve(3, Verb::Watch, "/", None, &mut out).unwrap(), [Reply::end(3)]);
 
-        let w = c.serve(4, Verb::Write, "/", Some(&msg("Text", doc! { "text": "out" })), &mut out, &messages).unwrap();
+        let w = c.serve(4, Verb::Write, "/", Some(&Payload::text("out")), &mut out).unwrap();
         assert_eq!(w, [Reply::end(4)]);
         assert_eq!(out, b"out\n");
-        assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out, &messages).unwrap()), [Status::NotFound]);
+        assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out).unwrap()), [Status::NotFound]);
     }
 
     #[test]
@@ -173,9 +158,9 @@ mod tests {
         let mut c = MemoryConsole::default();
         assert!(c.serve(1, Verb::Watch, "/", None).is_empty());
         assert!(c.serve(2, Verb::Watch, "/printed", None).is_empty());
-        let line = msg("Line", doc! { "text": "hi" });
+        let line = Payload::text("hi");
         assert_eq!(c.serve(3, Verb::Write, "/typed", Some(&line)), [Reply::more(1, line.clone()), Reply::end(3)]);
-        let out = msg("Text", doc! { "text": "out" });
+        let out = Payload::text("out");
         assert_eq!(c.serve(4, Verb::Write, "/", Some(&out)), [Reply::more(2, out), Reply::end(4)]);
         c.cancel(2);
         assert_eq!(c.serve(5, Verb::Write, "/", Some(&line)), [Reply::end(5)]);

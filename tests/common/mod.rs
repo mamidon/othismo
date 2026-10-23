@@ -36,14 +36,22 @@ pub fn run_image(image: &Path, input: &str, options: Options) -> anyhow::Result<
     Ok(out.text())
 }
 
-/// A module: `wat` compiled, with the header in `iface` embedded. The
-/// header may import from env only.
+/// A module: `wat` compiled, with the header in `iface` embedded and its
+/// object exported. The header may import from env only.
 pub fn module(wat: &str, iface: &str) -> Vec<u8> {
-    let file = othismo::iface::parse(iface).unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
+    let iface = if iface.contains("export object") { iface.to_string() } else { iface.replace("object ", "export object ") };
+    let file = othismo::iface::parse(&iface).unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
     let mut env = |_: &othismo::image::Source| Ok(othismo::iface::env().clone());
     let header = othismo::iface::resolve(&file, &mut env, &|_| anyhow::bail!("no guides here"))
         .unwrap_or_else(|e| panic!("{e:#}\n{iface}"));
     othismo::iface::embed(&wat::parse_str(wat).unwrap(), &header).unwrap()
+}
+
+/// [`module`], with the message types `messages` declares embedded too.
+pub fn module_with(wat: &str, iface: &str, messages: &str) -> Vec<u8> {
+    use othismo::format::{Bson, Format};
+    let schemas = Bson::parse(messages, &mut |_| anyhow::bail!("no imports here")).unwrap();
+    othismo::iface::embed_schemas::<Bson>(&module(wat, iface), &schemas).unwrap()
 }
 
 /// A scratch directory holding an image, its messages and its scripts.
@@ -65,7 +73,7 @@ impl Fixture {
     }
 
     pub fn image(&self) -> PathBuf {
-        self.dir.join("test.img")
+        self.dir.join("test.oth")
     }
 }
 

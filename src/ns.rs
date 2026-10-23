@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// What a request asks for. Safe verbs never change anything. `Control` is
-/// the operator's: the image sends it, objects can't.
+/// What a request asks for. Safe verbs never change anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verb {
     Read,
@@ -21,11 +20,9 @@ pub enum Verb {
     Write,
     Create,
     Remove,
-    Invoke,
-    Control,
 }
 
-pub const VERBS: [Verb; 9] = [
+pub const VERBS: [Verb; 7] = [
     Verb::Read,
     Verb::Stat,
     Verb::List,
@@ -33,8 +30,6 @@ pub const VERBS: [Verb; 9] = [
     Verb::Write,
     Verb::Create,
     Verb::Remove,
-    Verb::Invoke,
-    Verb::Control,
 ];
 
 impl Verb {
@@ -56,8 +51,6 @@ impl Verb {
             Verb::Write => "write",
             Verb::Create => "create",
             Verb::Remove => "remove",
-            Verb::Invoke => "invoke",
-            Verb::Control => "control",
         }
     }
 
@@ -72,7 +65,8 @@ impl fmt::Display for Verb {
     }
 }
 
-/// The outcome carried by every reply.
+/// The outcome carried by every reply: `Ok`, or an error, whose number is
+/// its errno (see `docs/protocol.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Ok,
@@ -85,9 +79,10 @@ pub enum Status {
     Invalid,
     Io,
     Forbidden,
+    UnsupportedType,
 }
 
-const STATUSES: [Status; 10] = [
+const STATUSES: [Status; 11] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -98,6 +93,7 @@ const STATUSES: [Status; 10] = [
     Status::Invalid,
     Status::Io,
     Status::Forbidden,
+    Status::UnsupportedType,
 ];
 
 impl Status {
@@ -118,6 +114,7 @@ impl Status {
             Status::Invalid => "invalid",
             Status::Io => "io",
             Status::Forbidden => "forbidden",
+            Status::UnsupportedType => "unsupported_type",
         }
     }
 }
@@ -130,6 +127,11 @@ impl fmt::Display for Status {
 
 /// `Flag.ReadOnly` in the SDK: only safe verbs pass.
 pub const READ_ONLY: i32 = 1;
+
+/// A request's flag saying whoever runs the image made it: its startup
+/// requests, and those an image makes of what it instantiates. No object
+/// can set it.
+pub const OPERATOR: i32 = 1;
 
 /// Normalizes an absolute path: collapses `//` and `.` segments and keeps a
 /// trailing `/`. Relative paths, `..` segments and NUL bytes are `Invalid`.
@@ -219,6 +221,18 @@ impl Namespace {
     pub fn mount(&mut self, inst: usize, at: &str, target: usize, read_only: bool) {
         let target = Resolved { inst: target, path: "/".into(), read_only };
         put(&mut self.views[inst], at.into(), target);
+    }
+
+    /// Puts what `target` names at `at` in `inst`'s view: part of another's
+    /// served tree, already resolved. `at` must already be a [`mount_point`].
+    pub fn mount_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
+        put(&mut self.views[inst], at.into(), target);
+    }
+
+    /// Splices what `target` names into `inst`'s served tree at `at`, which
+    /// must already be a [`mount_point`].
+    pub fn expose_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
+        put(&mut self.exposed[inst], at.into(), target);
     }
 
     /// Resolves `path` in `inst`'s view.
@@ -501,8 +515,8 @@ mod tests {
             assert_eq!(Verb::from_i32(i as i32), Some(*v));
             assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
         }
-        assert_eq!(Verb::from_i32(9), None);
+        assert_eq!(Verb::from_i32(7), None);
         assert_eq!(Status::from_i32(-1), None);
-        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Control.is_safe());
+        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Create.is_safe());
     }
 }

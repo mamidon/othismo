@@ -1,0 +1,18 @@
+# Serves the site on the host. Everything this program can do to the
+# machine it runs on is in its needs: one TCP listener, and the console.
+
+import Site from "./site.oth"
+import { Console, Listener } from env
+
+# Where to listen. Deploy with e.g. `--set listen=0.0.0.0:80`.
+require listen : text/plain = "127.0.0.1:8080"
+
+needs /net/tcp  Listener
+needs /dev/cons Console
+
+instance web : Site {
+  bind /net/tcp  /net/tcp
+  bind /dev/cons /dev/cons
+}
+
+write /net/tcp listen

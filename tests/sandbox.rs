@@ -3,20 +3,44 @@
 
 mod common;
 
-use bson::doc;
 use common::{Fixture, module, run_image};
 use othismo::ns::{Status, Verb};
+use othismo::payload::Payload;
 use othismo::runtime::Options;
-use othismo::wire::Message;
 
-const MESSAGES: &str = "message Ping {}\n";
+/// What every fixture image imports from env.
+const ENV: &str = "import { Console, Listener, Files, PackedFiles, MemoryConsole, MemoryListener } from env";
+
+/// The image's needs that fixtures bind, and the trait each one is.
+const NEEDS: &[(&str, &str)] = &[("/cons", "Console"), ("/files", "Files")];
+
+/// `members` with each mount of `cons`, which is the root's need, written
+/// as a bind of it.
+fn bound(members: &str) -> String {
+    let words: Vec<&str> = members.split_whitespace().collect();
+    let mut out: Vec<String> = vec![];
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "mount" && i + 2 < words.len() && words[i + 2] == "cons" {
+            out.push(format!("bind {} /{}", words[i + 1], words[i + 2]));
+            i += 3;
+        } else {
+            out.push(words[i].to_string());
+            i += 1;
+        }
+    }
+    out.join(" ")
+}
 
 /// One thing a scripted module does.
 enum Act {
     /// Makes a request; with `expect`, the ticket is kept for `Cancel`.
-    Call { verb: Verb, path: &'static str, body: Option<Message>, expect: bool },
-    /// Replies to the request being served.
-    Reply { status: Status, body: Option<Message>, done: bool },
+    Call { verb: Verb, path: &'static str, body: Option<Payload>, expect: bool },
+    /// Replies to the request being served: with `status` Ok, `body` and
+    /// `done`; otherwise fails it.
+    Reply { status: Status, body: Option<Payload>, done: bool },
+    /// Fails the request being served, saying why.
+    Fail(Status, &'static str),
     /// Replies to a made-up request id.
     ReplyTo(u32),
     /// Forwards the request being served.
@@ -26,13 +50,17 @@ enum Act {
     Bind { src: &'static str, at: &'static str, read_only: bool },
     Expose { at: &'static str, src: &'static str, read_only: bool },
     Unmount(&'static str),
-    /// Writes the last status (an answer's or a bind's) to `path` as Text,
+    /// Writes the last status (an answer's or a bind's) to `path` as text,
     /// e.g. "not_found", or "ok (more)" for a reply that isn't the last.
     Report(&'static str),
-    /// Writes the body being handled to `path`.
+    /// Writes the payload being handled to `path`.
     Echo(&'static str),
-    /// `Echo` if there is a body, otherwise `Report`.
+    /// Writes the bytes of the payload being handled to `path`, as text.
+    EchoText(&'static str),
+    /// `Echo` if there is a payload, otherwise `Report`.
     Show(&'static str),
+    /// `EchoText` if there is a payload, otherwise `Report`.
+    ShowText(&'static str),
 }
 
 /// What a module does in each entry point.
@@ -50,24 +78,24 @@ struct Script {
     answer: Option<Steps>,
 }
 
-fn text(s: &str) -> Message {
-    Message { type_name: "Text".into(), fields: doc! { "text": s } }
+fn text(s: &str) -> Payload {
+    Payload::text(s)
 }
 
 fn call(verb: Verb, path: &'static str) -> Act {
     Act::Call { verb, path, body: None, expect: true }
 }
 
-fn write(path: &'static str, body: Message) -> Act {
+fn write(path: &'static str, body: Payload) -> Act {
     Act::Call { verb: Verb::Write, path, body: Some(body), expect: false }
 }
 
-fn reply(body: Message) -> Act {
+fn reply(body: Payload) -> Act {
     Act::Reply { status: Status::Ok, body: Some(body), done: true }
 }
 
 const INBOX: usize = 65536;
-const STATUSES: [Status; 10] = [
+const STATUSES: [Status; 11] = [
     Status::Ok,
     Status::NotFound,
     Status::ReadOnly,
@@ -78,6 +106,7 @@ const STATUSES: [Status; 10] = [
     Status::Invalid,
     Status::Io,
     Status::Forbidden,
+    Status::UnsupportedType,
 ];
 
 /// Builds the data segment and code for a script.
@@ -93,8 +122,13 @@ impl Wat {
         (at, bytes.len())
     }
 
-    fn body(&mut self, body: &Option<Message>) -> (usize, usize) {
-        body.as_ref().map(|m| self.put(&m.encode())).unwrap_or((0, 0))
+    /// A payload's type and bytes in the data segment, as the four
+    /// arguments that pass one: all 0 for none.
+    fn body(&mut self, body: &Option<Payload>) -> [String; 4] {
+        let Some(p) = body else { return [k(0), k(0), k(0), k(0)] };
+        let (t, tl) = self.put(p.ty.as_bytes());
+        let (b, bl) = self.put(&p.bytes);
+        [k(t), k(tl), k(b), k(bl)]
     }
 
     fn acts(&mut self, acts: &[Act]) -> String {
@@ -105,15 +139,20 @@ impl Wat {
         match act {
             Act::Call { verb, path, body, expect } => {
                 let (p, pl) = self.put(path.as_bytes());
-                let (b, bl) = self.body(body);
-                let call = wcall("call", &[k(*verb as usize), k(p), k(pl), k(b), k(bl), k(*expect as usize)]);
+                let [t, tl, b, bl] = self.body(body);
+                let call = wcall("call", &[k(*verb as usize), k(p), k(pl), t, tl, b, bl, k(*expect as usize)]);
                 if *expect { format!("(global.set $ticket {call})") } else { format!("(drop {call})") }
             }
-            Act::Reply { status, body, done } => {
-                let (b, bl) = self.body(body);
-                wcall("reply", &[g("req"), k(*status as usize), k(b), k(bl), k(*done as usize)])
+            Act::Reply { status: Status::Ok, body, done } => {
+                let [t, tl, b, bl] = self.body(body);
+                wcall("reply", &[g("req"), t, tl, b, bl, k(*done as usize)])
             }
-            Act::ReplyTo(req) => wcall("reply", &[k(*req as usize), k(0), k(0), k(0), k(1)]),
+            Act::Reply { status, .. } => self.act(&Act::Fail(*status, "")),
+            Act::Fail(status, why) => {
+                let (d, dl) = self.put(why.as_bytes());
+                wcall("fail", &[g("req"), k(*status as usize), k(d), k(dl)])
+            }
+            Act::ReplyTo(req) => wcall("reply", &[k(*req as usize), k(0), k(0), k(0), k(0), k(1)]),
             Act::Forward(path) => {
                 let (p, pl) = self.put(path.as_bytes());
                 wcall("forward", &[g("req"), k(p), k(pl)])
@@ -148,12 +187,19 @@ impl Wat {
             }
             Act::Echo(path) => {
                 let (p, pl) = self.put(path.as_bytes());
-                let call = wcall("call", &[k(Verb::Write as usize), k(p), k(pl), g("bptr"), g("blen"), k(0)]);
+                let call = wcall("call", &[k(Verb::Write as usize), k(p), k(pl), g("tptr"), g("tlen"), g("bptr"), g("blen"), k(0)]);
                 format!("(drop {call})")
             }
-            Act::Show(path) => {
-                let (echo, report) = (self.act(&Act::Echo(path)), self.act(&Act::Report(path)));
-                format!("(if (i32.gt_u (global.get $blen) (i32.const 0)) (then {echo}) (else {report}))")
+            Act::EchoText(path) => {
+                let (p, pl) = self.put(path.as_bytes());
+                let (t, tl) = self.put(b"text/plain");
+                let call = wcall("call", &[k(Verb::Write as usize), k(p), k(pl), k(t), k(tl), g("bptr"), g("blen"), k(0)]);
+                format!("(drop {call})")
+            }
+            Act::Show(path) | Act::ShowText(path) => {
+                let echo = if matches!(act, Act::Show(_)) { Act::Echo(path) } else { Act::EchoText(path) };
+                let (echo, report) = (self.act(&echo), self.act(&Act::Report(path)));
+                format!("(if (i32.gt_u (global.get $tlen) (i32.const 0)) (then {echo}) (else {report}))")
             }
         }
     }
@@ -193,8 +239,9 @@ fn script_wat(s: &Script) -> String {
     let data: String = w.data.iter().map(|b| format!("\\{b:02x}")).collect();
     format!(
         r#"(module
-          (import "othismo" "call" (func $call (param i32 i32 i32 i32 i32 i32) (result i32)))
-          (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32)))
+          (import "othismo" "call" (func $call (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+          (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32 i32)))
+          (import "othismo" "fail" (func $fail (param i32 i32 i32 i32)))
           (import "othismo" "forward" (func $forward (param i32 i32 i32)))
           (import "othismo" "cancel" (func $cancel (param i32)))
           (import "othismo" "bind" (func $bind (param i32 i32 i32 i32 i32) (result i32)))
@@ -206,33 +253,45 @@ fn script_wat(s: &Script) -> String {
           (global $ticket (mut i32) (i32.const 0))
           (global $status (mut i32) (i32.const 0))
           (global $done (mut i32) (i32.const 0))
+          (global $tptr (mut i32) (i32.const 0))
+          (global $tlen (mut i32) (i32.const 0))
           (global $bptr (mut i32) (i32.const 0))
           (global $blen (mut i32) (i32.const 0))
           (global $sn (mut i32) (i32.const 0))
           (global $an (mut i32) (i32.const 0))
           (func (export "rt_inbox") (param i32) (result i32) (i32.const {INBOX}))
           (func (export "rt_start") {start})
-          (func (export "rt_serve") (param i32 i32 i32 i32)
+          (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32)
             (global.set $req (local.get 0))
-            (global.set $bptr (i32.add (i32.const {INBOX}) (local.get 2)))
-            (global.set $blen (local.get 3))
+            (global.set $tptr (i32.add (i32.const {INBOX}) (local.get 3)))
+            (global.set $tlen (local.get 4))
+            (global.set $bptr (i32.add (global.get $tptr) (local.get 4)))
+            (global.set $blen (local.get 5))
             {serve}
             (global.set $sn (i32.add (global.get $sn) (i32.const 1))))
-          (func (export "rt_answer") (param i32 i32 i32 i32)
+          (func (export "rt_answer") (param i32 i32 i32 i32 i32)
             (global.set $status (local.get 1))
-            (global.set $done (local.get 3))
-            (global.set $bptr (i32.const {INBOX}))
-            (global.set $blen (local.get 2))
+            (global.set $done (local.get 4))
+            (global.set $tptr (i32.const {INBOX}))
+            (global.set $tlen (local.get 2))
+            (global.set $bptr (i32.add (i32.const {INBOX}) (local.get 2)))
+            (global.set $blen (local.get 3))
             {answer}
             (global.set $an (i32.add (global.get $an) (i32.const 1)))))"#
     )
 }
 
-/// Requests of every verb, with a body of any type or none, answered with
-/// anything: what a scripted module serves, and what it needs of another.
+/// Requests of every verb, with a payload of any type or none, answered
+/// with anything: what a scripted module serves, and what it needs of
+/// another.
 fn anything(safe_only: bool) -> String {
     let verbs = othismo::ns::VERBS.iter().filter(|v| !safe_only || v.is_safe());
-    let reqs: Vec<String> = verbs.flat_map(|v| [format!("{v} -> Opaque*"), format!("{v} Opaque -> Opaque*")]).collect();
+    let reqs: Vec<String> = verbs
+        .flat_map(|v| match v {
+            Verb::Stat | Verb::List => vec![v.to_string()],
+            _ => vec![format!("{v} -> */**"), format!("{v} */* -> */**")],
+        })
+        .collect();
     format!("/** {}", reqs.join(", "))
 }
 
@@ -241,16 +300,19 @@ fn anything(safe_only: bool) -> String {
 /// and anything at the mount points it binds.
 fn header(ty: &str, script: &Script, members: &str, types: &std::collections::HashMap<String, String>) -> String {
     let env = othismo::iface::env();
-    let all: Vec<&str> = env.messages.keys().map(String::as_str).collect();
-    let mut out = format!("import {{ {} }} from env\nobject {ty} {{\n", all.join(", "));
+    let mut out = format!("object {ty} {{\n");
     let words: Vec<&str> = members.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
-        if *w != "mount" {
+        if *w != "mount" && *w != "bind" {
             continue;
         }
         let (at, target) = (words[i + 1], words[i + 2]);
         let ro = words.get(i + 3) == Some(&"readonly");
-        let built_in = env.object(&types[target]).cloned().or_else(|| env.traits.get(&types[target]).map(|t| t.as_object()));
+        let ty = match NEEDS.iter().find(|(path, _)| *path == target) {
+            Some((_, trait_name)) => trait_name.to_string(),
+            None => types[target].clone(),
+        };
+        let built_in = env.object(&ty).cloned().or_else(|| env.traits.get(&ty).map(|t| t.as_object()));
         let entries: Vec<String> = match built_in {
             None => vec![anything(ro)],
             Some(built_in) => built_in
@@ -260,7 +322,7 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
                     let reqs: Vec<String> = e
                         .requests
                         .iter()
-                        .filter(|r| r.verb != Verb::Control && (!ro || r.verb.is_safe()))
+                        .filter(|r| !r.operator && (!ro || r.verb.is_safe()))
                         .map(|r| r.to_string())
                         .collect();
                     (!reqs.is_empty()).then(|| format!("{} {}", e.path, reqs.join(", ")))
@@ -279,8 +341,9 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
     out
 }
 
-/// An image with a Console called `cons`, the given Wasm instances
-/// (`name`, script, members) and any extra declarations and requests. Each scripted
+/// An image that needs a Console at `/cons`, with the given Wasm instances
+/// (`name`, script, members) and any extra declarations and requests. A
+/// member that mounts `cons` binds the image's `/cons`. Each scripted
 /// module gets a header from [`header`].
 fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixture {
     fixture_with(name, objects, extra, &[])
@@ -289,10 +352,10 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Console\n{extra}\n");
+    let mut img = format!("{ENV}\nneeds /cons Console\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        img.push_str(&format!("instance {obj} : {ty} {{ {members} }}\n"));
+        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {} }}\n", bound(members)));
     }
     let parsed = othismo::image::parse(&img).unwrap();
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
@@ -300,11 +363,11 @@ fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, head
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
         let iface = match headers.iter().find(|(t, _)| *t == ty) {
             Some((_, src)) => src.to_string(),
-            None => header(&ty, script, members, &types),
+            None => header(&ty, script, &bound(members), &types),
         };
         f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &iface));
     }
-    f.file("messages.iface", MESSAGES).file("test.img", img);
+    f.file("test.oth", img);
     f
 }
 
@@ -319,7 +382,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  invoke /a Ping  invoke /a/again Ping");
+    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  write /a \"ping\"  write /a/again \"ping\"");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -351,9 +414,14 @@ fn read_only_mounts_refuse_unsafe_verbs() {
 }
 
 #[test]
-fn only_the_image_controls() {
+fn only_the_image_makes_operator_requests() {
+    // b serves /y to the operator alone. a can see b, and binds it where its
+    // needs let it write anything, but that doesn't make it the operator.
     let a = Script {
-        start: vec![Act::Call { verb: Verb::Control, path: "/b/x", body: Some(text("x")), expect: true }],
+        start: vec![
+            Act::Bind { src: "/b", at: "/raw", read_only: false },
+            Act::Call { verb: Verb::Write, path: "/raw/y", body: Some(text("x")), expect: true },
+        ],
         answer: Some(Steps::Each(vec![Act::Report("/out")])),
         ..Default::default()
     };
@@ -361,8 +429,13 @@ fn only_the_image_controls() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("control", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")], "mount /b b  control /b/y Ping");
-    assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's control, never a's");
+    let a_header = "object A { needs /out { / write */* }  needs /raw/** { /** write */* } }";
+    let b_header = "object B { needs /out { / write */* }  serves { /y operator write */* } }";
+    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")];
+    let f = fixture_with("operator", &objects, "mount /b b  write /b/y \"ping\"", &[("A", a_header), ("B", b_header)]);
+    assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's write, never a's");
+    let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
+    assert_eq!(off, "b served\nforbidden\n", "the rule holds with checks off, as read-only mounts do");
 }
 
 #[test]
@@ -489,27 +562,35 @@ fn files_script() -> Script {
 }
 
 /// The refused remove is answered at once, the rest after a round trip.
+/// Stat records print as their fields; their versions are left off, since
+/// only packed files have them.
 const FILES_OUTPUT: &str = "not_supported\n\
-    Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\n\
+    hi\n\
     not_found\n\
     is_directory\n\
-    Info {\"kind\": \"file\", \"size\": 2, \"mime\": \"text/plain; charset=utf-8\"}\n\
-    Entry {\"name\": \"hello.txt\", \"kind\": \"file\"}\n\
-    Entry {\"name\": \"sub\", \"kind\": \"dir\"}\n\
+    stat \"hello.txt\" file 2 \"text/plain; charset=utf-8\"\n\
+    stat \"hello.txt\" file 2 \"text/plain; charset=utf-8\"\n\
+    stat \"sub\" dir 0 \"\"\n\
     ok\n";
+
+/// `out` with each stat record's version taken off.
+fn unversioned(out: &str) -> String {
+    let lines: Vec<&str> = out.lines().map(|l| if l.starts_with("stat ") { l.rsplit_once(' ').unwrap().0 } else { l }).collect();
+    lines.join("\n") + "\n"
+}
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "instance files : Files  mount /files files  control /files FilesRoot { path: \"public\" }";
-    let f = fixture("files", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
+    let files = "needs /files Files  write /files \"public\"";
+    let f = fixture("files", &[("a", &files_script(), "bind /f /files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
-    assert_eq!(run(&f).unwrap(), FILES_OUTPUT);
+    assert_eq!(unversioned(&run(&f).unwrap()), FILES_OUTPUT);
 }
 
 #[test]
 fn packed_files_answer_like_files() {
-    let files = "instance files : Packed.Files { include \"public/\" }";
+    let files = "instance files : PackedFiles { include \"public/\" }";
     let f = fixture("packed", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
@@ -519,38 +600,49 @@ fn packed_files_answer_like_files() {
     let out = common::Captured::default();
     let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(out.clone()) };
     othismo::runtime::run(&pack, io, Options::default()).unwrap();
-    assert_eq!(out.text(), FILES_OUTPUT);
+    assert_eq!(unversioned(&out.text()), FILES_OUTPUT);
+    assert!(!out.text().contains("text/plain; charset=utf-8\" 0\n"), "packed files have versions: {}", out.text());
 }
 
 #[test]
 fn unknown_request_ids_stop_the_run() {
     let a = Script { serve: Some(Steps::Each(vec![Act::ReplyTo(7)])), ..Default::default() };
-    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  invoke /a Ping");
+    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a \"ping\"");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
 }
 
 #[test]
-fn bodies_must_be_declared_types_unless_checks_are_off() {
-    let off = Options { no_checks: true };
-    let bad = Message { type_name: "Text".into(), fields: doc! { "text": 5 } };
-    let a = Script { start: vec![write("/out", bad)], ..Default::default() };
-    let f = fixture("shape", &[("a", &a, "mount /out cons")], "");
-    assert!(run_err(&f).contains("`Text.text` should be string"), "{}", run_err(&f));
-    assert_eq!(run_image(&f.image(), "", off.clone()).unwrap(), "Text {\"text\": 5}\n");
+fn errors_say_why() {
+    let a = Script { serve: Some(Steps::Nth(vec![vec![Act::Fail(Status::NotFound, "no such greeting")], vec![Act::Fail(Status::Ok, "")]])), ..Default::default() };
+    let f = fixture("why", &[("a", &a, "")], "");
+    let pack = othismo::pack::load(&f.image()).unwrap();
+    let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(std::io::sink()) };
+    let mut rt = othismo::runtime::Runtime::new(&pack, io, Options::default()).unwrap();
+    rt.start().unwrap();
+    let a = pack.program.instances.iter().position(|i| i.name == "a").unwrap();
+    let answers = rt.ask(a, Verb::Read, "/x", None).unwrap();
+    assert_eq!(answers.len(), 1);
+    assert_eq!((answers[0].status, answers[0].detail.as_str(), answers[0].done), (Status::NotFound, "no such greeting", true));
+    let e = format!("{:#}", rt.ask(a, Verb::Read, "/x", None).unwrap_err());
+    assert!(e.contains("fail with errno 0, which isn't an error"), "{e}");
+}
 
-    let odd = Message { type_name: "Mystery".into(), fields: doc! {} };
-    let a = Script { start: vec![write("/out", odd)], ..Default::default() };
-    let f = fixture("undeclared", &[("a", &a, "mount /out cons")], "");
-    assert!(run_err(&f).contains("sent `Mystery`, which no header in the image declares"), "{}", run_err(&f));
-    assert_eq!(run_image(&f.image(), "", off).unwrap(), "Mystery {}\n");
+#[test]
+fn payloads_are_carried_unread() {
+    let a = Script { start: vec![write("/out", Payload::new("application/bson", "not bson"))], ..Default::default() };
+    let f = fixture("unread", &[("a", &a, "mount /out cons")], "");
+    assert_eq!(run(&f).unwrap(), "application/bson (8 bytes)\n", "nothing looks inside it on the way");
+
+    let a = Script { start: vec![write("/out", Payload::new("", "x"))], ..Default::default() };
+    let f = fixture("untyped", &[("a", &a, "mount /out cons")], "");
+    assert!(run_err(&f).contains("instance `a` sent a payload without a content type"), "{}", run_err(&f));
 }
 
 /// `a` asks `b` for things, and reports each answer.
-const NARROW_A: &str = "import { Text } from env
-    object A {
-      needs /out { / write Opaque }
-      needs /b { /greeting write Text -> Opaque*  /x read -> Opaque* }
+const NARROW_A: &str = "object A {
+      needs /out { / write */* }
+      needs /b { /greeting write text/plain -> */**  /x read -> */** }
     }";
 
 #[test]
@@ -560,7 +652,7 @@ fn requests_must_be_among_the_senders_needs() {
             call(Verb::Read, "/b/x"),
             call(Verb::Read, "/b/elsewhere"),
             call(Verb::Stat, "/b/x"),
-            Act::Call { verb: Verb::Write, path: "/b/greeting", body: Some(Message { type_name: "Ping".into(), fields: doc! {} }), expect: true },
+            Act::Call { verb: Verb::Write, path: "/b/greeting", body: Some(Payload::new("application/bson", "?")), expect: true },
             Act::Call { verb: Verb::Write, path: "/b/greeting", body: Some(text("hi")), expect: true },
         ],
         answer: Some(Steps::Each(vec![Act::Show("/out")])),
@@ -569,8 +661,9 @@ fn requests_must_be_among_the_senders_needs() {
     let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
     let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")];
     let f = fixture_with("needs", &objects, "", &[("A", NARROW_A)]);
-    // The refusals are answered at once; b's answers take a round trip.
-    assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\ninvalid\nb served\nb served\n");
+    // The refusals are answered at once; b's answers take a round trip. The
+    // runtime doesn't look at payloads, so the BSON one reaches b too.
+    assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\nb served\nb served\nb served\n");
     let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
     assert_eq!(off, "b served\nb served\nb served\nb served\nb served\n", "with checks off, everything reaches b");
 }
@@ -578,13 +671,12 @@ fn requests_must_be_among_the_senders_needs() {
 #[test]
 fn requests_must_be_among_what_the_server_serves() {
     // a can only ask b for more than b serves by binding b somewhere that isn't checked against it.
-    let a_header = "import { Text } from env
-        object A {
-          needs /out { / write Opaque }
-          needs /b { /x read -> Text }
-          needs /raw/** { /** read -> Opaque, stat -> Opaque }
+    let a_header = "object A {
+          needs /out { / write */* }
+          needs /b { /x read -> text/plain }
+          needs /raw/** { /** read -> */*, stat }
         }";
-    let b_header = "import { Text } from env object B { serves { /x read -> Text } }";
+    let b_header = "object B { serves { /x read -> text/plain } }";
     let a = Script {
         start: vec![
             Act::Bind { src: "/b", at: "/raw", read_only: false },
@@ -602,34 +694,32 @@ fn requests_must_be_among_what_the_server_serves() {
 }
 
 #[test]
-fn answers_must_be_what_the_server_promised() {
+fn only_a_stream_is_answered_more_than_once() {
     // b promises `read` at /x answered with `answer`, and a needs just that.
     fn fix(name: &str, b: &Script, answer: &str) -> Fixture {
         let a = Script { start: vec![call(Verb::Read, "/b/x")], ..Default::default() };
         let star = if answer.ends_with('*') { "*" } else { "" };
-        let a_header = format!("object A {{ needs /out {{ / write Opaque }}  needs /b {{ /x read -> Opaque{star} }} }}");
-        let b_header = format!("import {{ Data, Text }} from env object B {{ serves {{ /x read{answer} }} }}");
+        let a_header = format!("object A {{ needs /out {{ / write */* }}  needs /b {{ /x read -> */*{star} }} }}");
+        let b_header = format!("object B {{ serves {{ /x read{answer} }} }}");
         let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", b, "")];
         fixture_with(name, &objects, "", &[("A", &a_header), ("B", &b_header)])
     }
 
+    // The payload's type is the server's business: nothing holds it to its header.
     let b = Script { serve: Some(Steps::Each(vec![reply(text("x"))])), ..Default::default() };
-    let e = run_err(&fix("answer_type", &b, " -> Data"));
-    assert!(e.contains("instance `b` answered `read /x` with a `Text`, but its interface promises `Data`"), "{e}");
-    let e = run_err(&fix("answer_none", &b, ""));
-    assert!(e.contains("but its interface promises a status alone"), "{e}");
-    assert!(run(&fix("answer_any", &b, " -> Opaque")).is_ok());
+    assert!(run(&fix("answer_type", &b, " -> application/bson")).is_ok());
+    assert!(run(&fix("answer_none", &b, "")).is_ok());
 
     let more = Act::Reply { status: Status::Ok, body: Some(text("1")), done: false };
     let b = Script { serve: Some(Steps::Each(vec![more, reply(text("2"))])), ..Default::default() };
-    let e = run_err(&fix("answer_twice", &b, " -> Text"));
+    let e = run_err(&fix("answer_twice", &b, " -> text/plain"));
     assert!(e.contains("answered `read /x` more than once, but its interface promises one answer"), "{e}");
-    assert!(run(&fix("answer_stream", &b, " -> Text*")).is_ok());
+    assert!(run(&fix("answer_stream", &b, " -> text/plain*")).is_ok());
 
-    // A failure needs no body, whatever was promised.
+    // A failure needs no payload, whatever was promised.
     let fail = Act::Reply { status: Status::NotFound, body: None, done: true };
     let b = Script { serve: Some(Steps::Each(vec![fail])), ..Default::default() };
-    assert!(run(&fix("answer_fail", &b, " -> Data")).is_ok());
+    assert!(run(&fix("answer_fail", &b, " -> text/plain")).is_ok());
 }
 
 #[test]
@@ -637,19 +727,19 @@ fn modules_cannot_import_anything_else() {
     let wat = r#"(module
       (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
       (memory (export "memory") 1))"#;
-    let f = fixture("wasi", &[], "instance s : S");
+    let f = fixture("wasi", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     assert!(run_err(&f).contains("module S imports `wasi_snapshot_preview1.fd_write`, which the runtime does not provide"));
 }
 
 #[test]
 fn modules_must_export_the_entry_points() {
-    let f = fixture("exports", &[], "instance s : S");
+    let f = fixture("exports", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file(
         "scripts/S.wasm",
         module(r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#, "object S {}"),
     );
-    assert!(run_err(&f).contains("module must export rt_serve(i32, i32, i32, i32)"));
+    assert!(run_err(&f).contains("module must export rt_serve(i32, i32, i32, i32, i32, i32)"));
 }
 
 #[test]
@@ -660,10 +750,10 @@ fn abort_fails_the_run_naming_the_instance() {
       (memory (export "memory") 1)
       (data (i32.const 12) "\08\00\00\00b\00o\00o\00m\00")
       (func (export "rt_inbox") (param i32) (result i32) (i32.const 4096))
-      (func (export "rt_serve") (param i32 i32 i32 i32))
-      (func (export "rt_answer") (param i32 i32 i32 i32))
+      (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32))
+      (func (export "rt_answer") (param i32 i32 i32 i32 i32))
       (func (export "rt_start") (call $abort (i32.const 16) (i32.const 0) (i32.const 7) (i32.const 9))))"#;
-    let f = fixture("abort", &[], "instance s : S");
+    let f = fixture("abort", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     let err = run_err(&f);
     assert!(err.contains("instance `s` failed starting"), "{err}");
@@ -672,68 +762,98 @@ fn abort_fails_the_run_naming_the_instance() {
 
 #[test]
 fn missing_module_is_reported() {
-    let f = fixture("missing", &[], "instance g : Ghost");
+    let f = fixture("missing", &[], "import { Ghost } from \"./scripts/Ghost.wasm\" instance g : Ghost");
     assert!(run_err(&f).contains("did you compile Ghost.ts?"));
 }
 
 #[test]
-fn an_imported_image_runs_in_memory_and_can_be_dialed() {
-    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/static.img");
+fn an_image_given_a_listener_in_memory_can_be_dialed() {
+    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/site.oth");
     let request = "GET /index.html HTTP/1.1\r\nHost: anything\r\n\r\n";
     let probe = Script {
         start: vec![Act::Call {
             verb: Verb::Create,
             path: "/net/dial",
-            body: Some(Message { type_name: "Data".into(), fields: doc! { "mime": "", "data": othismo::wire::bytes(request.into()) } }),
+            body: Some(Payload::new("application/octet-stream", request)),
             expect: true,
         }],
-        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        answer: Some(Steps::Each(vec![Act::ShowText("/out")])),
         ..Default::default()
     };
-    let f = Fixture::new("import");
+    let f = Fixture::new("instantiate");
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs /net Dialer needs /out Console }"));
     f.file(
-        "test.img",
+        "test.oth",
         format!(
-            "import \"{}\"\ninstance out : Console\ninstance probe : Probe {{\n  mount /net net\n  mount /out out\n}}\n",
+            "import Site from \"{}\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\n\
+             needs /out Console\n\
+             instance net : MemoryListener\ninstance cons : MemoryConsole\n\
+             instance web : Site {{\n  mount /net/tcp net\n  mount /dev/cons cons\n}}\n\
+             instance probe : Probe {{\n  mount /net net\n  bind /out /out\n}}\n",
             site.display()
         ),
     );
     let out = run(&f).unwrap();
-    assert!(out.starts_with("Data {\"mime\": \"\", \"data\": \"HTTP/1.1 200 OK\\r\\n"), "{out}");
+    assert!(out.starts_with("HTTP/1.1 200 OK\r\n"), "{out}");
     assert!(out.contains("<!doctype html>") || out.contains("<!DOCTYPE html>"), "the page itself: {out}");
     assert!(out.ends_with("ok\n"), "the server hung up once it had answered: {out}");
 }
 
 #[test]
-fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
+fn an_instantiated_image_is_relative_to_its_own_file() {
     let probe = Script {
-        start: vec![call(Verb::Read, "/f/hello.txt"), call(Verb::Read, "/f/missing")],
+        start: vec![call(Verb::Read, "/f/files/hello.txt"), call(Verb::Read, "/f/files/missing")],
         answer: Some(Steps::Each(vec![Act::Show("/out")])),
         ..Default::default()
     };
-    let f = Fixture::new("import_files");
-    // The imported image is in a directory of its own, with its files there.
+    let f = Fixture::new("instantiate_files");
+    // The image is in a directory of its own, with its files there.
     std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
-    f.file("site/site.img", "instance files : Files\nmount /files files\ncontrol /files FilesRoot { path: \"public\" }\n");
+    f.file("site/site.oth", &format!("{ENV}\ninstance files : PackedFiles {{ include \"public/\" }}\nmount /files files\nexport /files\n"));
     f.file("site/public/hello.txt", "hi");
-    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Files } from env object Probe { needs /f Files needs /out Console }"));
-    f.file("test.img", "import \"./site/site.img\"\ninstance out : Console\ninstance probe : Probe {\n  mount /f files\n  mount /out out\n}\n");
-    let out = run(&f).unwrap();
-    assert_eq!(out, "Data {\"mime\": \"text/plain; charset=utf-8\", \"data\": \"hi\"}\nnot_found\n");
-
+    let header = "import { Console } from env object Probe { needs /f { /files/** read -> */* } needs /out Console }";
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), header));
+    f.file(
+        "test.oth",
+        format!("import Site from \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance site : Site\ninstance probe : Probe {{\n  mount /f site\n  bind /out /out\n}}\n"),
+    );
+    assert_eq!(run(&f).unwrap(), "hi\nnot_found\n");
     let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap());
-    assert!(described.contains("files  serves a snapshot of host files under public, taken at start"), "{described}");
+    assert!(described.contains("site.files  serves 1 built-in file, 2 bytes"), "{described}");
 }
 
 #[test]
-fn an_import_shares_names_with_the_image() {
-    let f = Fixture::new("import_clash");
-    f.file("site.img", "instance cons : Console\nmount /cons cons\n");
-    f.file("test.img", "import \"./site.img\"\ninstance cons : Console\n");
-    assert!(run_err(&f).contains("instance `cons` is declared twice"), "{}", run_err(&f));
-    f.file("test.img", "import \"./site.img\"\ninstance other : Console\nmount /cons other\n");
-    assert!(run_err(&f).contains("`/cons` is already mounted in the image's view"), "{}", run_err(&f));
-    f.file("test.img", "import \"./nope.img\"\n");
-    assert!(run_err(&f).contains("1:8: importing ./nope.img"), "{}", run_err(&f));
+fn an_images_names_are_its_own() {
+    let f = Fixture::new("instantiate_names");
+    f.file("site.oth", &format!("{ENV}\ninstance cons : MemoryConsole\nmount /cons cons\n"));
+    f.file("test.oth", &format!("import Site from \"./site.oth\"\n{ENV}\ninstance cons : MemoryConsole\ninstance site : Site\nmount /cons cons\n"));
+    let p = othismo::pack::load(&f.image()).unwrap();
+    let names: Vec<&str> = p.program.instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["cons", "site", "site.cons"]);
+    f.file("test.oth", "import \"./site.oth\"\n");
+    assert!(run_err(&f).contains("an image is no longer imported whole"), "{}", run_err(&f));
+    f.file("test.oth", "import Nope from \"./nope.oth\"\ninstance n : Nope\n");
+    assert!(run_err(&f).contains("nope.oth"), "{}", run_err(&f));
+}
+
+#[test]
+fn an_image_serves_only_what_it_exports() {
+    // web exports a's /x alone. The probe binds web where its needs let it
+    // read anything, but nothing else of web is there to read.
+    let a = Script { serve: Some(Steps::Each(vec![reply(text("from a"))])), ..Default::default() };
+    let probe = Script {
+        start: vec![Act::Bind { src: "/web", at: "/raw", read_only: false }, call(Verb::Read, "/raw/x"), call(Verb::Read, "/raw/y")],
+        answer: Some(Steps::Each(vec![Act::Show("/out")])),
+        ..Default::default()
+    };
+    let f = Fixture::new("exports");
+    f.file("scripts/A.wasm", module(&script_wat(&a), &format!("object A {{ serves {{ {} }} }}", anything(false))));
+    let probe_header = "import { Console } from env object Probe { needs /out Console  needs /web { /x read -> */** }  needs /raw/** { /** read -> */* } }";
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), probe_header));
+    f.file("site.oth", "import { A } from \"./scripts/A.wasm\"\ninstance a : A\nmount /a a\nexport /a/x at /x\n");
+    f.file(
+        "test.oth",
+        format!("import Site from \"./site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance web : Site\ninstance probe : Probe {{ mount /web web  bind /out /out }}\n"),
+    );
+    assert_eq!(run(&f).unwrap(), "not_found\nfrom a\n", "the unexported path is refused at once");
 }

@@ -18,15 +18,11 @@ pub use files::Files;
 pub use packed::Packed;
 pub use tcp::{MemoryListener, Tcp};
 
-use crate::check::{Instance, IncludeDecl, Kind};
-use crate::messages::MessageType;
+use crate::check::{Instance, Kind};
 use crate::ns::{Status, Verb};
-use crate::pack::{self, Pack};
-use crate::tree::Tree;
-use crate::wire::Message;
+use crate::pack::Pack;
+use crate::payload::Payload;
 use anyhow::{Context, Result};
-use bson::Document;
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;
@@ -50,17 +46,17 @@ pub enum What {
 pub struct Reply {
     pub req: u32,
     pub status: Status,
-    pub body: Option<Message>,
+    pub body: Option<Payload>,
     /// The last reply to `req`.
     pub done: bool,
 }
 
 impl Reply {
-    fn ok(req: u32, body: Message) -> Reply {
+    fn ok(req: u32, body: Payload) -> Reply {
         Reply { req, status: Status::Ok, body: Some(body), done: true }
     }
 
-    fn more(req: u32, body: Message) -> Reply {
+    fn more(req: u32, body: Payload) -> Reply {
         Reply { req, status: Status::Ok, body: Some(body), done: false }
     }
 
@@ -78,39 +74,26 @@ pub enum EnvObject {
     Tcp(Tcp),
     Files(Files),
     Packed(Packed),
-    /// A Console in an imported image.
+    /// A console in memory.
     MemoryConsole(MemoryConsole),
-    /// A Listener in an imported image.
+    /// A listener in memory.
     MemoryListener(MemoryListener),
 }
 
-fn msg(type_name: &str, fields: Document) -> Message {
-    Message { type_name: type_name.into(), fields }
-}
-
 impl EnvObject {
-    /// `None` for instances implemented in Wasm. A Tcp listener is bound
-    /// here, so its address is known before anything starts. A relative
-    /// files root is relative to the directory of the image that declared
-    /// it. One of the runtime's objects in an imported image runs in memory:
-    /// a Files instance serves a snapshot of its directory, taken now.
+    /// `None` for instances implemented in Wasm and instances of images. A
+    /// Tcp listener is bound here, so its address is known before anything
+    /// starts. A relative files root is relative to the directory of the
+    /// image that declared it.
     pub fn new(inst: &Instance, pack: &Pack) -> Result<Option<EnvObject>> {
         let dir = pack.dir.join(&inst.dir);
         Ok(Some(match &inst.kind {
-            Kind::Wasm { .. } => return Ok(None),
-            Kind::Console if inst.in_memory => EnvObject::MemoryConsole(MemoryConsole::default()),
+            Kind::Wasm { .. } | Kind::Image { .. } => return Ok(None),
             Kind::Console => EnvObject::Console(Console::default()),
-            Kind::Tcp if inst.in_memory => EnvObject::MemoryListener(MemoryListener::default()),
-            Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config_str(inst, "address")?)?),
-            Kind::Files if inst.in_memory => {
-                let root = config_str(inst, "path")?;
-                let snapshot = IncludeDecl { source: format!("{}/", root.trim_end_matches('/')), at: None };
-                let (mut tree, mut blobs) = (Tree::default(), BTreeMap::new());
-                tree.include(&dir, &snapshot, &mut |bytes| pack::add(&mut blobs, bytes))
-                    .with_context(|| format!("taking a snapshot of {}", dir.join(&root).display()))?;
-                EnvObject::Packed(Packed::new(tree, blobs))
-            }
-            Kind::Files => EnvObject::Files(Files::open(dir.join(config_str(inst, "path")?))?),
+            Kind::MemoryConsole => EnvObject::MemoryConsole(MemoryConsole::default()),
+            Kind::Tcp => EnvObject::Tcp(Tcp::bind(&config(inst)?)?),
+            Kind::MemoryListener => EnvObject::MemoryListener(MemoryListener::default()),
+            Kind::Files => EnvObject::Files(Files::open(dir.join(config(inst)?))?),
             Kind::Packed { .. } => {
                 let tree = pack.trees.get(&inst.name).context("its files are missing")?.clone();
                 EnvObject::Packed(Packed::new(tree, pack.blobs.clone()))
@@ -125,23 +108,16 @@ impl EnvObject {
         }
     }
 
-    /// Serves request `req`. `out` and `messages` are for printing.
-    pub fn serve(
-        &mut self,
-        req: u32,
-        verb: Verb,
-        path: &str,
-        body: Option<&Message>,
-        out: &mut dyn Write,
-        messages: &BTreeMap<String, MessageType>,
-    ) -> Result<Vec<Reply>> {
-        // Their config is taken from the image's `control /` before they are
-        // made; changing it while they run isn't supported yet.
-        if verb == Verb::Control {
+    /// Serves request `req`. `out` is for printing.
+    pub fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
+        // Their config is taken from the image's write of their root before
+        // they are made; changing it while they run isn't supported yet.
+        let configured = matches!(self, EnvObject::Tcp(_) | EnvObject::Files(_) | EnvObject::MemoryListener(_));
+        if configured && verb == Verb::Write && path == "/" {
             return Ok(vec![Reply::fail(req, Status::NotSupported)]);
         }
         Ok(match self {
-            EnvObject::Console(c) => c.serve(req, verb, path, body, out, messages)?,
+            EnvObject::Console(c) => c.serve(req, verb, path, body, out)?,
             EnvObject::Tcp(t) => t.serve(req, verb, path, body),
             EnvObject::Files(f) => f.serve(req, verb, path),
             EnvObject::Packed(p) => p.serve(req, verb, path),
@@ -182,8 +158,7 @@ impl EnvObject {
     }
 }
 
-/// A string field of an environment object's config.
-fn config_str(inst: &Instance, field: &str) -> Result<String> {
-    let config = inst.config.as_ref().context("no config")?.message()?;
-    Ok(config.fields.get_str(field).with_context(|| format!("config has no `{field}`"))?.to_string())
+/// An environment object's config, which is text.
+fn config(inst: &Instance) -> Result<String> {
+    inst.config.as_ref().context("no config")?.text()
 }

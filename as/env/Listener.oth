@@ -1,0 +1,32 @@
+## A stream of bytes each way.
+export protocol Connection { watch -> application/octet-stream*, write application/octet-stream }
+
+## A listener, and the connections it accepts. The runtime runs it as a TCP
+## listener on the address the image configures it with.
+export trait Listener {
+  ## Configured by the image only, with the address to listen on, e.g.
+  ## "127.0.0.1:8080".
+  /                operator write text/plain
+  ## The bound address, e.g. "127.0.0.1:8080".
+  /address         read -> text/plain
+  ## The name of every connection accepted, as it is.
+  /accept          watch -> text/plain*
+  ## A connection's bytes: watch for those received, until the peer
+  ## closes; write to send.
+  /{conn}/data     Connection
+  ## The peer's address.
+  /{conn}/remote   read -> text/plain
+  ## Close our side, once everything written is sent.
+  /{conn}          remove
+}
+
+## The other side of a listener in memory: connect to it.
+export trait Dialer {
+  ## Connect, sending the request's bytes, and get back everything the
+  ## server writes, until it closes the connection.
+  /dial   create application/octet-stream -> application/octet-stream*
+}
+
+## A listener in memory, which touches nothing on the host, to give an image
+## where it would be given a real one. Connections come from `/dial`.
+export object MemoryListener : Listener, Dialer {}
