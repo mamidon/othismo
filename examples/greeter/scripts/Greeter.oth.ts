@@ -33,7 +33,7 @@ export class GreeterServer extends Server {
    * How to greet: a `Greeting`, a prefix and whether to be excited
    * about it.
    *
-   * `/greeting write application/bson`
+   * `/greeting write Greeting`
    */
   writeGreeting(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }
 

@@ -13,7 +13,7 @@ export object Greeter {
   serves {
     ## How to greet: a `Greeting`, a prefix and whether to be excited
     ## about it.
-    /greeting  write application/bson
+    /greeting  write Greeting
   }
 }
 

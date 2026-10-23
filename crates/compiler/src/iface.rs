@@ -216,7 +216,39 @@ pub fn resolve(
     import: &mut dyn FnMut(&Source) -> Result<Header>,
     guide: &dyn Fn(&str) -> Result<String>,
 ) -> Result<Header> {
+    resolve_with(file, &Types::default(), import, guide)
+}
+
+/// The message types a file's schemas blocks declare, as their formats
+/// list them, and the content types whose formats have schemas.
+#[derive(Debug, Clone, Default)]
+pub struct Types {
+    pub declared: Vec<DeclaredType>,
+    /// A payload of one of these is named by its message type, never by
+    /// the content type alone.
+    pub structured: Vec<String>,
+}
+
+/// One message type a schemas block declares.
+#[derive(Debug, Clone)]
+pub struct DeclaredType {
+    pub name: String,
+    pub content_type: String,
+    /// Its block is exported.
+    pub exported: bool,
+    /// Where its block is.
+    pub pos: Pos,
+}
+
+/// [`resolve`], with the message types `types` gives.
+pub fn resolve_with(
+    file: &File,
+    types: &Types,
+    import: &mut dyn FnMut(&Source) -> Result<Header>,
+    guide: &dyn Fn(&str) -> Result<String>,
+) -> Result<Header> {
     let mut protocols: BTreeMap<String, Protocol> = BTreeMap::new();
+    let mut messages: BTreeMap<String, String> = BTreeMap::new();
     let mut traits: BTreeMap<String, Trait> = BTreeMap::new();
     let mut imported: BTreeMap<String, Object> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
@@ -239,14 +271,20 @@ pub fn resolve(
             }
             let declared = header.protocols.contains_key(&name.name)
                 || header.traits.contains_key(&name.name)
-                || header.object_named(&name.name).is_some();
+                || header.object_named(&name.name).is_some()
+                || header.types.contains_key(&name.name);
             if !declared {
-                bail!(err_at(name, format!("{} has no protocol, trait or object `{}`", imp.from, name.name)));
+                bail!(err_at(name, format!("{} has no protocol, trait, object or message type `{}`", imp.from, name.name)));
             }
             if !header.exports.contains(&name.name) {
                 bail!(err_at(name, format!("{} doesn't export `{}`", imp.from, name.name)));
             }
-            if let Some(p) = header.protocols.get(&name.name) {
+            if let Some(ct) = header.types.get(&name.name) {
+                if local.name != name.name {
+                    bail!(err_at(local, format!("`{}` is a message type, named on the wire, so it can't be renamed", name.name)));
+                }
+                messages.insert(name.name.clone(), ct.clone());
+            } else if let Some(p) = header.protocols.get(&name.name) {
                 protocols.insert(local.name.clone(), p.clone());
             } else if let Some(t) = header.traits.get(&name.name) {
                 traits.insert(local.name.clone(), t.clone());
@@ -256,10 +294,16 @@ pub fn resolve(
         }
     }
 
-    // A name means one thing, whether a protocol, a trait or an object.
+    // A name means one thing, whether a protocol, a trait, an object or a
+    // message type.
+    let type_ids: Vec<Ident> = types.declared.iter().map(|t| Ident { name: t.name.clone(), pos: t.pos }).collect();
     let mut names: Vec<(&Ident, &str)> = file.protocols.iter().map(|p| (&p.name, "protocol")).collect();
     names.extend(file.traits.iter().map(|t| (&t.name, "trait")));
     names.extend(file.objects.iter().map(|o| (&o.name, "object")));
+    names.extend(type_ids.iter().map(|t| (t, "message type")));
+    for t in &types.declared {
+        messages.insert(t.name.clone(), t.content_type.clone());
+    }
     for (i, &(name, kind)) in names.iter().enumerate() {
         reserve(name)?;
         if let Some(prev) = from.get(&name.name) {
@@ -267,7 +311,8 @@ pub fn resolve(
         }
         if let Some((_, prev)) = names[..i].iter().find(|(n, _)| n.name == name.name) {
             let what = if *prev == kind { format!("{kind} `{}` is declared twice", name.name) } else {
-                format!("`{}` is declared as a {prev} and as a {kind}", name.name)
+                let a = |w: &str| format!("{} {w}", if w.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" });
+                format!("`{}` is declared as {} and as {}", name.name, a(prev), a(kind))
             };
             bail!(err_at(name, what));
         }
@@ -278,6 +323,8 @@ pub fn resolve(
         trait_decls: file.traits.iter().map(|t| (t.name.name.as_str(), t)).collect(),
         protocols,
         traits,
+        messages,
+        structured: &types.structured,
         resolving: vec![],
     };
     for p in &file.protocols {
@@ -307,7 +354,7 @@ pub fn resolve(
         objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves, origin: None });
     }
     let image_needs = shapes.needs(&file.needs)?;
-    let mut exports: Vec<String> = vec![];
+    let mut exports: Vec<String> = types.declared.iter().filter(|t| t.exported).map(|t| t.name.clone()).collect();
     for e in &file.exports {
         let known = names.iter().any(|(n, _)| n.name == e.name) || from.contains_key(&e.name);
         if !known {
@@ -318,8 +365,23 @@ pub fn resolve(
         }
         exports.push(e.name.clone());
     }
-    let Shapes { protocols, traits, .. } = shapes;
-    Ok(Header { protocols, traits, objects, imported, exports, needs: image_needs })
+    // What an exported object takes and answers, whoever imports it can name.
+    for o in objects.iter().filter(|o| exports.contains(&o.name)) {
+        let entries = o.serves.iter().chain(o.needs.iter().flat_map(|n| &n.entries));
+        let named = entries.flat_map(|e| &e.requests).flat_map(|r| r.message.iter().chain(r.answer.iter().flat_map(|a| &a.message)));
+        for m in named {
+            if let Some(t) = types.declared.iter().find(|t| &t.name == m && !t.exported) {
+                bail!(
+                    "{}: `{}` is exported, and names `{m}`, but its schemas block isn't: write `export schemas {}`",
+                    t.pos,
+                    o.name,
+                    t.content_type
+                );
+            }
+        }
+    }
+    let Shapes { protocols, traits, messages, .. } = shapes;
+    Ok(Header { protocols, traits, objects, imported, exports, needs: image_needs, types: messages })
 }
 
 /// What a protocol's or a trait's name stands for, written out.
@@ -335,6 +397,9 @@ struct Shapes<'a> {
     trait_decls: BTreeMap<&'a str, &'a TraitDecl>,
     protocols: BTreeMap<String, Protocol>,
     traits: BTreeMap<String, Trait>,
+    /// Every message type it can name, with its content type.
+    messages: BTreeMap<String, String>,
+    structured: &'a [String],
     /// The ones being resolved, to catch one that contains itself.
     resolving: Vec<String>,
 }
@@ -384,7 +449,7 @@ impl Shapes<'_> {
                 },
             };
             for req in reqs {
-                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body && prev.operator == req.operator) {
+                match out.iter().find(|(prev, _)| prev.verb == req.verb && prev.body == req.body && prev.message == req.message && prev.operator == req.operator) {
                     Some((prev, prev_written)) if *prev_written && written => bail!("{pos}: {at} takes `{req}` twice"),
                     Some((prev, _)) if *prev == req => {}
                     Some((prev, _)) => bail!("{pos}: {at} takes `{prev}` and `{req}`, which disagree"),
@@ -400,14 +465,36 @@ impl Shapes<'_> {
             if r.body.is_some() || r.answer.is_some() {
                 bail!("{}: `{}` takes nothing and answers {}; write it bare", r.pos, r.verb, if implied.stream { "a stream of stat records" } else { "a stat record" });
             }
-            return Ok(Request { operator: r.operator, verb: r.verb, body: None, answer: Some(implied) });
+            return Ok(Request { operator: r.operator, verb: r.verb, body: None, message: None, answer: Some(implied) });
         }
-        let body = r.body.as_ref().map(content_type).transpose()?;
+        let (body, message) = match &r.body {
+            Some(id) => {
+                let (ty, message) = self.payload_type(id)?;
+                (Some(ty), message)
+            }
+            None => (None, None),
+        };
         let answer = match &r.answer {
-            Some((id, stream)) => Some(Answer { ty: content_type(id)?, stream: *stream }),
+            Some((id, stream)) => {
+                let (ty, message) = self.payload_type(id)?;
+                Some(Answer { ty, message, stream: *stream })
+            }
             None => None,
         };
-        Ok(Request { operator: r.operator, verb: r.verb, body, answer })
+        Ok(Request { operator: r.operator, verb: r.verb, body, message, answer })
+    }
+
+    /// The content type `id` names, and the message type if it names one:
+    /// a message type, `Stat`, or a content type that has no schemas.
+    fn payload_type(&self, id: &Ident) -> Result<(String, Option<String>)> {
+        if let Some(ty) = self.messages.get(&id.name) {
+            return Ok((ty.clone(), Some(id.name.clone())));
+        }
+        let ty = content_type(id)?;
+        if self.structured.contains(&ty) {
+            bail!(err_at(id, format!("`{ty}` payloads are named by their message type, declared in a `schemas {ty}` block, such as `write Greeting`")));
+        }
+        Ok((ty, None))
     }
 
     /// The needs blocks `decls` stand for. An object can't make the
@@ -514,7 +601,7 @@ fn content_type(id: &Ident) -> Result<String> {
         let hint = if id.name.contains('/') {
             "it isn't a well-formed content type"
         } else {
-            "a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"
+            "it is neither a content type, such as `text/plain`, nor a message type declared in or imported into this file"
         };
         bail!(err_at(id, format!("`{}`: {hint}", id.name)));
     }
@@ -623,6 +710,29 @@ impl Loader {
         Ok(header)
     }
 
+    /// The message types the schemas blocks of `file`, at `path`, declare.
+    fn types(&mut self, file: &File, path: &Path) -> Result<Types> {
+        let formats = self.formats.clone();
+        let mut types = Types { declared: vec![], structured: formats.iter().map(|f| f.content_type().to_string()).collect() };
+        for block in &file.schemas {
+            let Some(f) = formats.iter().find(|f| f.content_type() == block.ty.name) else {
+                let known: Vec<&str> = formats.iter().map(|f| f.content_type()).collect();
+                bail!(
+                    "{}: in {}: no format reads `{}` schemas; this othismo's are for {}",
+                    block.ty.pos,
+                    path.display(),
+                    block.ty.name,
+                    if known.is_empty() { "nothing".to_string() } else { known.join(", ") }
+                );
+            };
+            let schemas = self.schemas(f, path)?;
+            for name in f.declared(&schemas) {
+                types.declared.push(DeclaredType { name, content_type: block.ty.name.clone(), exported: block.exported, pos: block.ty.pos });
+            }
+        }
+        Ok(types)
+    }
+
     /// `format`'s schemas at `path`: the `.oth` file's block for its content
     /// type, or those inside a module. A file or module with none has none.
     pub fn schemas(&mut self, format: &dyn Format, path: &Path) -> Result<Schemas> {
@@ -653,6 +763,7 @@ impl Loader {
     /// Resolves `file`, the declarations of the `.oth` file at `path`.
     pub fn resolve(&mut self, file: &File, path: &Path) -> Result<Header> {
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let types = self.types(file, path)?;
         // Guides are read first, since resolving borrows the loader for imports.
         let mut guides: BTreeMap<String, Result<String, String>> = BTreeMap::new();
         for (g, _) in file.objects.iter().filter_map(|o| o.guide.as_ref()) {
@@ -666,7 +777,7 @@ impl Loader {
                 Source::Path(p) => self.header(&join(&dir, p)),
             }
         };
-        let mut header = resolve(file, &mut import, &guide).with_context(|| format!("in {}", path.display()))?;
+        let mut header = resolve_with(file, &types, &mut import, &guide).with_context(|| format!("in {}", path.display()))?;
         for o in &mut header.objects {
             o.origin = Some(path.to_path_buf());
         }
@@ -789,7 +900,7 @@ mod tests {
         assert!(err("trait T { /x read } object O { serves { /a/** T } }").contains("a trait can't be put under `/a/**`"));
         assert!(err("protocol P { read } object O : P {}").contains("`P` is a protocol; an object declares traits"));
         assert!(err("object O : Nope {}").contains("unknown protocol or trait `Nope`"));
-        assert!(err("object X {} protocol X { read }").contains("`X` is declared as a protocol and as a object"));
+        assert!(err("object X {} protocol X { read }").contains("`X` is declared as a protocol and as an object"));
         assert!(err("trait X { / read } trait X { / stat }").contains("trait `X` is declared twice"));
         assert!(err("import { File } from env protocol File { read }").contains("`File` is imported from env, and declared here too"));
         assert!(err("protocol P { read, read }").contains("protocol `P` takes `read` twice"));
@@ -832,18 +943,71 @@ mod tests {
         assert_eq!(objects, ["MemoryConsole", "MemoryListener", "PackedFiles"], "the rest are needed by trait");
     }
 
+    /// Resolves `files`, each a path and its source, with BSON, and returns
+    /// the header of the first.
+    fn load_all(files: &[(&str, &str)]) -> Result<Header> {
+        let mut loader = Loader::new(Formats::new(vec![Box::new(format_bson::Bson)]));
+        for (path, src) in files {
+            loader.files.insert(path.into(), src.as_bytes().to_vec());
+        }
+        loader.header(Path::new(files[0].0))
+    }
+
+    #[test]
+    fn requests_name_message_types() {
+        let h = load_all(&[(
+            "/t/A.oth",
+            "export object A { serves { /greeting write Greeting, read -> Greeting  /any write */* } }
+             export schemas application/bson { message Greeting { text: string } }",
+        )])
+        .unwrap();
+        let r = &h.objects[0].serves[0].requests;
+        assert_eq!((r[0].body.as_deref(), r[0].message.as_deref()), (Some("application/bson"), Some("Greeting")));
+        assert_eq!(r[1].answer.as_ref().and_then(|a| a.message.as_deref()), Some("Greeting"));
+        assert_eq!(r[0].to_string(), "write Greeting");
+        assert_eq!(h.types["Greeting"], "application/bson");
+        assert!(h.exports.contains(&"Greeting".to_string()), "an exported block exports its types");
+
+        // Imported, by the name it has on the wire.
+        let b = "import { Greeting } from \"./A.oth\" export object B { needs /a { /greeting write Greeting } }";
+        let a = "export object A {} export schemas application/bson { message Greeting { text: string } }";
+        let h = load_all(&[("/t/B.oth", b), ("/t/A.oth", a)]).unwrap();
+        assert_eq!(h.objects[0].needs[0].entries[0].requests[0].message.as_deref(), Some("Greeting"));
+        let e = format!("{:#}", load_all(&[("/t/B.oth", &b.replace("{ Greeting }", "{ Greeting as G }")), ("/t/A.oth", a)]).unwrap_err());
+        assert!(e.contains("`Greeting` is a message type, named on the wire, so it can't be renamed"), "{e}");
+        let private = "export object A {} schemas application/bson { message Greeting { text: string } }";
+        let e = format!("{:#}", load_all(&[("/t/B.oth", b), ("/t/A.oth", private)]).unwrap_err());
+        assert!(e.contains("doesn't export `Greeting`"), "{e}");
+    }
+
+    #[test]
+    fn a_payload_with_schemas_is_named_by_its_type() {
+        let e = |src: &str| format!("{:#}", load_all(&[("/t/A.oth", src)]).unwrap_err());
+        let bare = e("export object A { serves { /x write application/bson } }");
+        assert!(bare.contains("1:37: `application/bson` payloads are named by their message type"), "{bare}");
+        let hidden = e("export object A { serves { /x write M } }\nschemas application/bson { message M {} }");
+        assert!(hidden.contains("2:9: `A` is exported, and names `M`, but its schemas block isn't: write `export schemas application/bson`"), "{hidden}");
+        let clash = e("export object M {}\nschemas application/bson { message M {} }");
+        assert!(clash.contains("`M` is declared as an object and as a message type"), "{clash}");
+        let unknown = e("schemas application/json { }");
+        assert!(unknown.contains("no format reads `application/json` schemas; this othismo's are for application/bson"), "{unknown}");
+        // Payloads without schemas are named by their content type, as before.
+        assert!(load_all(&[("/t/A.oth", "object A { serves { /x write text/plain, read -> image/png } }")]).is_ok());
+        assert!(load_all(&[("/t/A.oth", "object A { serves { /x write M } }\nschemas application/bson { message M {} }")]).is_ok(), "an object that isn't exported");
+    }
+
     #[test]
     fn rejects_mistakes() {
         assert!(err("message A { x: i32 }").contains("message types are declared in their format's block"));
         assert!(err("protocol Stat { read }").contains("reserved"));
-        assert!(err("import { Nope } from env").contains("env has no protocol, trait or object `Nope`"));
+        assert!(err("import { Nope } from env").contains("env has no protocol, trait, object or message type `Nope`"));
         assert!(err(r#"import { X } from "./other.oth""#).contains("no \"./other.oth\" here"));
         assert!(err("import { X } from Other").contains("import from a file, relative to this one, such as `from \"./scripts/Other.oth\"`"));
         assert!(err("protocol P { read } export { P, Q }").contains("`Q` is neither declared nor imported here"));
         assert!(err("export protocol P { read } export { P }").contains("`P` is exported twice"));
         assert!(err("object A {} object A {}").contains("object `A` is declared twice"));
         let e = err("object A { serves { /x write Greeting } }");
-        assert!(e.contains("`Greeting`: a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"), "{e}");
+        assert!(e.contains("`Greeting`: it is neither a content type, such as `text/plain`, nor a message type declared in or imported into this file"), "{e}");
         assert!(err("object A { serves { /x read -> text/ } }").contains("isn't a well-formed content type"));
         assert!(err("object A { serves { /x read, read } }").contains("takes `read` twice"));
         assert!(err("object A { serves { /{a} read /{b} stat } }").contains("already listed"));

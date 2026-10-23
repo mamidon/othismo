@@ -836,7 +836,6 @@ fn content_type(id: &Ident) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use format::Format;
     use format_bson::{Bson, wire};
     use syntax::image_definition::Value;
 
@@ -880,9 +879,11 @@ mod tests {
     /// A module whose header is `src`, which can only import from env, and
     /// whose message types are `messages`.
     fn module(src: &str, messages: &str) -> Vec<u8> {
-        let file = iface::parse(src).unwrap();
-        let header = iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap();
-        let schemas = Bson.parse(messages, &mut |_| unreachable!()).unwrap();
+        let mut loader = Loader::new(formats());
+        let path = Path::new("/module/M.oth");
+        loader.files.insert(path.into(), with_schemas(src, messages).into_bytes());
+        let header = loader.header(path).unwrap();
+        let schemas = loader.schemas(&Bson, path).unwrap();
         let wasm = iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
         iface::embed_schemas(&wasm, &Bson, &schemas).unwrap()
     }
@@ -1229,7 +1230,7 @@ mod tests {
 
     #[test]
     fn types_are_imported_from_headers() {
-        let greeter = "message Hello { prefix: string } object Greeter { serves { /greeting write application/bson } }";
+        let greeter = "message Hello { prefix: string } object Greeter { serves { /greeting write Hello } }";
         let p = check_with(
             r#"instance g : Greeter mount /g g write /g/greeting application/bson { $type: "Hello", prefix: "hi" }"#,
             &[("Greeter", greeter)],
@@ -1287,13 +1288,13 @@ mod tests {
 
     #[test]
     fn startup_requests_must_be_served() {
-        let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} operator write text/plain, operator remove } }";
+        let greeter = "object G { serves { /greeting write Greeting  /hosts/{name} operator write text/plain, operator remove } }";
         let ok = r#"instance g : G mount /g g write /g/greeting application/bson { $type: "Greeting", text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
         let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
         let e = err_with("instance g : G mount /g g read /g/greeting", &[("G", greeter)]);
-        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write application/bson`"), "{e}");
+        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Greeting`"), "{e}");
         let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let only_text = "object G { serves { /greeting write text/plain } }";

@@ -1,6 +1,5 @@
 //! Binding slots: defaults, value files and `--set`, in a checked image.
 
-use format::Format;
 use format_bson::Bson;
 use othismo::check::{self, Arg, Program};
 use othismo::image_definition::Value;
@@ -12,17 +11,14 @@ use std::path::Path;
 /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it
 /// and declares `Info`.
 fn program(src: &str) -> Program {
-    let a = "export object A { serves { /info write application/bson  /x write */*  /host write text/plain } }";
-    let info = "message Info { kind: string, size: i64, mime: string }";
-    let header = othismo::iface::resolve(&othismo::iface::parse(a).unwrap(), &mut |_| Ok(othismo::iface::env().clone()), &|_| {
-        unreachable!()
-    })
-    .unwrap();
-    let wasm = othismo::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
-    let wasm = othismo::iface::embed_schemas(&wasm, &Bson, &Bson.parse(info, &mut |_| unreachable!()).unwrap()).unwrap();
+    let a = "export object A { serves { /info write Info  /x write */*  /host write text/plain } }
+             export schemas application/bson { message Info { kind: string, size: i64, mime: string } }";
     let mut loader = othismo::iface::Loader::new(othismo::formats());
-    loader.files.insert("/slots/A.oth".into(), format!("{a}\nexport schemas application/bson {{ {info} }}").into_bytes());
-    loader.files.insert("/slots/A.wasm".into(), wasm);
+    loader.files.insert("/slots/A.oth".into(), a.into());
+    let header = loader.header(Path::new("/slots/A.oth")).unwrap();
+    let schemas = loader.schemas(&Bson, Path::new("/slots/A.oth")).unwrap();
+    let wasm = othismo::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
+    loader.files.insert("/slots/A.wasm".into(), othismo::iface::embed_schemas(&wasm, &Bson, &schemas).unwrap());
     let src = format!("import {{ A }} from \"./A.oth\" import {{ Console, Listener }} from env {src}");
     loader.files.insert("/slots/test.oth".into(), src.into_bytes());
     check::load_with(Path::new("/slots/test.oth"), &mut loader).unwrap()
