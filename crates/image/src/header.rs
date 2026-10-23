@@ -31,6 +31,10 @@ pub struct Header {
     /// An image's top-level needs: what it needs from whoever instantiates it.
     #[serde(default)]
     pub needs: Vec<Need>,
+    /// Every message type the header can name, its schemas blocks' and its
+    /// imports', with the content type of the format that declares it.
+    #[serde(default)]
+    pub types: BTreeMap<String, String>,
 }
 
 /// `protocol <Name> { ... }`: the requests one path takes, with any
@@ -97,6 +101,10 @@ pub struct Request {
     pub verb: Verb,
     /// The content type of the payload it takes, if it takes one.
     pub body: Option<String>,
+    /// The message type it names for that payload, if it names one: its
+    /// format's to read. The runtime goes by the content type alone.
+    #[serde(default)]
+    pub message: Option<String>,
     /// `None`: answered with a status alone. `stat` and `list` always
     /// answer stat records, so they are written bare.
     pub answer: Option<Answer>,
@@ -106,6 +114,9 @@ pub struct Request {
 pub struct Answer {
     /// The answer's content type.
     pub ty: String,
+    /// The message type it names, if it names one.
+    #[serde(default)]
+    pub message: Option<String>,
     /// `type*`: any number of answers, the last one marked done.
     pub stream: bool,
 }
@@ -205,23 +216,31 @@ impl Request {
     /// Wildcards go one way: a server taking `*/*` takes any payload, and a
     /// need for a `*/*` answer accepts any answer, or none; but a server
     /// that only promises `*/*` doesn't meet a need for `text/plain`.
+    ///
+    /// Where both name a message type, it must be the same one. A server
+    /// that names one takes only that, so a need must name it too; a need
+    /// that names one is met by a server that takes any payload of its
+    /// content type.
     pub fn meets(&self, need: &Request) -> bool {
         let answer = match (&self.answer, &need.answer) {
             (_, Some(n)) if n.ty == ANY && self.answer.as_ref().is_none_or(|s| s.stream == n.stream) => true,
             (None, None) => true,
-            (Some(s), Some(n)) => payload::fits(&n.ty, &s.ty) && s.stream == n.stream,
+            (Some(s), Some(n)) => {
+                payload::fits(&n.ty, &s.ty) && s.stream == n.stream && (n.message.is_none() || n.message == s.message)
+            }
             _ => false,
         };
         let operator = !self.operator || need.operator;
-        self.verb == need.verb && operator && body_fits(self.body.as_deref(), need.body.as_deref()) && answer
+        let message = self.message.is_none() || self.message == need.message;
+        self.verb == need.verb && operator && body_fits(self.body.as_deref(), need.body.as_deref()) && message && answer
     }
 
     /// Whether the verb's answer is set by the protocol: `stat` and `list`
     /// answer stat records, and are written bare.
     pub fn implied(verb: Verb) -> Option<Answer> {
         match verb {
-            Verb::Stat => Some(Answer { ty: STAT.into(), stream: false }),
-            Verb::List => Some(Answer { ty: STAT.into(), stream: true }),
+            Verb::Stat => Some(Answer { ty: STAT.into(), message: None, stream: false }),
+            Verb::List => Some(Answer { ty: STAT.into(), message: None, stream: true }),
             _ => None,
         }
     }
@@ -241,12 +260,12 @@ impl fmt::Display for Request {
         }
         write!(f, "{}", self.verb)?;
         if let Some(b) = &self.body {
-            write!(f, " {b}")?;
+            write!(f, " {}", self.message.as_ref().unwrap_or(b))?;
         }
         if let Some(a) = &self.answer
             && Request::implied(self.verb).is_none()
         {
-            let ty = if a.ty == STAT { STAT_NAME } else { &a.ty };
+            let ty = a.message.as_deref().unwrap_or(if a.ty == STAT { STAT_NAME } else { &a.ty });
             write!(f, " -> {ty}{}", if a.stream { "*" } else { "" })?;
         }
         Ok(())

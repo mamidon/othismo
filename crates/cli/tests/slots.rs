@@ -1,6 +1,5 @@
 //! Binding slots: defaults, value files and `--set`, in a checked image.
 
-use format::Format;
 use format_bson::Bson;
 use othismo::check::{self, Arg, Program};
 use othismo::image_definition::Value;
@@ -12,26 +11,22 @@ use std::path::Path;
 /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it
 /// and declares `Info`.
 fn program(src: &str) -> Program {
-    let a = "export object A { serves { /info write application/bson  /x write */*  /host write text/plain } }";
-    let info = "message Info { kind: string, size: i64, mime: string }";
-    let header = othismo::iface::resolve(&othismo::iface::parse(a).unwrap(), &mut |_| Ok(othismo::iface::env().clone()), &|_| {
-        unreachable!()
-    })
-    .unwrap();
-    let wasm = othismo::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
-    let wasm = othismo::iface::embed_schemas(&wasm, &Bson, &Bson.parse(info, &mut |_| unreachable!()).unwrap()).unwrap();
+    let a = "export object A { serves { /info write Info  /x write */*  /host write text/plain } }
+             export schemas application/bson { message Info { kind: string, size: i64, mime: string } }";
     let mut loader = othismo::iface::Loader::new(othismo::formats());
     loader.files.insert("/slots/A.oth".into(), a.into());
-    loader.files.insert("/slots/A.messages".into(), info.into());
-    loader.files.insert("/slots/A.wasm".into(), wasm);
-    let src = format!("import {{ A }} from \"./A.oth\" import {{ Console, Listener }} from env {src}");
+    let header = loader.header(Path::new("/slots/A.oth")).unwrap();
+    let schemas = loader.schemas(&Bson, Path::new("/slots/A.oth")).unwrap();
+    let wasm = othismo::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
+    loader.files.insert("/slots/A.wasm".into(), othismo::iface::embed_schemas(&wasm, &Bson, &schemas).unwrap());
+    let src = format!("import {{ A, Info }} from \"./A.oth\" import {{ Console, Listener }} from env {src}");
     loader.files.insert("/slots/test.oth".into(), src.into_bytes());
     check::load_with(Path::new("/slots/test.oth"), &mut loader).unwrap()
 }
 
 const IMAGE: &str = r#"
     require listen : text/plain = "127.0.0.1:8080"
-    require info : application/bson = { $type: "Info", kind: "file" }
+    require info : Info = { kind: "file" }
     require host : text/plain = "localhost"
     needs /net Listener
     instance a : A
@@ -75,7 +70,7 @@ fn later_values_win_field_by_field() {
     assert_eq!(info, bson::doc! { "kind": "file", "size": 42i64, "mime": "text/plain" }, "in declared order");
     let origins = |i: usize| p.slots[i].origins.iter().map(|(f, o)| format!("{f}={o}")).collect::<Vec<_>>();
     assert_eq!(origins(0), ["=--set"]);
-    assert_eq!(origins(1), ["$type=default", "kind=default", "size=--set", "mime=--set"]);
+    assert_eq!(origins(1), ["kind=default", "size=--set", "mime=--set"]);
     assert_eq!(p.startup[2].body.as_ref().unwrap().text().unwrap(), "localhost", "a default");
 }
 
@@ -122,15 +117,14 @@ fn every_problem_is_listed() {
          --set: info.port: `Info` has no field `port`\n  \
          --set: info.size: `big` is not a valid i64\n  \
          --set: host.name: `host` is a text/plain payload, given whole: `host=...`\n  \
-         --set: info: `info` is a application/bson payload, given field by field: `info.<field>=...`\n  \
+         --set: info: `info` is a message, `Info`, given field by field: `info.<field>=...`\n  \
          v.vals:2:8: host: expected a quoted string, got 1\n  \
          info.size: required, not provided\n  \
          info.mime: required, not provided"
     );
-    let mut p = program(r#"require g : application/bson instance a : A mount /a a write /a/info g"#);
+    let mut p = program(r#"require g : Info instance a : A mount /a a write /a/info g"#);
     let e = bind(&mut p, &othismo::formats(), &[text("--set", "g", "kind", "x")]).unwrap_err().to_string();
-    assert!(e.contains("g.kind: give `$type` first"), "{e}");
-    assert!(e.contains("g.$type: required, not provided"), "{e}");
+    assert!(e.contains("g.size: required, not provided"), "a slot without a default needs every field: {e}");
 }
 
 #[test]

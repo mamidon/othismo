@@ -4,7 +4,7 @@
 //! every view, bind and export is worked out before anything runs.
 
 use crate::iface::{self, Header, Loader, Object, Trait};
-use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos};
+use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos, Value};
 use protocol::ns::{self, Namespace, Status, Verb};
 use protocol::pattern::Pattern;
 use protocol::payload::{self, Payload};
@@ -102,8 +102,24 @@ struct Node {
 /// encoded once every module's schemas are known.
 #[derive(Clone)]
 enum Given {
-    Arg(Arg),
-    Literal { literal: Literal, unit: usize, ty: String, what: String },
+    /// A payload, or a slot standing for one, and its message type, if it
+    /// is a message.
+    Arg(Arg, Option<String>),
+    Literal { literal: Literal, unit: usize, ty: PayloadType, what: String },
+}
+
+/// What a slot or a request carries: a content type, and the message type
+/// for a message.
+#[derive(Debug, Clone, PartialEq)]
+struct PayloadType {
+    ty: String,
+    message: Option<String>,
+}
+
+impl std::fmt::Display for PayloadType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.message.as_ref().unwrap_or(&self.ty))
+    }
 }
 
 /// A startup request, with the slots its image was given.
@@ -174,9 +190,48 @@ impl Builder<'_> {
         let image = self.loader.image_definition(path)?;
         let scope = self.loader.resolve(&image.header, path)?;
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        // The types it declares and imports, which its literals may name.
+        let mut files = vec![path.to_path_buf()];
+        files.extend(image.header.imports.iter().filter_map(|i| match &i.from {
+            image_definition::Source::Path(p) => Some(iface::join(&dir, p)),
+            image_definition::Source::Env => None,
+        }));
+        for file in files {
+            let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            self.merge_schemas(&file, &name)?;
+        }
         self.units.push(Unit { image, rel: rel.to_path_buf(), dir, scope });
         self.unit_paths.insert(path.to_path_buf(), self.units.len() - 1);
         Ok(self.units.len() - 1)
+    }
+
+    /// Adds every format's schemas at `path`, a `.oth` file or a module, to
+    /// the image's, as `origin`'s.
+    fn merge_schemas(&mut self, path: &Path, origin: &str) -> Result<()> {
+        let formats = self.loader.formats.clone();
+        for f in formats.iter() {
+            let schemas = self.loader.schemas(f, path)?;
+            let ty = f.content_type().to_string();
+            let from = self.message_from.entry(ty.clone()).or_default();
+            f.merge(self.messages.entry(ty).or_default(), from, &schemas, origin)?;
+        }
+        Ok(())
+    }
+
+    /// The payload type `id` names in `unit`: a message type it declares or
+    /// imports, or a content type that has no schemas.
+    fn payload_type(&self, unit: usize, id: &Ident) -> Result<PayloadType> {
+        if let Some(ty) = self.units[unit].scope.types.get(&id.name) {
+            return Ok(PayloadType { ty: ty.clone(), message: Some(id.name.clone()) });
+        }
+        if !id.name.contains('/') {
+            bail!(err_at(id, format!("`{}` is neither a content type nor a message type declared in or imported into this file", id.name)));
+        }
+        let ty = content_type(id)?;
+        if self.loader.formats.iter().any(|f| f.content_type() == ty) {
+            bail!(err_at(id, format!("`{ty}` payloads are messages: name the message type, such as `Greeting`, declared in a `schemas {ty}` block")));
+        }
+        Ok(PayloadType { ty, message: None })
     }
 
     fn build(mut self, root: usize) -> Result<Program> {
@@ -187,15 +242,17 @@ impl Builder<'_> {
             if self.slots.iter().any(|s| s.name == *name) {
                 bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
             }
-            let ty = content_type(&req.ty)?;
-            let default = match &req.default {
-                None => None,
-                Some(Literal::Text { ty: None, text, .. }) => Some(SlotValue::Text(text.clone())),
-                Some(Literal::Tree { ty: None, value, .. }) => Some(SlotValue::Tree(value.clone())),
-                Some(_) => bail!(err_at(&req.name, format!("slot `{name}`'s default is text or a structured value, of its type"))),
+            let PayloadType { ty, message } = self.payload_type(root, &req.ty)?;
+            let default = match (&req.default, &message) {
+                (None, _) => None,
+                (Some(Literal::Text { ty: None, text, .. }), None) => Some(SlotValue::Text(text.clone())),
+                (Some(Literal::Tree { ty: None, value, .. }), Some(_)) => Some(SlotValue::Tree(value.clone())),
+                (Some(Literal::Message { ty: t, value, .. }), Some(m)) if &t.name == m => Some(SlotValue::Tree(value.clone())),
+                (Some(_), Some(m)) => bail!(err_at(&req.name, format!("slot `{name}`'s default is a `{m}`: `{m} {{ ... }}`, or `{{ ... }}`"))),
+                (Some(_), None) => bail!(err_at(&req.name, format!("slot `{name}`'s default is text, a quoted string"))),
             };
-            slots.insert(name.clone(), Given::Arg(Arg::Slot(self.slots.len())));
-            self.slots.push(Slot { name: name.clone(), ty, default, value: None, origins: vec![] });
+            slots.insert(name.clone(), Given::Arg(Arg::Slot(self.slots.len()), message.clone()));
+            self.slots.push(Slot { name: name.clone(), ty, message, default, value: None, origins: vec![] });
         }
         self.instantiate(root, "", None, &slots, 0)?;
         self.resolve_pending()?;
@@ -331,13 +388,13 @@ impl Builder<'_> {
             let what = format!("`{}`'s slot `{}`", inst.name.name, name.name);
             let given = match value {
                 Literal::Name(id) => slots.get(&id.name).cloned().ok_or_else(|| err_at(id, format!("unknown slot `{}`", id.name)))?,
-                literal => Given::Literal { literal: literal.clone(), unit, ty: content_type(&req.ty)?, what },
+                literal => Given::Literal { literal: literal.clone(), unit, ty: self.payload_type(child, &req.ty)?, what },
             };
             out.insert(name.name.clone(), given);
         }
         for req in &requires {
             let name = &req.name.name;
-            let ty = content_type(&req.ty)?;
+            let ty = self.payload_type(child, &req.ty)?;
             if !out.contains_key(name) {
                 let Some(default) = &req.default else {
                     bail!(err_at(&inst.name, format!("`{}` needs a value for its slot `{name}`: `{name} = ...` in its block", inst.name.name)));
@@ -345,8 +402,8 @@ impl Builder<'_> {
                 let what = format!("`{}`'s slot `{name}`, as it defaults", inst.name.name);
                 out.insert(name.clone(), Given::Literal { literal: default.clone(), unit: child, ty: ty.clone(), what });
             }
-            if let Given::Arg(Arg::Slot(i)) = &out[name]
-                && !payload::fits(&ty, &self.slots[*i].ty)
+            if let Given::Arg(Arg::Slot(i), message) = &out[name]
+                && (!payload::fits(&ty.ty, &self.slots[*i].ty) || (ty.message.is_some() && *message != ty.message))
             {
                 bail!(err_at(&inst.name, format!("`{}`'s slot `{name}` is a {ty}, and isn't given one", inst.name.name)));
             }
@@ -354,47 +411,63 @@ impl Builder<'_> {
         Ok(out)
     }
 
-    /// What a slot is given, now that every module's schemas are known.
-    fn given(&mut self, g: &Given) -> Result<Arg> {
+    /// What a slot is given, now that every module's schemas are known,
+    /// and its message type, if it is a message.
+    fn given(&mut self, g: &Given) -> Result<(Arg, Option<String>)> {
         match g {
-            Given::Arg(a) => Ok(a.clone()),
+            Given::Arg(a, message) => Ok((a.clone(), message.clone())),
             Given::Literal { literal, unit, ty, what } => {
-                let arg = self.literal(*unit, literal, Some(ty)).with_context(|| what.clone())?;
-                if !payload::fits(ty, arg_type(&self.slots, &arg)) {
+                let (arg, message) = self.literal(*unit, literal, Some(ty)).with_context(|| what.clone())?;
+                if !payload::fits(&ty.ty, arg_type(&self.slots, &arg)) || (ty.message.is_some() && message != ty.message) {
                     bail!("{what} is a {ty}, and isn't given one");
                 }
-                Ok(arg)
+                Ok((arg, message))
             }
         }
     }
 
-    /// The payload `literal`, written in `unit`, carries; `want` is the
-    /// content type of where it goes, if it is a slot's.
-    fn literal(&mut self, unit: usize, literal: &Literal, want: Option<&str>) -> Result<Arg> {
-        let ty = |t: &Option<Ident>, default: &str| -> Result<String> {
-            Ok(match t {
-                Some(t) => content_type(t)?,
-                None => want.unwrap_or(default).to_string(),
-            })
-        };
-        Ok(Arg::Payload(match literal {
-            Literal::Text { ty: t, text, .. } => Payload::new(ty(t, payload::TEXT)?, text.as_bytes()),
-            Literal::Tree { ty: None, pos, .. } if want.is_none() => {
-                let example = self.loader.formats.iter().next().map(|f| f.content_type()).unwrap_or("application/bson");
-                bail!("{pos}: say what this payload is: `<content type> {{ ... }}`, such as `{example} {{ ... }}`")
+    /// The payload `literal`, written in `unit`, carries, and its message
+    /// type if it is a message; `want` is the type of where it goes, if it
+    /// is a slot's.
+    fn literal(&mut self, unit: usize, literal: &Literal, want: Option<&PayloadType>) -> Result<(Arg, Option<String>)> {
+        let (payload, message) = match literal {
+            Literal::Text { ty: t, text, .. } => {
+                let ty = match t {
+                    Some(t) => content_type(t)?,
+                    None => want.map_or(payload::TEXT.to_string(), |w| w.ty.clone()),
+                };
+                (Payload::new(ty, text.as_bytes()), None)
             }
-            Literal::Tree { ty: t, value, pos } => {
-                let ty = ty(t, "")?;
-                let bytes = self.loader.formats.encode(&ty, &self.messages, value).map_err(|e| anyhow!("{pos}: {e}"))?;
-                Payload::new(ty, bytes)
+            Literal::Message { ty: t, value, pos } => {
+                let ty = self.payload_type(unit, t)?;
+                let Some(message) = ty.message else { bail!(err_at(t, format!("`{}` is a content type; a message names its message type", t.name))) };
+                (self.message(&ty.ty, &message, value, *pos)?, Some(message))
+            }
+            Literal::Tree { ty: None, value, pos } => match want {
+                Some(PayloadType { ty, message: Some(m) }) => (self.message(ty, m, value, *pos)?, Some(m.clone())),
+                _ => bail!("{pos}: say what this payload is: `<message type> {{ ... }}`, such as `Greeting {{ ... }}`"),
+            },
+            Literal::Tree { ty: Some(t), pos, .. } => {
+                let ty = content_type(t)?;
+                if self.loader.formats.iter().any(|f| f.content_type() == ty) {
+                    bail!("{pos}: `{ty}` payloads are messages: name the message type, `<message type> {{ ... }}`");
+                }
+                bail!("{pos}: no format writes `{ty}`; a structured literal is a message, `<message type> {{ ... }}`")
             }
             Literal::File { ty: t, path, pos } => {
                 let file = iface::join(&self.units[unit].dir, path);
                 let bytes = self.loader.read(&file).with_context(|| format!("{pos}: {} from {path:?}", t.name))?;
-                Payload::new(content_type(t)?, bytes)
+                (Payload::new(content_type(t)?, bytes), None)
             }
             Literal::Name(id) => bail!(err_at(id, format!("unknown slot `{}`", id.name))),
-        }))
+        };
+        Ok((Arg::Payload(payload), message))
+    }
+
+    /// `value`, a message of type `message`, encoded as content type `ty`.
+    fn message(&self, ty: &str, message: &str, value: &Value, pos: Pos) -> Result<Payload> {
+        let bytes = self.loader.formats.encode(ty, message, &self.messages, value).map_err(|e| anyhow!("{pos}: {e}"))?;
+        Ok(Payload::new(ty, bytes))
     }
 
     /// What the instance type `ty` names in `unit`: an object it declares or
@@ -432,12 +505,13 @@ impl Builder<'_> {
             let formats = self.loader.formats.clone();
             for f in formats.iter() {
                 let schemas = self.loader.schemas(f, &module)?;
-                if origin.extension().is_some_and(|e| e == "oth") {
-                    let source = origin.with_extension(f.extension());
-                    let written = if self.loader.read(&source).is_ok() { self.loader.schemas(f, &source)? } else { Default::default() };
-                    if !f.same(&written, &schemas) {
-                        bail!("{} is stale: the types inside it aren't {}'s; rebuild it", module.display(), source.display());
-                    }
+                if origin.extension().is_some_and(|e| e == "oth") && !f.same(&self.loader.schemas(f, &origin)?, &schemas) {
+                    bail!(
+                        "{} is stale: the types inside it aren't those of {}'s `{}` schemas; rebuild it",
+                        module.display(),
+                        origin.display(),
+                        f.content_type()
+                    );
                 }
                 let ty = f.content_type().to_string();
                 let from = self.message_from.entry(ty.clone()).or_default();
@@ -556,10 +630,11 @@ impl Builder<'_> {
         let ns = self.namespace();
         for slot in &self.slots {
             if let Some(SlotValue::Tree(v)) = &slot.default
+                && let Some(m) = &slot.message
                 && let Some(f) = self.loader.formats.for_type(&slot.ty)
             {
                 let schemas = self.messages.get(f.content_type()).cloned().unwrap_or_default();
-                f.check(&schemas, v).map_err(|e| anyhow!("slot `{}`'s default: {e}", slot.name))?;
+                f.check(&schemas, m, v).map_err(|e| anyhow!("slot `{}`'s default: {e}", slot.name))?;
             }
         }
 
@@ -610,13 +685,17 @@ impl Builder<'_> {
             if to.read_only && !req.verb.is_safe() {
                 bail!("{}: `{full}` is read-only in the image's view, so it can't take `{}`", req.verb_pos, req.verb);
             }
-            let body = match &req.body {
+            let (body, message) = match &req.body {
                 Some(Literal::Name(id)) => {
                     let g = r.slots.get(&id.name).ok_or_else(|| err_at(id, format!("unknown slot `{}`", id.name)))?;
-                    Some(self.given(g)?)
+                    let (arg, message) = self.given(g)?;
+                    (Some(arg), message)
                 }
-                Some(b) => Some(self.literal(r.unit, b, None)?),
-                None => None,
+                Some(b) => {
+                    let (arg, message) = self.literal(r.unit, b, None)?;
+                    (Some(arg), message)
+                }
+                None => (None, None),
             };
             let configured = matches!(&self.nodes[to.inst].ty, TypeRef::Builtin(b) if CONFIGURED.contains(&b.as_str()));
             if configured && req.verb == Verb::Write && to.path == "/" {
@@ -624,7 +703,7 @@ impl Builder<'_> {
                 continue;
             }
             let name = self.nodes[to.inst].name.clone();
-            check_request(req, &to.path, &name, &interfaces[&type_names[to.inst]], body.as_ref(), &self.slots)?;
+            check_request(req, &to.path, &name, &interfaces[&type_names[to.inst]], body.as_ref(), message.as_deref(), &self.slots)?;
             startup.push(Startup { image: r.image, verb: req.verb, path: full, body });
         }
         for (i, node) in self.nodes.iter_mut().enumerate() {
@@ -736,19 +815,31 @@ fn push_mount(mounts: &mut Vec<MountDecl>, decl: MountDecl, pos: Pos, whose: &st
 
 /// A startup request of `path` in instance `name`'s served tree, against
 /// what `obj` serves there.
-fn check_request(r: &image_definition::Request, path: &str, name: &str, obj: &Object, body: Option<&Arg>, slots: &[Slot]) -> Result<()> {
+fn check_request(
+    r: &image_definition::Request,
+    path: &str,
+    name: &str,
+    obj: &Object,
+    body: Option<&Arg>,
+    message: Option<&str>,
+    slots: &[Slot],
+) -> Result<()> {
     let body_type = body.map(|b| arg_type(slots, b));
     let Some(entry) = obj.serving(path) else {
         bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
     };
-    let given = match body_type {
-        Some(t) => format!("{} {t}", r.verb),
-        None => r.verb.to_string(),
+    let given = match (message, body_type) {
+        (Some(m), _) => format!("{} {m}", r.verb),
+        (None, Some(t)) => format!("{} {t}", r.verb),
+        (None, None) => r.verb.to_string(),
     };
+    let takes = entry.requests.iter().any(|q| {
+        q.verb == r.verb && iface::body_fits(q.body.as_deref(), body_type) && (q.message.is_none() || q.message.as_deref() == message)
+    });
     match entry.takes(r.verb, body_type) {
-        Ok(_) => Ok(()),
+        Ok(_) if takes => Ok(()),
         Err(Status::NotSupported) => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
-        Err(_) => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
+        _ => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
     }
 }
 
@@ -835,9 +926,8 @@ fn content_type(id: &Ident) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use format::Format;
     use format_bson::{Bson, wire};
-    use syntax::image_definition::Value;
+
 
     fn formats() -> Formats {
         Formats::new(vec![Box::new(Bson)])
@@ -860,8 +950,8 @@ mod tests {
         out
     }
 
-    /// `src` taken apart: its `message` declarations, which go in a schema
-    /// file, and the header that is left.
+    /// `src` taken apart: its `message` declarations, which go in its
+    /// schemas block, and the header that is left.
     fn split(src: &str) -> (String, String) {
         let (mut header, mut messages) = (String::new(), String::new());
         let mut rest = src;
@@ -879,11 +969,18 @@ mod tests {
     /// A module whose header is `src`, which can only import from env, and
     /// whose message types are `messages`.
     fn module(src: &str, messages: &str) -> Vec<u8> {
-        let file = iface::parse(src).unwrap();
-        let header = iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap();
-        let schemas = Bson.parse(messages, &mut |_| unreachable!()).unwrap();
+        let mut loader = Loader::new(formats());
+        let path = Path::new("/module/M.oth");
+        loader.files.insert(path.into(), with_schemas(src, messages).into_bytes());
+        let header = loader.header(path).unwrap();
+        let schemas = loader.schemas(&Bson, path).unwrap();
         let wasm = iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
         iface::embed_schemas(&wasm, &Bson, &schemas).unwrap()
+    }
+
+    /// `header` with `messages` in its schemas block.
+    fn with_schemas(header: &str, messages: &str) -> String {
+        format!("{header}\nexport schemas application/bson {{\n{messages}\n}}\n")
     }
 
     /// Puts module `ty`, with header `src`, at /check: its header and
@@ -892,8 +989,7 @@ mod tests {
         let (header, own) = split(src);
         let header = exported(&header);
         let messages = format!("{MESSAGES}\n{own}");
-        loader.files.entry(dir.join(format!("{ty}.oth"))).or_insert_with(|| header.clone().into_bytes());
-        loader.files.entry(dir.join(format!("{ty}.messages"))).or_insert_with(|| messages.clone().into_bytes());
+        loader.files.entry(dir.join(format!("{ty}.oth"))).or_insert_with(|| with_schemas(&header, &messages).into_bytes());
         if ty != "Ghost" {
             loader.files.entry(dir.join(format!("{ty}.wasm"))).or_insert_with(|| module(&header, &messages));
         }
@@ -966,8 +1062,36 @@ mod tests {
         for (ty, src) in modules {
             put_module(&mut loader, &dir, ty, src);
         }
+        // The message types it names, from a module that declares them.
+        let mut with_modules: Vec<String> = modules.iter().map(|(n, _)| n.to_string()).collect();
+        with_modules.extend(imported.iter().filter(|t| loader.files.contains_key(&dir.join(format!("{t}.oth")))).cloned());
+        for ty in message_names(&parsed) {
+            if imported.contains(&ty) {
+                continue;
+            }
+            let own = |m: &str| modules.iter().any(|(n, src)| *n == m && split(src).1.contains(&format!("message {ty} ")));
+            let from = with_modules.iter().find(|m| own(m)).or(with_modules.first().filter(|_| MESSAGES.contains(&format!("message {ty} "))));
+            if let Some(m) = from {
+                prelude.push_str(&format!("import {{ {ty} }} from \"./{m}.oth\" "));
+            }
+        }
         loader.files.insert(dir.join("test.oth"), format!("{prelude}{img}").into_bytes());
         load_with(&dir.join("test.oth"), &mut loader)
+    }
+
+    /// The message types `img` names, for slots and literals.
+    fn message_names(img: &ImageDefinition) -> Vec<String> {
+        let mut out = vec![];
+        let literals = img.requests.iter().filter_map(|r| r.body.as_ref()).chain(img.requires.iter().filter_map(|r| r.default.as_ref()));
+        let literals = literals.chain(img.instances.iter().flat_map(|i| i.values.iter().map(|(_, v)| v)));
+        for l in literals {
+            if let Literal::Message { ty, .. } = l {
+                out.push(ty.name.clone());
+            }
+        }
+        out.extend(img.requires.iter().filter(|r| !r.ty.name.contains('/')).map(|r| r.ty.name.clone()));
+        out.dedup();
+        out
     }
 
     fn check_with(img: &str, modules: &[(&str, &str)]) -> Result<Program> {
@@ -1041,8 +1165,8 @@ mod tests {
     fn startup_requests_are_typed() {
         let inst = |req: &str| format!("{HEADER} instance e : Echo mount /e e {req}");
         let p = check_src(&inst(
-            r#"write /e/config application/bson { $type: "Config", name: "x", count: 3, ratio: 2, on: true }
-               create /e application/bson { $type: "Ping" }  remove /e/a//b/"#,
+            r#"write /e/config Config { name: "x", count: 3, ratio: 2, on: true }
+               create /e Ping {}  remove /e/a//b/"#,
         ))
         .unwrap();
         let s = &p.startup;
@@ -1054,17 +1178,20 @@ mod tests {
         assert_eq!(message(s[1].body.as_ref().unwrap()).type_name, "Ping");
         assert_eq!((s[2].verb, s[2].path.as_str(), &s[2].body), (Verb::Remove, "/e/a/b/", &None));
 
-        let bson = |fields: &str| inst(&format!("write /e/c application/bson {{ {fields} }}"));
-        assert!(err(&bson(r#"$type: "Config", name: "x""#)).contains("`Config` is missing field `count`"));
-        assert!(err(&bson(r#"$type: "Config", name: 1, count: 1, ratio: 1, on: true"#)).contains("`Config.name` is string, but was given 1"));
-        assert!(err(&bson(r#"$type: "Config", name: "", count: 256, ratio: 1, on: true"#)).contains("does not fit in u8"));
-        assert!(err(&bson(r#"$type: "Ping", x: 1"#)).contains("`Ping` has no field `x`"));
-        assert!(err(&bson(r#"$type: "Missing""#)).contains("no module in the image declares a message type `Missing`"));
-        assert!(err(&bson(r#"$type: "Blob", data: 1"#)).contains("is bytes"));
-        assert!(err(&inst("write /e/c { x: 1 }")).contains("say what this payload is: `<content type> { ... }`"));
+        let message = |ty: &str, fields: &str| inst(&format!("write /e/c {ty} {{ {fields} }}"));
+        assert!(err(&message("Config", r#"name: "x""#)).contains("`Config` is missing field `count`"));
+        assert!(err(&message("Config", r#"name: 1, count: 1, ratio: 1, on: true"#)).contains("`Config.name` is string, but was given 1"));
+        assert!(err(&message("Config", r#"name: "", count: 256, ratio: 1, on: true"#)).contains("does not fit in u8"));
+        assert!(err(&message("Ping", "x: 1")).contains("`Ping` has no field `x`"));
+        assert!(err(&message("Blob", "data: 1")).contains("is bytes"));
+        let e = err(&message("Missing", ""));
+        assert!(e.contains("`Missing` is neither a content type nor a message type declared in or imported into this file"), "{e}");
+        let e = err(&message("Config", r#"$type: "Config""#));
+        assert!(e.contains("the message's type is named before its braces"), "{e}");
+        assert!(err(&inst("write /e/c { x: 1 }")).contains("say what this payload is: `<message type> { ... }`"));
         assert!(err(&inst("write /e/c text/plain { x: 1 }")).contains("no format writes `text/plain`"));
-        let e = err(&inst(r#"write /e/c Config { name: "x" }"#));
-        assert!(e.contains("write the payload's content type, and the type inside it: `application/bson { $type: \"Config\", ... }`"), "{e}");
+        let e = err(&inst(r#"write /e/c application/bson { name: "x" }"#));
+        assert!(e.contains("`application/bson` payloads are messages: name the message type"), "{e}");
         assert!(err(&inst("read /e/../x")).contains("not a clean absolute path"));
         assert!(err(&inst("read /x")).contains("nothing is mounted at `/x` in the image's view"));
         assert!(err(&inst("read /")).contains("nothing is mounted at `/` in the image's view"));
@@ -1112,7 +1239,7 @@ mod tests {
 
     #[test]
     fn bytes_fields_take_string_literals_as_utf8() {
-        let p = check_src(&format!(r#"{HEADER} instance e : Echo mount /e e write /e application/bson {{ $type: "Blob", data: "hé" }}"#)).unwrap();
+        let p = check_src(&format!(r#"{HEADER} instance e : Echo mount /e e write /e Blob {{ data: "hé" }}"#)).unwrap();
         let body = message(p.startup[0].body.as_ref().unwrap());
         let data = body.fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
@@ -1131,7 +1258,7 @@ mod tests {
         assert!(e.contains("/net needs exactly one config: `write` its root with the address to listen on, e.g. `\"127.0.0.1:8080\"`"), "{e}");
         let e = err(r#"needs /net Listener  write /net "a"  write /net "b""#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(&format!(r#"{HEADER} instance e : Echo  needs /net Listener  write /net application/bson {{ $type: "Ping" }}"#));
+        let e = err(&format!(r#"{HEADER} instance e : Echo  needs /net Listener  write /net Ping {{}}"#));
         assert!(e.contains("exactly one config"), "it takes text: {e}");
         let p = check_src(r#"needs /c Console  write /c "printed""#).unwrap();
         assert_eq!(p.startup.len(), 1, "a Console takes no config, so writing it prints");
@@ -1196,45 +1323,48 @@ mod tests {
         let p = check_src(&format!(
             r#"{HEADER}
             require listen : text/plain
-            require config : application/bson = {{ $type: "Config", name: "x", count: 3 }}
+            require config : Config = {{ name: "x", count: 3 }}
             needs /net Listener  write /net listen
             instance e : Echo mount /e e write /e/config config"#
         ))
         .unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
         let Some(SlotValue::Tree(Value::Object(fields))) = &p.slots[1].default else { panic!("{:?}", p.slots[1].default) };
-        assert_eq!(fields.len(), 3, "defaults may be partial");
+        assert_eq!(fields.len(), 2, "defaults may be partial");
+        assert_eq!(p.slots[1].message.as_deref(), Some("Config"));
         assert_eq!(p.instances[0].config, Some(Arg::Slot(0)));
         assert_eq!(p.startup[0].body, Some(Arg::Slot(1)));
 
         let inst = |decls: &str| format!("{HEADER} {decls} instance e : Echo mount /e e");
         let e = err(&inst("require g : text/plain require g : text/html"));
         assert!(e.contains("slot `g` is declared twice"), "{e}");
-        let e = err(&inst(r#"require g : application/bson = { $type: "Greeting", text: 1 }"#));
+        let e = err(&inst(r#"require g : Greeting = { text: 1 }"#));
         assert!(e.contains("slot `g`'s default: `Greeting.text` is string"), "{e}");
-        let e = err(&inst(r#"require g : application/bson = { $type: "Greeting", nope: 1 }"#));
+        let e = err(&inst(r#"require g : Greeting = { nope: 1 }"#));
         assert!(e.contains("`Greeting` has no field `nope`"), "{e}");
-        let e = err(&inst("require g : Greeting"));
-        assert!(e.contains("a slot is typed by a content type: `require g : application/bson = { $type: \"Greeting\", ... }`"), "{e}");
+        let e = err(&inst("require g : application/bson"));
+        assert!(e.contains("`application/bson` payloads are messages: name the message type"), "{e}");
         let e = err(&inst(r#"require g : text/plain = text/html "x""#));
-        assert!(e.contains("slot `g`'s default is text or a structured value, of its type"), "{e}");
-        let e = err(&format!("{HEADER} require t : application/bson needs /net Listener write /net t"));
+        assert!(e.contains("slot `g`'s default is text, a quoted string"), "{e}");
+        let e = err(&inst(r#"require g : Greeting = "x""#));
+        assert!(e.contains("slot `g`'s default is a `Greeting`: `Greeting { ... }`, or `{ ... }`"), "{e}");
+        let e = err(&format!("{HEADER} require t : Ping needs /net Listener write /net t instance e : Echo"));
         assert!(e.contains("needs exactly one config"), "{e}");
     }
 
     #[test]
     fn types_are_imported_from_headers() {
-        let greeter = "message Hello { prefix: string } object Greeter { serves { /greeting write application/bson } }";
+        let greeter = "message Hello { prefix: string } object Greeter { serves { /greeting write Hello } }";
         let p = check_with(
-            r#"instance g : Greeter mount /g g write /g/greeting application/bson { $type: "Hello", prefix: "hi" }"#,
+            r#"instance g : Greeter mount /g g write /g/greeting Hello { prefix: "hi" }"#,
             &[("Greeter", greeter)],
         )
         .unwrap();
         let types = Bson::messages(&p.messages[format_bson::BSON]).types;
         assert!(types.contains_key("Hello"), "a module's message types are the image's to write");
         assert_eq!(p.interfaces["Greeter"].serves[0].path.as_str(), "/greeting");
-        let e = err(r#"needs /c Console  write /c application/bson { $type: "Hello" }"#);
-        assert!(e.contains("no module in the image declares a message type `Hello`"), "only its modules': {e}");
+        let e = err(r#"needs /c Console  write /c Hello {}"#);
+        assert!(e.contains("`Hello` is neither a content type nor a message type declared in or imported into this file"), "only what it imports: {e}");
 
         let e = err(r#"import { Ping } from "./messages.ts""#);
         assert!(e.contains("/check/messages.ts is neither a `.oth` file nor a module (`.wasm`)"), "{e}");
@@ -1252,8 +1382,7 @@ mod tests {
         let header = exported(&header);
         let stale = |oth: &str, schemas: &str| {
             let mut loader = Loader::new(formats());
-            loader.files.insert("/s/Greeter.oth".into(), oth.as_bytes().to_vec());
-            loader.files.insert("/s/Greeter.messages".into(), schemas.as_bytes().to_vec());
+            loader.files.insert("/s/Greeter.oth".into(), with_schemas(oth, schemas).into_bytes());
             loader.files.insert("/s/Greeter.wasm".into(), module(&header, &messages));
             loader.files.insert("/s/test.oth".into(), br#"import { Greeter } from "./Greeter.oth" instance g : Greeter"#.to_vec());
             format!("{:#}", load_with(Path::new("/s/test.oth"), &mut loader).unwrap_err())
@@ -1261,7 +1390,7 @@ mod tests {
         let e = stale("export object Greeter { serves { /greeting write text/plain } }", &messages);
         assert!(e.contains("/s/Greeter.wasm is stale: the header inside it isn't /s/Greeter.oth's; rebuild it"), "{e}");
         let e = stale(&header, "message Hello { prefix: i32 }");
-        assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't /s/Greeter.messages's; rebuild it"), "{e}");
+        assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't those of /s/Greeter.oth's `application/bson` schemas; rebuild it"), "{e}");
 
         // Or it is imported from the module itself.
         let mut loader = Loader::new(formats());
@@ -1276,25 +1405,27 @@ mod tests {
         let a = "message Point { x: i32 } object A {}";
         let b = "message Point { x: f64 } object B {}";
         let e = err_with("instance a : A instance b : B", &[("A", a), ("B", b)]);
-        assert!(e.contains("`Point` is declared one way by A and another by B; an image can't use both"), "{e}");
+        assert!(e.contains("`Point` is declared one way by A.oth and another by B.oth; an image can't use both"), "{e}");
         let same = "message Point { x: i32 } object B {}";
         assert!(check_with("instance a : A instance b : B", &[("A", a), ("B", same)]).is_ok());
     }
 
     #[test]
     fn startup_requests_must_be_served() {
-        let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} operator write text/plain, operator remove } }";
-        let ok = r#"instance g : G mount /g g write /g/greeting application/bson { $type: "Greeting", text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
+        let greeter = "object G { serves { /greeting write Greeting  /hosts/{name} operator write text/plain, operator remove } }";
+        let ok = r#"instance g : G mount /g g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
         let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
         let e = err_with("instance g : G mount /g g read /g/greeting", &[("G", greeter)]);
-        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write application/bson`"), "{e}");
+        assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Greeting`"), "{e}");
         let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let only_text = "object G { serves { /greeting write text/plain } }";
-        let e = err_with(r#"instance g : G mount /g g write /g/greeting application/bson { $type: "Greeting", text: "x" }"#, &[("G", only_text)]);
-        assert!(e.contains("doesn't take `write application/bson` at `/greeting`"), "{e}");
+        let e = err_with(r#"instance g : G mount /g g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
+        assert!(e.contains("doesn't take `write Greeting` at `/greeting`"), "{e}");
+        let e = err_with(r#"instance g : G mount /g g write /g/greeting Config { name: "x", count: 1, ratio: 1, on: true }"#, &[("G", greeter)]);
+        assert!(e.contains("`g` doesn't take `write Config` at `/greeting`; it serves `/greeting write Greeting`"), "the message type is checked: {e}");
         let texts = "object T { serves { /plain write text/plain  /any write text/* } }";
         let ok = r#"require t : text/plain = "x" instance t : T mount /t t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;
         assert!(check_with(ok, &[("T", texts)]).is_ok(), "{:#}", check_with(ok, &[("T", texts)]).unwrap_err());
@@ -1404,7 +1535,7 @@ mod tests {
         assert!(e.contains("`web` needs a value for its slot `name`: `name = ...` in its block"), "{e}");
         let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x"  nope = "y" }"#).unwrap_err());
         assert!(e.contains("`Site` has no slot `nope`"), "{e}");
-        let e = format!("{:#}", with_site(r#"require b : application/bson  instance cons : MemoryConsole  instance web : Site { mount /out cons  name = b }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"require b : Ping  instance cons : MemoryConsole  instance web : Site { mount /out cons  name = b }"#).unwrap_err());
         assert!(e.contains("`web`'s slot `name` is a text/plain, and isn't given one"), "{e}");
         let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = text/html "x" }"#).unwrap_err());
         assert!(e.contains("`web`'s slot `name` is a text/plain, and isn't given one"), "{e}");

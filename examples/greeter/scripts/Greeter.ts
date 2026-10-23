@@ -1,7 +1,5 @@
-import { Errno, OnText, Payload, Request, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
-import { bson } from "othismo/bson"
-import { GreeterServer, cons, shouter } from "./Greeter.oth"
-import { Greeting } from "./Greeter.messages"
+import { OnText, Request, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Greeting, GreeterServer, cons, shouter } from "./Greeter.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -20,13 +18,7 @@ class Greeter extends GreeterServer {
     cons.watch(new OnName())
   }
 
-  writeGreeting(req: Request, body: Payload): void {
-    const msg = bson.decode(body)
-    if (!(msg instanceof Greeting)) {
-      req.fail(Errno.Invalid, "expected a Greeting")
-      return
-    }
-    const g = msg as Greeting
+  writeGreeting(req: Request, g: Greeting): void {
     this.prefix = g.prefix
     this.excited = g.excited
     req.end()

@@ -187,7 +187,7 @@ with in-memory ones.
 
 ```text
 write /http/hosts/* "/www"
-write /greeter/greeting application/bson { $type: "Greeting", prefix: "Hello, ", excited: true }
+write /greeter/greeting Greeting { prefix: "Hello, ", excited: true }
 write /net/tcp listen
 ```
 
@@ -203,12 +203,15 @@ A payload is written one of these ways:
 - `"text"`: a `text/plain` payload. Another text type can be named first:
   `text/html "<p>hi</p>"`.
 - `<type> from "./file"`: the file's bytes, read when the image is built.
-- `<type> { ... }`: a structured literal, handed to the format for that
-  content type to encode. Its syntax is one for every format: strings,
-  numbers, `true` and `false`, and nested `{ name: value }` and `[ ... ]`.
-  The format checks the literal against the schemas of the image's modules
-  when the image is built; for BSON, `$type` names the message type, and a
-  type none of them declares is an error.
+- `<message type> { ... }`: a message, `Greeting { prefix: "Hi" }`. The
+  type is one the file declares in a schemas block or imports, as headers
+  name them (see [Objects](objects.md#messages)), and the format of the
+  block that declares it encodes the literal. The literal's syntax is one
+  for every format: strings, numbers, `true` and `false`, and nested
+  `{ name: value }` and `[ ... ]`. The format checks it against the type
+  when the image is built, and the server must take that type there.
+  Writing the content type instead, `application/bson { ... }`, is an
+  error.
 - the name of a slot (see below).
 
 ## Slots: values from outside
@@ -218,12 +221,14 @@ An image can require values from whoever instantiates it:
 ```text
 require listen : text/plain = "127.0.0.1:8080"     # a default
 require admin  : text/plain                        # none: it must be given
-require greeting : application/bson = { $type: "Greeting", prefix: "Hello, ", excited: false }
+require greeting : Greeting = { prefix: "Hello, ", excited: false }
 ```
 
-- `require <name> : <type> [= <payload>]` declares a slot of a content type,
-  optionally with a default. For a structured type, the default may give
-  some fields and leave the rest to be given.
+- `require <name> : <type> [= <payload>]` declares a slot of a message type,
+  or of a content type with no schemas, such as `text/plain`, optionally
+  with a default. A message slot's default is written `{ ... }`, or
+  `Greeting { ... }`, and may give some fields and leave the rest to be
+  given.
 - A slot's name can stand wherever a payload can: as a startup request's
   payload, including an environment object's configuration. It can't change
   mounts or instance types, so a built image's views are fixed when it is
@@ -245,7 +250,7 @@ be given. Only the root's slots are left to whoever runs it.
 ### Giving the root's slots
 
 The host gives values in layers, and a later layer wins, field by field for
-a structured slot:
+a message slot:
 
 1. the image's defaults,
 2. value files, in the order given (`--with prod.vals`),
@@ -263,7 +268,7 @@ text for a text slot or a string field, and a literal for anything else
 (`--set listen=0.0.0.0:80`, `--set greeting.excited=true`).
 
 The image refuses to start unless every slot has a value, and every field
-of every structured one. It lists everything missing, e.g. `admin: required,
+of every message one. It lists everything missing, e.g. `admin: required,
 not provided`. A slot or field that the image doesn't declare is an error,
 and so is a value the slot's format rejects. `--check` prints each slot's
 final value and where it came from:

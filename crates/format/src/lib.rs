@@ -28,16 +28,15 @@ pub type AllSchemas = BTreeMap<String, Schemas>;
 pub trait Format: Send + Sync {
     /// The content type it is for.
     fn content_type(&self) -> &'static str;
-    /// Its schema files' extension, beside a module's header.
-    fn extension(&self) -> &'static str;
     /// The custom section a module's schemas travel in.
     fn section(&self) -> &'static str;
 
     /// Schemas as a module's section carries them, checked to be ones this
     /// format wrote.
     fn load(&self, bytes: &[u8]) -> Result<Schemas>;
-    /// Parses and resolves a schema file. `import` gives the schemas of a
-    /// file it imports from, by the path it writes.
+    /// Parses and resolves the body of a `.oth` file's schemas block for
+    /// its content type. `import` gives the schemas of another file's
+    /// block, by the path the body writes.
     fn parse(&self, src: &str, import: &mut dyn FnMut(&str) -> Result<Schemas>) -> Result<Schemas>;
     /// Adds `more`, from `origin`, to `all`. Where both have a type, they
     /// must agree. `from` says where each of `all`'s types came from.
@@ -45,27 +44,42 @@ pub trait Format: Send + Sync {
     /// Whether two sets of schemas declare the same types.
     fn same(&self, a: &Schemas, b: &Schemas) -> bool;
 
-    /// Encodes a literal, which `schemas` must allow.
-    fn encode(&self, schemas: &Schemas, value: &Value) -> Result<Vec<u8>, String>;
-    /// Checks a literal that may leave fields out, such as a slot's default.
-    fn check(&self, schemas: &Schemas, value: &Value) -> Result<(), String>;
-    /// Every field a value must give, in order, as far as `so_far` says
-    /// which type it is.
-    fn fields(&self, schemas: &Schemas, so_far: &[(String, Value)]) -> Vec<String>;
-    /// Raw text, as `--set` gives it, as field `field` of the value `so_far`.
-    fn literal(&self, schemas: &Schemas, so_far: &[(String, Value)], field: &str, raw: &str) -> Result<Value, String>;
+    /// Encodes a literal of type `ty`, which `schemas` must have.
+    fn encode(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<Vec<u8>, String>;
+    /// Checks a literal of type `ty` that may leave fields out, such as a
+    /// slot's default.
+    fn check(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<(), String>;
+    /// Every field a value of type `ty` gives, in order.
+    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String>;
+    /// Raw text, as `--set` gives it, as field `field` of a value of type `ty`.
+    fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String>;
     /// An encoded payload's fields, each as JSON-ish text, for `--check`.
     fn show(&self, bytes: &[u8]) -> Option<Vec<(String, String)>>;
 
-    /// AssemblyScript bindings for the types a schema file declares, or
-    /// `None` if it declares none.
-    fn bindings(&self, schemas: &Schemas, source: &str, library: &str) -> Option<String>;
-    /// A reference for the types a schema file declares, as Markdown under
+    /// The types `schemas` declares where they were read, in order: not
+    /// those it imports.
+    fn declared(&self, schemas: &Schemas) -> Vec<String>;
+    /// AssemblyScript bindings for `types`, which `schemas` has, or `None`
+    /// for none. `library` is the SDK, `"othismo"`, which the format's own
+    /// library is found under. Each type is a class with
+    /// `static fromPayload(p: Payload | null): T | null`, the value in a
+    /// payload if it holds one of that type, and `toPayload(): Payload`,
+    /// which the generated server bases and clients use.
+    fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings>;
+    /// A reference for the types a block declares, as Markdown under
     /// headings at level `h`.
     fn document(&self, schemas: &Schemas, h: &str) -> String;
 }
 
-/// The formats an image can use, found by content type or extension.
+/// Generated AssemblyScript: what it imports, which goes at the top of the
+/// file, and the code itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bindings {
+    pub imports: String,
+    pub code: String,
+}
+
+/// The formats an image can use, found by content type.
 #[derive(Clone, Default)]
 pub struct Formats(Arc<Vec<Box<dyn Format>>>);
 
@@ -79,23 +93,19 @@ impl Formats {
         self.0.iter().map(|f| f.as_ref()).find(|f| payload::fits(f.content_type(), ty))
     }
 
-    /// The format whose schema files have extension `ext`.
-    pub fn for_extension(&self, ext: &str) -> Option<&dyn Format> {
-        self.0.iter().map(|f| f.as_ref()).find(|f| f.extension() == ext)
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &dyn Format> {
         self.0.iter().map(|f| f.as_ref())
     }
 
-    /// Encodes `value` as a payload of content type `ty`, with `schemas` as
-    /// the formats' schemas. Only a format can encode a structured literal.
-    pub fn encode(&self, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
-        let Some(f) = self.for_type(ty) else {
+    /// Encodes `value`, of message type `ty`, as a payload of content type
+    /// `content_type`, with `schemas` as the formats' schemas. Only a format
+    /// can encode a structured literal.
+    pub fn encode(&self, content_type: &str, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
+        let Some(f) = self.for_type(content_type) else {
             let have: Vec<&str> = self.iter().map(|f| f.content_type()).collect();
-            return Err(format!("no format writes `{ty}`; a structured literal needs one, and the image has {}", list(&have)));
+            return Err(format!("no format writes `{content_type}`; a structured literal needs one, and the image has {}", list(&have)));
         };
-        f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), value)
+        f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), ty, value)
     }
 }
 

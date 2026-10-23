@@ -1,6 +1,7 @@
 //! The BSON format, for `application/bson`: a payload is a BSON document
 //! whose first key, `$type`, names its message type. Its schemas are
-//! message types, written in `.messages` files beside a module's header.
+//! message types, written in a `.oth` file's `schemas application/bson`
+//! block.
 //! It is the format the SDK supports, and the protocol knows nothing of it.
 
 pub mod bindings;
@@ -9,7 +10,7 @@ pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use format::{Format, Schemas};
+use format::{Bindings, Format, Schemas};
 use messages::{FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,7 @@ impl Bson {
                 Tok::Ident(kw) if kw == "import" => {
                     p.no_docs(&doc, pos)?;
                     let imp = p.import()?;
-                    let Source::Path(path) = &imp.from else { bail!("{pos}: message types are imported from other `.messages` files") };
+                    let Source::Path(path) = &imp.from else { bail!("{pos}: message types are imported from other `.oth` files' `{BSON}` schemas") };
                     let theirs = import(path).map_err(|e| anyhow::anyhow!("{pos}: importing from {path:?}: {e:#}"))?;
                     for n in &imp.names {
                         if n.local.name != n.name.name {
@@ -114,7 +115,8 @@ impl Bson {
         for (name, ty) in &more.types {
             match all.types.get(name) {
                 Some(prev) if prev.fields != ty.fields => {
-                    bail!("`{name}` is declared one way by {} and another by {origin}; an image can't use both", from[name])
+                    let before = from.get(name).map_or("another file", String::as_str);
+                    bail!("`{name}` is declared one way by {before} and another by {origin}; an image can't use both")
                 }
                 Some(_) => {}
                 None => {
@@ -126,13 +128,14 @@ impl Bson {
         Ok(())
     }
 
-    pub fn encode_message(schemas: &Messages, value: &Value) -> Result<Vec<u8>, String> {
-        let (type_name, fields) = fields(schemas, value)?;
-        let ty = &schemas.types[&type_name];
+    /// `value`, a message of type `type_name`, encoded: every field given.
+    pub fn encode_message(schemas: &Messages, type_name: &str, value: &Value) -> Result<Vec<u8>, String> {
+        let fields = fields(schemas, type_name, value)?;
+        let ty = &schemas.types[type_name];
         if let Some((missing, _)) = ty.fields.iter().find(|(n, _)| !fields.contains_key(n)) {
             return Err(format!("`{type_name}` is missing field `{missing}`"));
         }
-        Ok(Message { type_name, fields }.encode())
+        Ok(Message { type_name: type_name.to_string(), fields }.encode())
     }
 
     pub fn document_messages(schemas: &Messages, h: &str) -> String {
@@ -167,10 +170,6 @@ impl Format for Bson {
         BSON
     }
 
-    fn extension(&self) -> &'static str {
-        "messages"
-    }
-
     fn section(&self) -> &'static str {
         "othismo.schema.bson"
     }
@@ -195,33 +194,22 @@ impl Format for Bson {
         Bson::messages(a).types == Bson::messages(b).types
     }
 
-    fn encode(&self, schemas: &Schemas, value: &Value) -> Result<Vec<u8>, String> {
-        Bson::encode_message(&Bson::messages(schemas), value)
+    fn encode(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<Vec<u8>, String> {
+        Bson::encode_message(&Bson::messages(schemas), ty, value)
     }
 
-    fn check(&self, schemas: &Schemas, value: &Value) -> Result<(), String> {
-        match value {
-            Value::Object(fields) if !fields.iter().any(|(k, _)| k.name == wire::TYPE_KEY) => Ok(()),
-            _ => fields(&Bson::messages(schemas), value).map(|_| ()),
-        }
+    fn check(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<(), String> {
+        fields(&Bson::messages(schemas), ty, value).map(|_| ())
     }
 
-    fn fields(&self, schemas: &Schemas, so_far: &[(String, Value)]) -> Vec<String> {
-        let mut out = vec![wire::TYPE_KEY.to_string()];
-        if let Some(ty) = type_of(so_far).and_then(|t| Bson::messages(schemas).types.get(t).cloned()) {
-            out.extend(ty.fields.iter().map(|(n, _)| n.clone()));
-        }
-        out
-    }
-
-    fn literal(&self, schemas: &Schemas, so_far: &[(String, Value)], field: &str, raw: &str) -> Result<Value, String> {
-        if field == wire::TYPE_KEY {
-            return Ok(Value::Str(raw.to_string()));
-        }
+    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String> {
         let messages = Bson::messages(schemas);
-        let Some(ty) = type_of(so_far).and_then(|t| messages.types.get(t)) else {
-            return Err(format!("give `{}` first, so that the field's type is known", wire::TYPE_KEY));
-        };
+        Ok(message_type(&messages, ty)?.fields.iter().map(|(n, _)| n.clone()).collect())
+    }
+
+    fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String> {
+        let messages = Bson::messages(schemas);
+        let ty = message_type(&messages, ty)?;
         match ty.field(field) {
             Some(t) => literal(t, raw),
             None => Err(format!("`{}` has no field `{field}`", ty.name)),
@@ -230,14 +218,15 @@ impl Format for Bson {
 
     fn show(&self, bytes: &[u8]) -> Option<Vec<(String, String)>> {
         let m = Message::decode(bytes).ok()?;
-        let mut out = vec![(wire::TYPE_KEY.to_string(), json_value(&B::String(m.type_name.clone())))];
-        out.extend(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))));
-        Some(out)
+        Some(m.fields.iter().map(|(f, v)| (f.clone(), json_value(v))).collect())
     }
 
-    fn bindings(&self, schemas: &Schemas, source: &str, library: &str) -> Option<String> {
-        let messages = Bson::messages(schemas);
-        (!messages.declared.is_empty()).then(|| bindings::assemblyscript(&messages, source, library))
+    fn declared(&self, schemas: &Schemas) -> Vec<String> {
+        Bson::messages(schemas).declared
+    }
+
+    fn bindings(&self, schemas: &Schemas, types: &[String], library: &str) -> Option<Bindings> {
+        (!types.is_empty()).then(|| bindings::assemblyscript(&Bson::messages(schemas), types, library))
     }
 
     fn document(&self, schemas: &Schemas, h: &str) -> String {
@@ -245,12 +234,9 @@ impl Format for Bson {
     }
 }
 
-/// The type `$type` names among `fields`, if it does.
-fn type_of(fields: &[(String, Value)]) -> Option<&str> {
-    fields.iter().find_map(|(f, v)| match v {
-        Value::Str(t) if f == wire::TYPE_KEY => Some(t.as_str()),
-        _ => None,
-    })
+/// Message type `name`, which some module or file in the image declares.
+fn message_type<'a>(schemas: &'a Messages, name: &str) -> Result<&'a MessageType, String> {
+    schemas.types.get(name).ok_or_else(|| format!("no module in the image declares a message type `{name}`"))
 }
 
 /// Reads `text` as a literal for a field of type `t`.
@@ -286,18 +272,16 @@ pub fn json_value(v: &B) -> String {
 }
 
 
-/// The type a BSON literal names with `$type`, and its fields as given,
-/// each checked against the type. Fields left out are fine here.
-pub fn fields(schemas: &Messages, value: &Value) -> Result<(String, Document), String> {
-    let Value::Object(given) = value else { return Err("a BSON payload is written `{ $type: \"<type>\", <field>: <value>, ... }`".into()) };
-    let Some((_, Value::Str(type_name))) = given.iter().find(|(k, _)| k.name == wire::TYPE_KEY) else {
-        return Err(format!("a BSON payload names its type with `{}: \"<type>\"`", wire::TYPE_KEY));
-    };
-    let Some(ty) = schemas.types.get(type_name) else {
-        return Err(format!("no module in the image declares a message type `{type_name}`"));
-    };
+/// The fields of `value`, a message of type `type_name`, as given, each
+/// checked against the type. Fields left out are fine here.
+pub fn fields(schemas: &Messages, type_name: &str, value: &Value) -> Result<Document, String> {
+    let Value::Object(given) = value else { return Err(format!("a message is written `{type_name} {{ <field>: <value>, ... }}`")) };
+    let ty = message_type(schemas, type_name)?;
+    if let Some((k, _)) = given.iter().find(|(k, _)| k.name == wire::TYPE_KEY) {
+        return Err(format!("{}: the message's type is named before its braces, `{type_name} {{ ... }}`, not with `{}`", k.pos, wire::TYPE_KEY));
+    }
     let mut fields = Document::new();
-    for (name, v) in given.iter().filter(|(k, _)| k.name != wire::TYPE_KEY) {
+    for (name, v) in given {
         if fields.contains_key(&name.name) {
             return Err(format!("field `{}` given twice", name.name));
         }
@@ -310,7 +294,7 @@ pub fn fields(schemas: &Messages, value: &Value) -> Result<(String, Document), S
             ordered.insert(n.clone(), v.clone());
         }
     }
-    Ok((type_name.clone(), ordered))
+    Ok(ordered)
 }
 
 /// The BSON for `value` as field `field` of `ty`, if it fits the field's type.
@@ -372,39 +356,39 @@ mod tests {
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
         assert!(err("message A {} message A {}").contains("message `A` is declared twice"));
         assert!(err("object A {}").contains("expected `import` or `message`"));
-        assert!(err(r#"import { A } from "./a.messages""#).contains("no ./a.messages here"));
+        assert!(err(r#"import { A } from "./a.oth""#).contains("no ./a.oth here"));
 
         let mut import = |_: &str| Ok(messages(GREETING));
-        let m = Bson::parse_messages(r#"import { Greeting } from "./g.messages" message Mine { g: string }"#, &mut import).unwrap();
+        let m = Bson::parse_messages(r#"import { Greeting } from "./g.oth" message Mine { g: string }"#, &mut import).unwrap();
         assert_eq!(m.declared, ["Mine"], "imported types have their own bindings");
         assert!(m.types.contains_key("Greeting"));
-        let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.messages""#, &mut import).unwrap_err());
+        let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.oth""#, &mut import).unwrap_err());
         assert!(e.contains("can't be renamed"), "{e}");
     }
 
     #[test]
     fn literals_are_encoded_against_the_schemas() {
         let m = messages(GREETING);
-        let bytes = Bson::encode_message(&m, &value(r#"{ excited: true, $type: "Greeting", prefix: "Hi" }"#)).unwrap();
+        let bytes = Bson::encode_message(&m, "Greeting", &value(r#"{ excited: true, prefix: "Hi" }"#)).unwrap();
         let msg = Message::decode(&bytes).unwrap();
-        assert_eq!(msg.type_name, "Greeting");
+        assert_eq!(msg.type_name, "Greeting", "the type goes on the wire");
         assert_eq!(msg.fields.keys().collect::<Vec<_>>(), ["prefix", "excited"], "in declared order");
-        let err = |src: &str| Bson::encode_message(&m, &value(src)).unwrap_err();
-        assert!(err(r#"{ $type: "Greeting", prefix: "Hi" }"#).contains("missing field `excited`"));
-        assert!(err(r#"{ prefix: "Hi" }"#).contains("names its type with `$type"));
-        assert!(err(r#"{ $type: "Nope" }"#).contains("no module in the image declares a message type `Nope`"));
-        assert!(err(r#"{ $type: "Greeting", prefix: 1, excited: true }"#).contains("`Greeting.prefix` is string, but was given 1"));
-        assert!(err(r#"{ $type: "Odd", a: 300, b: 1, c: 1, d: "x" }"#).contains("300 does not fit in u8"));
-        assert!(err(r#"{ $type: "Odd", a: 1, b: [1], c: 1, d: "x" }"#).contains("fields are flat"));
-        assert!(err(r#""text""#).contains("is written `{ $type"));
+        let err = |ty: &str, src: &str| Bson::encode_message(&m, ty, &value(src)).unwrap_err();
+        assert!(err("Greeting", r#"{ prefix: "Hi" }"#).contains("missing field `excited`"));
+        assert!(err("Greeting", r#"{ $type: "Greeting", prefix: "Hi", excited: true }"#).contains("named before its braces, `Greeting { ... }`, not with `$type`"));
+        assert!(err("Nope", "{}").contains("no module in the image declares a message type `Nope`"));
+        assert!(err("Greeting", r#"{ prefix: 1, excited: true }"#).contains("`Greeting.prefix` is string, but was given 1"));
+        assert!(err("Odd", r#"{ a: 300, b: 1, c: 1, d: "x" }"#).contains("300 does not fit in u8"));
+        assert!(err("Odd", r#"{ a: 1, b: [1], c: 1, d: "x" }"#).contains("fields are flat"));
+        assert!(err("Greeting", r#""text""#).contains("a message is written `Greeting { <field>: <value>, ... }`"));
         let formats = format::Formats::new(vec![Box::new(Bson)]);
         let all = format::AllSchemas::from([(BSON.to_string(), Bson::schemas(&m))]);
-        assert!(formats.encode("text/plain", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
-        assert!(formats.encode("application/bson", &all, &value(r#"{ $type: "Odd", a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
-        assert_eq!(Bson.fields(&Bson::schemas(&m), &[]), ["$type"]);
-        let so_far = [("$type".to_string(), Value::Str("Odd".into()))];
-        assert_eq!(Bson.fields(&Bson::schemas(&m), &so_far), ["$type", "a", "b", "c", "d"]);
-        assert_eq!(Bson.literal(&Bson::schemas(&m), &so_far, "a", "7"), Ok(Value::Int(7)));
-        assert!(Bson.literal(&Bson::schemas(&m), &[], "a", "7").unwrap_err().contains("give `$type` first"));
+        assert!(formats.encode("text/plain", "Odd", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
+        assert!(formats.encode("application/bson", "Odd", &all, &value(r#"{ a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
+        let schemas = Bson::schemas(&m);
+        assert_eq!(Bson.fields(&schemas, "Odd"), Ok(vec!["a".into(), "b".into(), "c".into(), "d".into()]));
+        assert_eq!(Bson.literal(&schemas, "Odd", "a", "7"), Ok(Value::Int(7)));
+        assert!(Bson.literal(&schemas, "Odd", "z", "7").unwrap_err().contains("`Odd` has no field `z`"));
+        assert!(Bson.check(&schemas, "Greeting", &value(r#"{ prefix: "Hi" }"#)).is_ok(), "a default may leave fields out");
     }
 }

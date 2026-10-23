@@ -13,6 +13,16 @@ export object Greeter {
   serves {
     ## How to greet: a `Greeting`, a prefix and whether to be excited
     ## about it.
-    /greeting  write application/bson
+    /greeting  write Greeting
+  }
+}
+
+export schemas application/bson {
+  ## Configures a Greeter; sent once at startup by the image.
+  message Greeting {
+    ## Put before each name.
+    prefix: string
+    ## End with `!` rather than `.`.
+    excited: bool
   }
 }

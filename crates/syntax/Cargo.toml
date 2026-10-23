@@ -1,6 +1,6 @@
 [package]
 name = "syntax"
-description = "The .oth language: its lexer, its parse tree and its parsers, for images, headers, schema files and value files"
+description = "The .oth language: its lexer, its parse tree and its parsers, for image definitions, headers and value files"
 version.workspace = true
 edition.workspace = true
 

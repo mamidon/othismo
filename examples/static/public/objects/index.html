@@ -46,7 +46,7 @@ to it.</p>
         <ol>
           <li><a href="#what-an-object-is">What an object is</a></li>
           <li><a href="#the-interface">The interface</a></li>
-          <li><a href="#payloads">Payloads</a></li>
+          <li><a href="#messages">Messages</a></li>
           <li><a href="#the-sandbox">The sandbox</a></li>
           <li><a href="#the-contract-with-the-runtime">The contract with the runtime</a></li>
           <li><a href="#building-a-module">Building a module</a></li>
@@ -115,9 +115,11 @@ path pattern followed by the requests it takes.</p>
 <ul>
 <li>optionally <code>operator</code>, for a request only whoever runs the image may make;</li>
 <li>a verb;</li>
-<li>the content type of its payload, if it takes one;</li>
-<li>after <code>-&gt;</code>, the content type its answer carries, with <code>*</code> if the answer is
-a stream.</li>
+<li>the type of its payload, if it takes one: a message type, such as
+<code>Greeting</code> (see <a href="#messages">Messages</a>), or a content type with no
+schemas, such as <code>text/plain</code>;</li>
+<li>after <code>-&gt;</code>, the type its answer carries in the same way, with <code>*</code> if the
+answer is a stream.</li>
 </ul>
 <p>A request with no arrow, such as <code>remove</code>, is answered with a status alone.
 <code>stat</code> and <code>list</code> are written bare: they always answer stat records. <code>Stat</code>
@@ -292,22 +294,50 @@ the same way.</p>
 <code>PackedFiles</code>) are declared in its own header, <code>env</code>, like any other. The
 checker treats them the same way, and their reference documentation comes
 from that header.</p>
-<h2 id="payloads">Payloads</h2>
+<h2 id="messages">Messages</h2>
 <p>What a module sends and receives in its payloads is described by its
-<strong>schemas</strong>, written in the language of the payload&#39;s format. For BSON that
-is a file of message types next to the header, <code>scripts/Greeter.messages</code>:</p>
-<pre><code class="language-text">## Configures a Greeter; sent once at startup by the image.
-message Greeting {
-  ## Put before each name.
-  prefix: string
-  ## End with `!` rather than `.`.
-  excited: bool
+<strong>schemas</strong>, in a <code>schemas</code> block of its header for the payload&#39;s content
+type. The block&#39;s body is in that format&#39;s own language; Othismo reads only
+as far as its closing brace. For BSON it declares message types:</p>
+<pre><code class="language-text">## Greets every name typed on the console…
+export object Greeter {
+  needs /dev/cons { /  watch -&gt; text/plain*, write text/plain }
+  needs /shouter  { /  write text/plain }
+  serves {
+    ## How to greet.
+    /greeting  write Greeting
+  }
+}
+
+export schemas application/bson {
+  ## Configures a Greeter; sent once at startup by the image.
+  message Greeting {
+    ## Put before each name.
+    prefix: string
+    ## End with `!` rather than `.`.
+    excited: bool
+  }
 }
 </code></pre>
-<p>The header only says that <code>/greeting</code> takes <code>application/bson</code>, and its
-documentation says the payload is a <code>Greeting</code>. <a href="protocol.md#layer-2-payload-formats">The protocol</a>
-covers formats, BSON&#39;s field types, and when two modules&#39; schemas for one
-type agree.</p>
+<p>The types a block declares are names in the file, beside its protocols,
+traits and objects, and a header names a payload by its type: <code>/greeting</code>
+takes a <code>Greeting</code>, which is an <code>application/bson</code> payload. The content type
+is what the runtime goes by; the type is for the checker and for codegen.</p>
+<ul>
+<li>A content type whose format has schemas, such as <code>application/bson</code>, can&#39;t
+be written bare where a payload goes: name the message type. Content types
+without schemas, <code>text/plain</code> or <code>image/png</code>, are written as they are, and
+each means any payload of that type.</li>
+<li>A file has one block per content type, and only exported blocks&#39; types can
+be imported: <code>import { Greeting } from &quot;./Greeter.oth&quot;</code>. A message type is
+named on the wire, so it can&#39;t be renamed with <code>as</code>.</li>
+<li>An exported object that names a type from a block that isn&#39;t exported is an
+error, since whoever imports the object couldn&#39;t name what it takes.</li>
+<li>A server that names a type takes only that type, so the needs it meets name
+it too.</li>
+</ul>
+<p><a href="protocol.md#layer-2-payload-formats">The protocol</a> covers formats, BSON&#39;s
+field types, and when two modules&#39; schemas for one type agree.</p>
 <h2 id="the-sandbox">The sandbox</h2>
 <p>A module may import the runtime&#39;s own functions and nothing else, apart from
 <code>env.abort</code>, which AssemblyScript always emits. A module that imports
@@ -348,18 +378,22 @@ view. The answer then goes straight to the original caller, and the object
 never sees it. That is how StaticSite serves files without touching their
 bytes.</p>
 <h2 id="building-a-module">Building a module</h2>
-<p>A module is built from its header, its schemas and its source:</p>
+<p>A module is built from its header, with its schemas, and its source:</p>
 <ol>
-<li>Bindings are generated for the module&#39;s language, one file from each:<ul>
-<li>from the header, <code>scripts/Greeter.oth.ts</code>: a server base class for what
-it serves, and a client for each of its needs;</li>
-<li>from the schemas, by the format&#39;s generator, <code>scripts/Greeter.messages.ts</code>:
-a class for each message type, with its encoder and decoder.</li>
+<li>Bindings are generated for the module&#39;s language, one file,
+<code>scripts/Greeter.oth.ts</code>, with <code>othismo bindings scripts/Greeter.oth</code>:<ul>
+<li>a class for each message type the header declares, and each one its
+object takes or answers, imported ones too, generated by each type&#39;s
+format, with its encoder and decoder;</li>
+<li>a server base class for what it serves, whose methods take each
+message decoded, <code>writeGreeting(req: Request, body: Greeting)</code>;</li>
+<li>and a client for each of its needs, whose methods take messages and
+encode them.</li>
 </ul>
 </li>
 <li>The source is compiled to <code>.wasm</code>.</li>
-<li>The header and the schemas beside it are appended to the module, as
-custom sections: <code>othismo embed scripts/Greeter.oth scripts/Greeter.wasm</code>.</li>
+<li>The header and its schemas are appended to the module, as custom
+sections: <code>othismo embed scripts/Greeter.oth scripts/Greeter.wasm</code>.</li>
 </ol>
 <p><code>task</code> does all three for the examples. The generated bindings are ordinary
 files, committed next to the source, so editors and compilers see them like
@@ -388,7 +422,8 @@ from <code>env</code>&#39;s header.</li>
 <p>Some of its shape comes from AssemblyScript&#39;s limits. There are no closures
 that capture variables, so an answer is delivered to a <code>Then</code> object that
 holds whatever state it needs in its fields. There are no union types, so a
-decoded message is told apart with <code>instanceof</code>. A module that receives a
+message is told apart with <code>instanceof</code>, which the generated server bases
+do for you. A module that receives a
 BSON message it has no class for gets an <code>Unknown</code> one, which it can&#39;t read
 but can pass on unchanged, as it can any payload.</p>
 <h2 id="failure">Failure</h2>

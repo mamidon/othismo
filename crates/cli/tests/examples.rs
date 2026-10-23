@@ -14,7 +14,7 @@ fn example(rel: &str) -> PathBuf {
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
         // A module's own source, not its generated bindings.
-        let generated = [".messages.ts", ".oth.ts"].iter().any(|g| ts.to_string_lossy().ends_with(g));
+        let generated = ts.to_string_lossy().ends_with(".oth.ts");
         if ts.extension().is_some_and(|e| e == "ts") && !generated {
             assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `task test`", ts.display());
         }
@@ -22,7 +22,7 @@ fn example(rel: &str) -> PathBuf {
     path
 }
 
-/// The bindings of every header and schema file, the SDK's objects' and
+/// The bindings of every `.oth` file of a module, the SDK's objects' and
 /// each example's, are generated and committed; this fails if one is
 /// stale, or missing. `task bindings` regenerates them.
 #[test]
@@ -34,17 +34,10 @@ fn bindings_are_up_to_date() {
     let mut seen = 0;
     for dir in [in_dirs("sdk/objects", ""), in_dirs("examples", "scripts")].concat() {
         for source in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
-            let name = source.file_name().unwrap().to_string_lossy().into_owned();
-            let want = match source.extension().and_then(|e| e.to_str()) {
-                Some("messages") => {
-                    use format::Format;
-                    let bson = &format_bson::Bson;
-                    let schemas = othismo::iface::Loader::new(othismo::formats()).schemas(bson, &source).unwrap();
-                    bson.bindings(&schemas, &name, "othismo/bson")
-                }
-                Some("oth") => othismo::bindings::namespace(&othismo::iface::load(&source).unwrap(), &name, "othismo", "othismo/env"),
-                _ => continue,
-            };
+            if source.extension().is_none_or(|e| e != "oth") {
+                continue;
+            }
+            let want = othismo::bindings_for(&source, "othismo").unwrap();
             seen += 1;
             let committed = std::fs::read_to_string(format!("{}.ts", source.display())).ok();
             assert!(committed == want, "{}.ts is stale; run `task bindings`", source.display());

@@ -145,9 +145,12 @@ pub struct Request {
 pub enum Literal {
     /// `"text"`, a `text/plain` payload, or `<content type> "text"`.
     Text { ty: Option<Ident>, text: String, pos: Pos },
-    /// `<content type> { ... }`, encoded by that content type's format, or
-    /// `{ ... }` alone, where the type is a slot's.
+    /// `<content type> { ... }`, or `{ ... }` alone, where the type is a
+    /// slot's message type.
     Tree { ty: Option<Ident>, value: Value, pos: Pos },
+    /// `<message type> { ... }`: a message, encoded by the format of the
+    /// schemas block that declares its type.
+    Message { ty: Ident, value: Value, pos: Pos },
     /// `<content type> from "<file>"`: the file's bytes, relative to the image.
     File { ty: Ident, path: String, pos: Pos },
     /// A slot's name.
@@ -229,6 +232,9 @@ pub enum Tok {
     Type(String),
     /// A `##` comment, which documents what follows. Only headers keep them.
     Doc(String),
+    /// The body of a `schemas <content type> { ... }` block, as written,
+    /// between its braces: its format's to read, not this lexer's.
+    Raw(String),
     Eof,
 }
 
@@ -251,6 +257,7 @@ impl std::fmt::Display for Tok {
             Tok::Eq => write!(f, "`=`"),
             Tok::Type(s) => write!(f, "content type `{s}`"),
             Tok::Doc(_) => write!(f, "a `##` comment"),
+            Tok::Raw(_) => write!(f, "a schemas block's body"),
             Tok::Eof => write!(f, "end of file"),
         }
     }
@@ -325,6 +332,42 @@ pub fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
             bump!();
         } else if c == '=' {
             toks.push((Tok::Eq, pos));
+            bump!();
+        } else if c == '{' && opens_schemas(&toks) {
+            toks.push((Tok::LBrace, pos));
+            bump!();
+            let (start, at) = (i, Pos { line, col });
+            let mut depth = 1;
+            while depth > 0 {
+                match chars.get(i) {
+                    None => bail!("{pos}: this schemas block has no closing `}}`"),
+                    Some('{') => depth += 1,
+                    Some('}') => depth -= 1,
+                    Some('"') => {
+                        bump!();
+                        while chars.get(i).is_some_and(|&c| c != '"' && c != '\n') {
+                            if chars[i] == '\\' {
+                                bump!();
+                            }
+                            if i < chars.len() {
+                                bump!();
+                            }
+                        }
+                    }
+                    Some('#') => {
+                        while chars.get(i).is_some_and(|&c| c != '\n') {
+                            bump!();
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                if depth > 0 && i < chars.len() {
+                    bump!();
+                }
+            }
+            toks.push((Tok::Raw(chars[start..i].iter().collect()), at));
+            toks.push((Tok::RBrace, Pos { line, col }));
             bump!();
         } else if c == '{' || c == '}' || c == ',' || c == ':' {
             toks.push((
@@ -402,6 +445,12 @@ pub fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
     Ok(toks)
 }
 
+/// Whether a `{` here opens a schemas block's body: it follows
+/// `schemas <content type>`.
+fn opens_schemas(toks: &[(Tok, Pos)]) -> bool {
+    matches!(toks, [.., (Tok::Ident(kw), _), (Tok::Type(_), _)] if kw == "schemas")
+}
+
 /// Whether `c` can be part of a content type as headers write it.
 fn type_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "!#$&^_.+-*/;=".contains(c)
@@ -429,7 +478,7 @@ fn push_type(toks: &mut Vec<(Tok, Pos)>, mut ty: String, pos: Pos, end: Pos) {
 pub const KEYWORDS: &[&str] = &["import", "export", "from", "require", "instance", "true", "false"];
 
 /// Words that start a declaration at the top of a file, besides the verbs.
-const DECLS: &[&str] = &["import", "export", "require", "instance", "mount", "message", "protocol", "trait", "object"];
+const DECLS: &[&str] = &["import", "export", "require", "instance", "mount", "message", "schemas", "protocol", "trait", "object"];
 
 pub struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -505,6 +554,22 @@ impl Parser {
         }
     }
 
+    /// `schemas <content type> { <body> }`, after `schemas`.
+    fn schemas(&mut self, exported: bool) -> Result<iface::SchemasDecl> {
+        let (ty, pos) = self.next();
+        let Tok::Type(name) = ty else { bail!("{pos}: expected a content type after `schemas`, such as `application/bson`, found {ty}") };
+        if *self.peek() == Tok::Star {
+            bail!("{pos}: a schemas block is for one content type, not a stream of them");
+        }
+        self.expect(Tok::LBrace)?;
+        let (body, at) = match self.next() {
+            (Tok::Raw(body), at) => (body, at),
+            (t, p) => bail!("{p}: expected the schemas block's body, found {t}"),
+        };
+        self.expect(Tok::RBrace)?;
+        Ok(iface::SchemasDecl { ty: Ident { name, pos }, body, at, exported })
+    }
+
     fn file(&mut self) -> Result<ImageDefinition> {
         let header = iface::File {
             imports: vec![],
@@ -513,6 +578,7 @@ impl Parser {
             objects: vec![],
             exports: vec![],
             needs: vec![],
+            schemas: vec![],
         };
         let mut image =
             ImageDefinition { header, requires: vec![], instances: vec![], mounts: vec![], exports: vec![], requests: vec![] };
@@ -527,9 +593,21 @@ impl Parser {
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "message" || (kw == "export" && self.toks.get(self.i + 1).is_some_and(|(t, _)| *t == Tok::Ident("message".into()))) => bail!(
-                    "{pos}: message types are declared in a schema file, in the BSON format's own language: \
-                     `<Module>.messages`, beside the module's header"
+                    "{pos}: message types are declared in their format's block: `schemas application/bson {{ message ... }}`"
                 ),
+                Tok::Ident(kw) if kw == "schemas" || (kw == "export" && self.toks.get(self.i + 1).is_some_and(|(t, _)| *t == Tok::Ident("schemas".into()))) => {
+                    self.no_docs(&doc, pos)?;
+                    let exported = kw == "export";
+                    if exported {
+                        self.next();
+                    }
+                    self.next();
+                    let block = self.schemas(exported)?;
+                    if let Some(prev) = image.header.schemas.iter().find(|b| b.ty.name == block.ty.name) {
+                        bail!("{}: `{}` already has a schemas block, at {}; a file has one per content type", block.ty.pos, block.ty.name, prev.ty.pos);
+                    }
+                    image.header.schemas.push(block);
+                }
                 Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => bail!(
                     "{pos}: an image is no longer imported whole: import it by a name, `import Site from \"...\"`, \
                      and make an instance of it, `instance site : Site {{ ... }}`"
@@ -582,7 +660,7 @@ impl Parser {
                     self.pos()
                 ),
                 other => bail!(
-                    "{pos}: expected `import`, `export`, `message`, `protocol`, `trait`, `object`, `needs`, `require`, \
+                    "{pos}: expected `import`, `export`, `schemas`, `protocol`, `trait`, `object`, `needs`, `require`, \
                      `instance`, `mount` or a verb, found {other}"
                 ),
             }
@@ -662,14 +740,9 @@ impl Parser {
                 }
             }
             Tok::Ident(_) => {
-                let name = self.ident("a slot's name", false)?;
+                let name = self.ident("a slot's name, or a message type", false)?;
                 if matches!(self.peek(), Tok::LBrace) {
-                    bail!(
-                        "{pos}: `{} {{ ... }}` names a message type; write the payload's content type, and the type inside it: \
-                         `application/bson {{ $type: \"{}\", ... }}`",
-                        name.name,
-                        name.name
-                    );
+                    return Ok(Literal::Message { ty: name, value: self.value()?, pos });
                 }
                 Literal::Name(name)
             }
@@ -776,12 +849,8 @@ impl Parser {
         let name = self.ident("slot name", false)?;
         self.expect(Tok::Colon)?;
         let ty = match self.next() {
-            (Tok::Type(ty), pos) => Ident { name: ty, pos },
-            (Tok::Ident(t), pos) => bail!(
-                "{pos}: a slot is typed by a content type: `require {} : application/bson = {{ $type: \"{t}\", ... }}`",
-                name.name
-            ),
-            (other, pos) => bail!("{pos}: expected the slot's content type, found {other}"),
+            (Tok::Type(ty) | Tok::Ident(ty), pos) => Ident { name: ty, pos },
+            (other, pos) => bail!("{pos}: expected the slot's message type or content type, found {other}"),
         };
         let mut default = None;
         if *self.peek() == Tok::Eq {
@@ -908,6 +977,32 @@ mod tests {
     }
 
     #[test]
+    fn a_schemas_block_keeps_its_body_as_written() {
+        let src = "object A { serves { /x read } }\nexport schemas application/bson {\n  ## A } in a doc, \"and { in a string\"\n  message M { s: string }\n}\nschemas application/json { {\"type\": \"}\"} }\nmount /a a\n";
+        let img = parse(src).unwrap();
+        let [bson, json] = &img.header.schemas[..] else { panic!("{:?}", img.header.schemas) };
+        assert_eq!((bson.ty.name.as_str(), bson.exported, bson.at), ("application/bson", true, Pos { line: 2, col: 34 }));
+        assert_eq!(bson.body, "\n  ## A } in a doc, \"and { in a string\"\n  message M { s: string }\n");
+        assert_eq!((json.ty.name.as_str(), json.exported, json.body.as_str()), ("application/json", false, r#" {"type": "}"} "#));
+        assert_eq!(img.mounts.len(), 1, "parsing goes on after the block");
+        let line_col = |text: &str| {
+            let at = text.find("message").unwrap();
+            let line = text[..at].matches('\n').count();
+            (line, at - text[..at].rfind('\n').map_or(0, |n| n + 1))
+        };
+        assert_eq!(line_col(&bson.positioned_body()), line_col(src), "the body keeps the file's lines and columns");
+    }
+
+    #[test]
+    fn schemas_blocks_are_one_per_content_type() {
+        let e = |src: &str| format!("{:#}", parse(src).unwrap_err());
+        assert!(e("schemas application/bson { }\nschemas application/bson { }").contains("2:9: `application/bson` already has a schemas block, at 1:9"), "{}", e("schemas application/bson { }\nschemas application/bson { }"));
+        assert!(e("schemas Greeting { }").contains("expected a content type after `schemas`"));
+        assert!(e("schemas application/bson { message M { }").contains("has no closing `}`"));
+        assert!(e("message M { }").contains("declared in their format's block"));
+    }
+
+    #[test]
     fn parses_full_syntax() {
         let img = parse(
             r#"
@@ -982,20 +1077,20 @@ mod tests {
         let img = parse(
             r#"require listen : text/plain = "127.0.0.1:8080"
             require admin : text/plain
-            require greeting : application/bson = { $type: "Greeting", prefix: "Hi" }
+            require greeting : Greeting = { prefix: "Hi" }
             write /net listen"#,
         )
         .unwrap();
         let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.ty.name.as_str())).collect();
-        assert_eq!(reqs, [("listen", "text/plain"), ("admin", "text/plain"), ("greeting", "application/bson")]);
+        assert_eq!(reqs, [("listen", "text/plain"), ("admin", "text/plain"), ("greeting", "Greeting")]);
         assert!(matches!(&img.requires[0].default, Some(Literal::Text { text, .. }) if text == "127.0.0.1:8080"));
         assert_eq!(img.requires[1].default, None);
         assert!(matches!(&img.requires[2].default, Some(Literal::Tree { ty: None, .. })));
         assert!(matches!(&img.requests[0].body, Some(Literal::Name(n)) if n.name == "listen"), "a slot is named");
         assert!(parse("require : text/plain").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
-        let e = parse("require g : Greeting").unwrap_err().to_string();
-        assert!(e.contains("a slot is typed by a content type"), "{e}");
+        let e = parse("require g : { }").unwrap_err().to_string();
+        assert!(e.contains("expected the slot's message type or content type"), "{e}");
     }
 
     #[test]
@@ -1049,7 +1144,7 @@ mod tests {
         let exports: Vec<&str> = h.exports.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(exports, ["T", "P", "O"]);
         let e = parse("export message M {}").unwrap_err().to_string();
-        assert!(e.contains("message types are declared in a schema file"), "{e}");
+        assert!(e.contains("message types are declared in their format's block"), "{e}");
         assert_eq!((img.instances.len(), img.requests.len()), (1, 1));
         let e = parse("## an instance\ninstance o : O").unwrap_err().to_string();
         assert!(e.contains("documents what follows"), "{e}");
@@ -1147,8 +1242,8 @@ mod tests {
         assert!(matches!(&img.requests[0].body, Some(Literal::Tree { ty: Some(_), value: Value::Object(_), .. })));
         assert!(matches!(&img.requests[1].body, Some(Literal::File { ty, path, .. }) if ty.name == "image/png" && path == "./logo.png"));
         assert!(matches!(&img.requests[2].body, Some(Literal::Tree { ty: None, .. })), "the checker asks what it is");
-        let e = parse("write /a Greeting { x: 1 }").unwrap_err().to_string();
-        assert!(e.contains("`Greeting { ... }` names a message type"), "{e}");
+        let img = parse("write /a Greeting { x: 1 }").unwrap();
+        assert!(matches!(&img.requests[0].body, Some(Literal::Message { ty, value: Value::Object(_), .. }) if ty.name == "Greeting"));
         let e = parse("write /a text/plain 3").unwrap_err().to_string();
         assert!(e.contains("expected a quoted string, `{ ... }` or `from \"<file>\"` after `text/plain`"), "{e}");
     }

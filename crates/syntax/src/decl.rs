@@ -1,6 +1,7 @@
 //! The declarations in a `.oth` file, parsed: protocols, traits, objects
-//! and what an image needs, and the message types of a BSON schema file,
-//! which share the grammar of fields. Resolving them is the compiler's.
+//! and what an image needs, the schemas blocks, kept as written, and the
+//! message types that BSON's blocks declare, which share the grammar of
+//! fields. Resolving them is the compiler's.
 
 use crate::image_definition::{self, Ident, Import, Parser, Pos, Tok};
 use anyhow::{Result, bail};
@@ -18,6 +19,34 @@ pub struct File {
     pub exports: Vec<Ident>,
     /// Top-level `needs`: what an image needs from whoever instantiates it.
     pub needs: Vec<NeedDecl>,
+    /// `[export] schemas <content type> { ... }`: at most one per content type.
+    pub schemas: Vec<SchemasDecl>,
+}
+
+/// `[export] schemas <content type> { <body> }`: the types of payloads of one
+/// content type, in that content type's format's own language. Othismo
+/// reads only as far as the closing brace.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchemasDecl {
+    /// The content type, as written.
+    pub ty: Ident,
+    /// Everything between the braces, as written.
+    pub body: String,
+    /// Where the body starts: just after the `{`.
+    pub at: Pos,
+    pub exported: bool,
+}
+
+impl SchemasDecl {
+    /// The body preceded by whitespace, so that its lines and columns are
+    /// the file's: what a format parses, so that its errors point into the
+    /// file.
+    pub fn positioned_body(&self) -> String {
+        let mut out = "\n".repeat(self.at.line - 1);
+        out.push_str(&" ".repeat(self.at.col - 1));
+        out.push_str(&self.body);
+        out
+    }
 }
 
 /// `protocol <Name> { <item>, ... }`: the requests one path takes.
