@@ -12,6 +12,7 @@
 //! | i64, u32, u64               | int64   |
 //! | f32, f64                    | double  |
 //! | bytes                       | binary (generic subtype) |
+//! | a message type, `Person`    | document, without `$type` |
 
 use crate::messages::FieldType;
 use anyhow::{Context, Result, bail};

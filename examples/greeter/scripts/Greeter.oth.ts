@@ -29,8 +29,9 @@ export class Greeting extends Message {
     w.string("prefix", this.prefix)
     w.bool("excited", this.excited)
   }
+  static decode(r: Reader): Greeting { return new Greeting(r.string("prefix"), r.bool("excited")) }
 }
-registerMessage("Greeting", (r: Reader): Message => new Greeting(r.string("prefix"), r.bool("excited")))
+registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
 
 /**
  * Greets every name typed on the console, reports running statistics

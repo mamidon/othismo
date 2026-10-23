@@ -74,20 +74,6 @@ pub enum Item {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageDecl {
-    pub name: Ident,
-    pub doc: String,
-    pub fields: Vec<FieldDecl>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FieldDecl {
-    pub name: Ident,
-    pub ty: Ident,
-    pub doc: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct ObjectDecl {
     pub name: Ident,
     pub doc: String,
@@ -145,29 +131,6 @@ impl Parser {
             bail!("{pos}: a `##` comment documents what follows it, and nothing documentable does");
         }
         Ok(())
-    }
-
-    pub fn message(&mut self, doc: String) -> Result<MessageDecl> {
-        self.expect_kw("message")?;
-        let name = self.ident("message name", false)?;
-        self.expect(Tok::LBrace)?;
-        let mut fields = vec![];
-        loop {
-            let field_doc = self.docs();
-            if *self.peek() == Tok::RBrace {
-                let pos = self.pos();
-                self.no_docs(&field_doc, pos)?;
-                self.next();
-                return Ok(MessageDecl { name, doc, fields });
-            }
-            let fname = self.ident("field name", false)?;
-            self.expect(Tok::Colon)?;
-            let ty = self.ident("field type", false)?;
-            fields.push(FieldDecl { name: fname, ty, doc: field_doc });
-            if *self.peek() == Tok::Comma {
-                self.next();
-            }
-        }
     }
 
     pub fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {

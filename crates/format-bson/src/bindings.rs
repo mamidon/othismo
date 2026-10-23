@@ -15,8 +15,17 @@ pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bi
     let imports = format!(
         "import {{ Payload }} from \"{library}\"\nimport {{ Message, Reader, Writer, bson, registerMessage }} from \"{library}/bson\"\n"
     );
-    let mut code = String::new();
+    // And every type their fields name, which have to be classes too.
+    let mut all: Vec<String> = vec![];
     for name in types {
+        for t in schemas.closure(name) {
+            if !all.contains(&t) {
+                all.push(t);
+            }
+        }
+    }
+    let mut code = String::new();
+    for name in &all {
         let ty = &schemas.types[name];
         code.push('\n');
         class(&mut code, ty);
@@ -58,9 +67,10 @@ fn class(out: &mut String, ty: &MessageType) {
             out.push_str("  }\n");
         }
     }
-    out.push_str("}\n");
     let reads: Vec<String> = ty.fields.iter().map(|f| read_call(&f.name, &f.ty)).collect();
-    writeln!(out, "registerMessage(\"{name}\", (r: Reader): Message => new {name}({}))", reads.join(", ")).unwrap();
+    writeln!(out, "  static decode(r: Reader): {name} {{ return new {name}({}) }}", reads.join(", ")).unwrap();
+    out.push_str("}\n");
+    writeln!(out, "registerMessage(\"{name}\", (r: Reader): Message => {name}.decode(r))").unwrap();
 }
 
 /// A JSDoc comment, if there is anything to say. A `*/` in it, as in
@@ -80,8 +90,16 @@ fn doc(out: &mut String, indent: &str, text: &str) {
     }
 }
 
-fn as_type(t: &FieldType) -> &'static str {
+fn as_type(t: &FieldType) -> String {
     match t {
+        FieldType::Named(n) => n.clone(),
+        _ => scalar(t).to_string(),
+    }
+}
+
+fn scalar(t: &FieldType) -> &'static str {
+    match t {
+        FieldType::Named(_) => unreachable!("not a scalar"),
         FieldType::Bytes => "ArrayBuffer",
         FieldType::String => "string",
         FieldType::Bool => "bool",
@@ -110,6 +128,7 @@ fn write_call(f: &str, t: &FieldType) -> String {
         FieldType::U32 | FieldType::U64 => format!("w.i64(\"{f}\", <i64>this.{f})"),
         FieldType::F64 => format!("w.f64(\"{f}\", this.{f})"),
         FieldType::F32 => format!("w.f64(\"{f}\", <f64>this.{f})"),
+        FieldType::Named(_) => format!("w.doc(\"{f}\", this.{f})"),
     }
 }
 
@@ -122,6 +141,7 @@ fn read_call(f: &str, t: &FieldType) -> String {
         FieldType::I64 => format!("r.i64(\"{f}\")"),
         FieldType::F64 => format!("r.f64(\"{f}\")"),
         FieldType::F32 => format!("<f32>r.f64(\"{f}\")"),
+        FieldType::Named(n) => format!("{n}.decode(r.doc(\"{f}\"))"),
         other => format!("<{}>r.i64(\"{f}\")", as_type(other)),
     }
 }
@@ -145,6 +165,7 @@ mod tests {
             ## of docs.
             message Odd { a: u8, b: f32, c: u64, d: bytes }
             message Ping {}
+            message Nested { greeting: Greeting }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
@@ -173,14 +194,19 @@ export class Greeting extends Message {
     w.string("prefix", this.prefix)
     w.bool("excited", this.excited)
   }
+  static decode(r: Reader): Greeting { return new Greeting(r.string("prefix"), r.bool("excited")) }
 }
-registerMessage("Greeting", (r: Reader): Message => new Greeting(r.string("prefix"), r.bool("excited")))
+registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
 "#;
         assert!(out.contains(greeting), "{out}");
         assert!(out.contains("/**\n * Two lines\n *\n * of docs.\n */\nexport class Odd"), "{out}");
         assert!(out.contains("w.i32(\"a\", <i32>this.a)"), "{out}");
         assert!(out.contains("new Odd(<u8>r.i64(\"a\"), <f32>r.f64(\"b\"), <u64>r.i64(\"c\"), r.bytes(\"d\"))"), "{out}");
+        assert!(out.contains("w.doc(\"greeting\", this.greeting)"), "{out}");
+        assert!(out.contains("new Nested(Greeting.decode(r.doc(\"greeting\")))"), "{out}");
+        let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;
+        assert!(only.find("class Nested") < only.find("class Greeting"), "the types a field names come with it: {only}");
         assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");
-        assert!(out.contains("  typeName(): string { return \"Ping\" }\n  encode(w: Writer): void {}\n}"), "{out}");
+        assert!(out.contains("  typeName(): string { return \"Ping\" }\n  encode(w: Writer): void {}\n  static decode(r: Reader): Ping { return new Ping() }\n}"), "{out}");
     }
 }

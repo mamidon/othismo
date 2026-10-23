@@ -1,20 +1,24 @@
 import { Errno, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { Reader, Writer, decodeMessage, encodeMessage } from "othismo/bson"
-import { Record, TypesTestsServer, store } from "./TypesTests.oth"
+import { Person, Record, TypesTestsServer, store } from "./TypesTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
 /** Every field of `r`, as text, so that two records can be compared. */
 function describe(r: Record): string {
-  return "name=" + r.name + " count=" + r.count.toString()
+  return "name=" + r.name + " count=" + r.count.toString() + " owner=" + person(r.owner)
+}
+
+function person(p: Person): string {
+  return "{" + p.name + " " + p.age.toString() + "}"
 }
 
 /** The record the image writes at startup, described. */
-const STARTUP = "name=start count=7"
+const STARTUP = "name=start count=7 owner={Ada 36}"
 
 /** A record with something in every field. */
 function sample(): Record {
-  return new Record("sample", -3)
+  return new Record("sample", -3, new Person("Grace", 85))
 }
 
 /** "" if `got` is `want`, or how it isn't. */

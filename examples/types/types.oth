@@ -9,4 +9,5 @@ mount /store store
 write /store/record Record {
   name: "start",
   count: 7,
+  owner: { name: "Ada", age: 36 },
 }

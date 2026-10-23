@@ -6,17 +6,18 @@
 
 pub mod bindings;
 pub mod messages;
+mod parse;
 pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
 use format::{Bindings, Format, Schemas};
-use messages::{Field, FieldType, MessageType};
+use messages::{FieldType, MessageType};
 use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use syntax::image_definition::{Parser, Source, Tok, Value};
+use syntax::image_definition::{Ident, Parser, Value};
 use wire::Message;
 
 /// The content type of a BSON payload.
@@ -31,6 +32,25 @@ pub struct Messages {
     pub types: BTreeMap<String, MessageType>,
     /// The ones the file declares itself, in order; the rest it imports.
     pub declared: Vec<String>,
+}
+
+impl Messages {
+    /// `name`, and every type its fields name, however deeply, each once.
+    pub fn closure(&self, name: &str) -> Vec<String> {
+        let mut out = vec![name.to_string()];
+        let mut i = 0;
+        while i < out.len() {
+            for f in self.types.get(&out[i]).map_or(&[][..], |t| &t.fields[..]) {
+                for n in f.ty.names() {
+                    if !out.iter().any(|o| o == n) {
+                        out.push(n.to_string());
+                    }
+                }
+            }
+            i += 1;
+        }
+        out
+    }
 }
 
 impl Bson {
@@ -51,64 +71,7 @@ impl Bson {
     }
 
     pub fn parse_messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
-        let mut p = Parser::new(src, true)?;
-        let mut out = Messages::default();
-        let mut from: BTreeMap<String, String> = BTreeMap::new();
-        loop {
-            let doc = p.docs();
-            let pos = p.pos();
-            match p.peek().clone() {
-                Tok::Eof => {
-                    p.no_docs(&doc, pos)?;
-                    return Ok(out);
-                }
-                Tok::Ident(kw) if kw == "import" => {
-                    p.no_docs(&doc, pos)?;
-                    let imp = p.import()?;
-                    let Source::Path(path) = &imp.from else { bail!("{pos}: message types are imported from other `.oth` files' `{BSON}` schemas") };
-                    let theirs = import(path).map_err(|e| anyhow::anyhow!("{pos}: importing from {path:?}: {e:#}"))?;
-                    for n in &imp.names {
-                        if n.local.name != n.name.name {
-                            bail!("{}: a message type is named on the wire, so `{}` can't be renamed", n.local.pos, n.name.name);
-                        }
-                        let Some(ty) = theirs.types.get(&n.name.name) else { bail!("{}: {path:?} has no message type `{}`", n.name.pos, n.name.name) };
-                        if from.insert(n.name.name.clone(), path.clone()).is_some() || out.types.contains_key(&n.name.name) {
-                            bail!("{}: `{}` is already imported", n.name.pos, n.name.name);
-                        }
-                        out.types.insert(n.name.name.clone(), ty.clone());
-                    }
-                }
-                Tok::Ident(kw) if kw == "message" => {
-                    let m = p.message(doc)?;
-                    let name = &m.name;
-                    if let Some(prev) = from.get(&name.name) {
-                        bail!("{}: `{}` is imported from {prev:?}, and declared here too", name.pos, name.name);
-                    }
-                    if out.types.contains_key(&name.name) {
-                        bail!("{}: message `{}` is declared twice", name.pos, name.name);
-                    }
-                    let mut fields: Vec<Field> = vec![];
-                    for f in &m.fields {
-                        if fields.iter().any(|g| g.name == f.name.name) {
-                            bail!("{}: `{}` has two fields called `{}`", f.name.pos, name.name, f.name.name);
-                        }
-                        let Some(ty) = FieldType::from_name(&f.ty.name) else {
-                            bail!(
-                                "{}: `{}` is not a field type; fields are string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64 or bytes",
-                                f.ty.pos,
-                                f.ty.name
-                            );
-                        };
-                        fields.push(Field::new(f.name.name.clone(), ty));
-                    }
-                    let field_docs = m.fields.iter().map(|f| f.doc.clone()).collect();
-                    let ty = MessageType { name: name.name.clone(), fields, doc: m.doc.clone(), field_docs };
-                    out.types.insert(name.name.clone(), ty);
-                    out.declared.push(name.name.clone());
-                }
-                other => bail!("{pos}: expected `import` or `message`, found {other}"),
-            }
-        }
+        parse::messages(src, import)
     }
 
     pub fn merge_messages(all: &mut Messages, from: &mut BTreeMap<String, String>, more: &Messages, origin: &str) -> Result<()> {
@@ -250,6 +213,14 @@ fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
             _ => return Err(bad()),
         },
         FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
+        FieldType::Named(_) => {
+            let mut p = Parser::new(text, false).map_err(|e| e.to_string())?;
+            let v = p.value().map_err(|e| e.to_string())?;
+            if *p.peek() != syntax::image_definition::Tok::Eof {
+                return Err(format!("`{text}` is more than one value"));
+            }
+            v
+        }
         _ => Value::Int(text.parse().map_err(|_| bad())?),
     })
 }
@@ -267,6 +238,10 @@ pub fn json_value(v: &B) -> String {
             Ok(s) => json_string(s),
             Err(_) => format!("<{} bytes>", b.bytes.len()),
         },
+        B::Document(d) => {
+            let fields: Vec<String> = d.iter().map(|(k, v)| format!("{}: {}", json_string(k), json_value(v))).collect();
+            format!("{{{}}}", fields.join(", "))
+        }
         other => json_string(&other.to_string()),
     }
 }
@@ -280,29 +255,35 @@ pub fn fields(schemas: &Messages, type_name: &str, value: &Value) -> Result<Docu
     if let Some((k, _)) = given.iter().find(|(k, _)| k.name == wire::TYPE_KEY) {
         return Err(format!("{}: the message's type is named before its braces, `{type_name} {{ ... }}`, not with `{}`", k.pos, wire::TYPE_KEY));
     }
+    document(schemas, ty, given, type_name)
+}
+
+/// The fields `given`, of a value of type `ty`, each checked against the
+/// type, in declared order, as the module's own encoder writes them. `at`
+/// says where the value is, for errors.
+fn document(schemas: &Messages, ty: &MessageType, given: &[(Ident, Value)], at: &str) -> Result<Document, String> {
     let mut fields = Document::new();
     for (name, v) in given {
         if fields.contains_key(&name.name) {
             return Err(format!("field `{}` given twice", name.name));
         }
-        fields.insert(name.name.clone(), field_bson(ty, &name.name, v)?);
+        let Some(f) = ty.field(&name.name) else {
+            return Err(format!("`{at}` has no field `{}`", name.name));
+        };
+        fields.insert(name.name.clone(), to_bson(schemas, &f.ty, v, &format!("{at}.{}", name.name))?);
     }
-    // In declared order, as the module's own encoder writes them.
     let mut ordered = Document::new();
     for f in &ty.fields {
-        if let Some(v) = fields.get(&f.name) {
-            ordered.insert(f.name.clone(), v.clone());
+        if let Some(v) = fields.remove(&f.name) {
+            ordered.insert(f.name.clone(), v);
         }
     }
     Ok(ordered)
 }
 
-/// The BSON for `value` as field `field` of `ty`, if it fits the field's type.
-pub fn field_bson(ty: &MessageType, field: &str, value: &Value) -> std::result::Result<B, String> {
-    let Some(Field { ty: fty, .. }) = ty.field(field) else {
-        return Err(format!("`{}` has no field `{field}`", ty.name));
-    };
-    Ok(match (fty, value) {
+/// The BSON for `value`, if it fits field type `t`. `at` says where it is.
+fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::result::Result<B, String> {
+    Ok(match (t, value) {
         (FieldType::String, Value::Str(s)) => B::String(s.clone()),
         (FieldType::Bool, Value::Bool(b)) => B::Boolean(*b),
         (FieldType::F32 | FieldType::F64, Value::Float(x)) => B::Double(*x),
@@ -315,10 +296,16 @@ pub fn field_bson(ty: &MessageType, field: &str, value: &Value) -> std::result::
             }
             wire::int_to_bson(t, *i)
         }
-        (_, Value::Object(_) | Value::List(_)) => {
-            return Err(format!("`{}.{field}` is {fty}; a BSON message's fields are flat, so far", ty.name));
+        (FieldType::Named(n), Value::Object(given)) => {
+            let ty = message_type(schemas, n)?;
+            let doc = document(schemas, ty, given, at)?;
+            if let Some(missing) = ty.fields.iter().find(|f| !doc.contains_key(&f.name)) {
+                return Err(format!("`{at}` is missing field `{}`", missing.name));
+            }
+            B::Document(doc)
         }
-        (t, v) => return Err(format!("`{}.{field}` is {t}, but was given {v}", ty.name)),
+        (FieldType::Named(n), v) => return Err(format!("`{at}` is a `{n}`, written `{{ <field>: <value>, ... }}`, but was given {v}")),
+        (t, v) => return Err(format!("`{at}` is {t}, but was given {v}")),
     })
 }
 
@@ -352,7 +339,7 @@ mod tests {
         let g = &m.types["Greeting"];
         assert_eq!((g.doc.as_str(), g.field_docs[0].as_str()), ("Configures a Greeter.", "Put before each name."));
         let err = |src: &str| format!("{:#}", Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap_err());
-        assert!(err("message A { x: Strin }").contains("`Strin` is not a field type"));
+        assert!(err("message A { x: Strin }").contains("1:16: `Strin` is not a field type, nor a message type declared or imported here"));
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
         assert!(err("message A {} message A {}").contains("message `A` is declared twice"));
         assert!(err("object A {}").contains("expected `import` or `message`"));
@@ -364,6 +351,45 @@ mod tests {
         assert!(m.types.contains_key("Greeting"));
         let e = format!("{:#}", Bson::parse_messages(r#"import { Greeting as G } from "./g.oth""#, &mut import).unwrap_err());
         assert!(e.contains("can't be renamed"), "{e}");
+    }
+
+    const NESTED: &str = r#"
+        message Record { owner: Person, note: string }
+        message Person { name: string, age: u8 }
+    "#;
+
+    #[test]
+    fn fields_may_be_messages() {
+        let m = messages(NESTED);
+        assert_eq!(m.types["Record"].fields[0].ty, FieldType::Named("Person".into()), "named before it is declared");
+        assert_eq!(m.closure("Record"), ["Record", "Person"]);
+        let bytes = Bson::encode_message(&m, "Record", &value(r#"{ owner: { age: 3, name: "Al" }, note: "n" }"#)).unwrap();
+        let msg = Message::decode(&bytes).unwrap();
+        let owner = msg.fields.get_document("owner").unwrap();
+        assert_eq!(owner.keys().collect::<Vec<_>>(), ["name", "age"], "in declared order, and without a $type");
+        assert_eq!(Bson.show(&bytes).unwrap()[0], ("owner".into(), r#"{"name": "Al", "age": 3}"#.into()));
+        let err = |src: &str| Bson::encode_message(&m, "Record", &value(src)).unwrap_err();
+        assert!(err(r#"{ owner: { name: "Al" }, note: "n" }"#).contains("`Record.owner` is missing field `age`"));
+        assert!(err(r#"{ owner: { name: "Al", age: 300 }, note: "n" }"#).contains("300 does not fit in u8"));
+        assert!(err(r#"{ owner: { name: "Al", age: 3, x: 1 }, note: "n" }"#).contains("`Record.owner` has no field `x`"));
+        assert!(err(r#"{ owner: "Al", note: "n" }"#).contains("`Record.owner` is a `Person`, written `{ <field>: <value>, ... }`, but was given \"Al\""));
+        let schemas = Bson::schemas(&m);
+        assert_eq!(Bson.literal(&schemas, "Record", "owner", r#"{ name: "Al", age: 3 }"#).map(|v| v.to_string()), Ok(r#"{ name: "Al", age: 3 }"#.into()));
+        assert!(Bson.literal(&schemas, "Record", "owner", "{} {}").unwrap_err().contains("more than one value"));
+    }
+
+    #[test]
+    fn importing_a_type_brings_the_types_it_names() {
+        let mut import = |_: &str| Ok(messages(NESTED));
+        let mut parse = |src: &str| Bson::parse_messages(src, &mut import);
+        let m = parse(r#"import { Record } from "./r.oth""#).unwrap();
+        assert!(m.declared.is_empty() && m.types.contains_key("Person"), "{m:?}");
+        assert!(parse(r#"import { Record, Person } from "./r.oth""#).is_ok(), "and may name them too");
+        assert!(parse(r#"import { Record } from "./r.oth" message Mine { p: Person }"#).is_ok());
+        let e = format!("{:#}", parse(r#"import { Record } from "./r.oth" message Person { name: string, age: u8 }"#).unwrap_err());
+        assert!(e.contains("`Person` comes from \"./r.oth\" with a type imported from there, and is declared here too"), "{e}");
+        let e = format!("{:#}", parse(r#"message Person { name: string } import { Record } from "./r.oth""#).unwrap_err());
+        assert!(e.contains("`Record` needs \"./r.oth\"'s `Person`, which is not the `Person` already here"), "{e}");
     }
 
     #[test]
@@ -379,7 +405,7 @@ mod tests {
         assert!(err("Nope", "{}").contains("no module in the image declares a message type `Nope`"));
         assert!(err("Greeting", r#"{ prefix: 1, excited: true }"#).contains("`Greeting.prefix` is string, but was given 1"));
         assert!(err("Odd", r#"{ a: 300, b: 1, c: 1, d: "x" }"#).contains("300 does not fit in u8"));
-        assert!(err("Odd", r#"{ a: 1, b: [1], c: 1, d: "x" }"#).contains("fields are flat"));
+        assert!(err("Odd", r#"{ a: 1, b: [1], c: 1, d: "x" }"#).contains("`Odd.b` is f32, but was given [1]"));
         assert!(err("Greeting", r#""text""#).contains("a message is written `Greeting { <field>: <value>, ... }`"));
         let formats = format::Formats::new(vec![Box::new(Bson)]);
         let all = format::AllSchemas::from([(BSON.to_string(), Bson::schemas(&m))]);

@@ -19,6 +19,9 @@ pub enum FieldType {
     F64,
     /// `bytes`; `ArrayBuffer` in AssemblyScript.
     Bytes,
+    /// Another message type, by name, carried as an embedded document
+    /// without a `$type`: the field's type says what it is.
+    Named(String),
 }
 
 impl FieldType {
@@ -42,6 +45,14 @@ impl FieldType {
         })
     }
 
+    /// The message types it names.
+    pub fn names(&self) -> Vec<&str> {
+        match self {
+            FieldType::Named(n) => vec![n],
+            _ => vec![],
+        }
+    }
+
     /// Inclusive range of values an integer type can hold.
     pub fn int_range(&self) -> Option<(i128, i128)> {
         Some(match self {
@@ -61,6 +72,7 @@ impl FieldType {
 impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
+            FieldType::Named(n) => return f.write_str(n),
             FieldType::String => "string",
             FieldType::Bool => "bool",
             FieldType::I8 => "i8",

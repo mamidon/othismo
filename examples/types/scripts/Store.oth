@@ -12,5 +12,13 @@ export schemas application/bson {
   message Record {
     name: string
     count: i32
+    ## Another message.
+    owner: Person
+  }
+
+  ## Someone.
+  message Person {
+    name: string
+    age: u8
   }
 }

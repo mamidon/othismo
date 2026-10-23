@@ -8,11 +8,14 @@ import { Message, Reader, Writer, bson, registerMessage } from "othismo/bson"
 export class Record extends Message {
   name: string
   count: i32
+  /** Another message. */
+  owner: Person
 
-  constructor(name: string, count: i32) {
+  constructor(name: string, count: i32, owner: Person) {
     super()
     this.name = name
     this.count = count
+    this.owner = owner
   }
 
   /** The `Record` in `p`, or null if it holds none. */
@@ -26,9 +29,38 @@ export class Record extends Message {
   encode(w: Writer): void {
     w.string("name", this.name)
     w.i32("count", this.count)
+    w.doc("owner", this.owner)
   }
+  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), Person.decode(r.doc("owner"))) }
 }
-registerMessage("Record", (r: Reader): Message => new Record(r.string("name"), r.i32("count")))
+registerMessage("Record", (r: Reader): Message => Record.decode(r))
+
+/** Someone. */
+export class Person extends Message {
+  name: string
+  age: u8
+
+  constructor(name: string, age: u8) {
+    super()
+    this.name = name
+    this.age = age
+  }
+
+  /** The `Person` in `p`, or null if it holds none. */
+  static fromPayload(p: Payload | null): Person | null {
+    const m = bson.decode(p)
+    return m instanceof Person ? changetype<Person>(m) : null
+  }
+  toPayload(): Payload { return bson.payload(this) }
+
+  typeName(): string { return "Person" }
+  encode(w: Writer): void {
+    w.string("name", this.name)
+    w.i32("age", <i32>this.age)
+  }
+  static decode(r: Reader): Person { return new Person(r.string("name"), <u8>r.i64("age")) }
+}
+registerMessage("Person", (r: Reader): Message => Person.decode(r))
 
 /**
  * Keeps the last `Record` written to it, to read back: a payload of each of

@@ -82,6 +82,7 @@ export namespace bson {
 
 const BSON_DOUBLE: u8 = 0x01;
 const BSON_STRING: u8 = 0x02;
+const BSON_DOCUMENT: u8 = 0x03;
 const BSON_BINARY: u8 = 0x05;
 const BSON_BOOL: u8 = 0x08;
 const BSON_INT32: u8 = 0x10;
@@ -129,6 +130,13 @@ export class Writer {
     this.u32(<u32>v.byteLength);
     this.u8(0); // generic subtype
     this.raw(changetype<usize>(v), v.byteLength);
+  }
+
+  /** For message fields: `m`'s fields, as an embedded document. */
+  doc(name: string, m: Message): void {
+    const sub = new Writer();
+    m.encode(sub);
+    this.element(BSON_DOCUMENT, name, sub.finish());
   }
 
   /** An element of any BSON type, its value's bytes as BSON lays them out. */
@@ -196,7 +204,7 @@ function size(tag: u8, p: usize, end: usize, name: string): usize {
     case 0x13: return 16; // decimal128
     case BSON_STRING: case 0x0D: case 0x0E: return 4 + <usize>load<u32>(p); // and code, symbol
     case BSON_BINARY: return 5 + <usize>load<u32>(p);
-    case 0x03: case 0x04: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
+    case BSON_DOCUMENT: case 0x04: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
     case 0x0C: return 4 + <usize>load<u32>(p) + 12; // db pointer
     case 0x0B: { // regex: two cstrings
       let q = p;
@@ -274,6 +282,19 @@ export class Reader {
     const len = <i32>load<u32>(f.offset);
     const out = new ArrayBuffer(len);
     memory.copy(changetype<usize>(out), f.offset + 5, <usize>len);
+    return out;
+  }
+
+  /** A message field's fields, for its type's `decode`. */
+  doc(name: string): Reader {
+    return new Reader(this.embedded(this.field(name, BSON_DOCUMENT)));
+  }
+
+  /** A copy of an embedded document. */
+  private embedded(f: Field): ArrayBuffer {
+    const len = <i32>load<u32>(f.offset);
+    const out = new ArrayBuffer(len);
+    memory.copy(changetype<usize>(out), f.offset, <usize>len);
     return out;
   }
 
