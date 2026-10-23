@@ -3,7 +3,7 @@ use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot.field=value>]... <image>
+const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot[.field]=value>]... <image>
        othismo test [--no-checks] <image>
        othismo build [-v] [--no-sources] <image.img> -o <out.rti>
        othismo unpack <image> <dir>
@@ -16,9 +16,11 @@ An image is a .img source, which is built in memory, or a built .rti file.
   --check         validate the image, print each instance's view and what
                   it can reach at most, and exit without running it
   --no-checks     don't hold objects to their interfaces while they run
-  --with          give slots values from a file: `listen { address: \"0.0.0.0:80\" }`
-  --set           give one slot field a value, after any files; raw text for
-                  a string, a literal otherwise
+  --with          give slots values from a file: `listen = \"0.0.0.0:80\"`, or
+                  `db { port: 5432 }` for a message
+  --set           give a slot, or one field of a message slot, a value, after
+                  any files; raw text for a payload or a string, a literal
+                  otherwise
   --no-sources    leave the reference copies of the sources out of a build
   -v              list each packed path that a later include replaced
 

@@ -24,7 +24,7 @@ use crate::pack::Pack;
 use crate::env::{self, EnvObject, Event, Reply};
 use crate::iface;
 use crate::ns::{self, Namespace, Resolved, Status, Verb};
-use crate::payload::{self, Payload};
+use crate::payload::Payload;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -350,7 +350,7 @@ impl<'p> Runtime<'p> {
         let image_view = self.program.instances.len();
         for s in &self.program.startup {
             let what = format!("{} {}", s.verb.keyword(), s.path);
-            let body = s.body.as_ref().map(|b| b.message().map(|m| Payload::new(payload::BSON, m.encode()))).transpose()?;
+            let body = s.body.as_ref().map(|b| b.payload()).transpose()?;
             let mut shared = self.shared.borrow_mut();
             let to = shared.ns.resolve(image_view, &s.path).and_then(|r| {
                 if r.read_only && !s.verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }

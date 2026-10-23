@@ -11,7 +11,7 @@
 //!
 //! Blobs are named by the SHA-256 of their contents and stored once.
 
-use crate::check::{self, Kind, Program};
+use crate::check::{self, Arg, Kind, Program, SlotKind};
 use crate::render;
 use crate::tree::{Node, Tree};
 use anyhow::{Context, Result, bail};
@@ -154,15 +154,8 @@ pub fn describe(pack: &Pack) -> String {
     let p = &pack.program;
     let mut out = String::new();
     for slot in &p.slots {
-        let fields: Vec<String> = match &slot.value {
-            Some(value) => slot
-                .origins
-                .iter()
-                .map(|(f, origin)| format!("{f}: {} ({origin})", render::json_value(&value.fields[f])))
-                .collect(),
-            None => vec!["unbound".into()],
-        };
-        out.push_str(&format!("slot {} : {} {{ {} }}\n", slot.name, slot.type_name, fields.join(", ")));
+        out.push_str(&describe_slot(slot));
+        out.push('\n');
     }
     if !p.slots.is_empty() {
         out.push('\n');
@@ -189,6 +182,28 @@ pub fn describe(pack: &Pack) -> String {
     };
     out.push_str(&check::describe(p, &about));
     out
+}
+
+/// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a message,
+/// each field's value and where it came from.
+fn describe_slot(slot: &check::Slot) -> String {
+    let ty = match &slot.kind {
+        SlotKind::Message { type_name, .. } => type_name.as_str(),
+        SlotKind::Payload { ty, .. } => ty.as_str(),
+    };
+    let origin = |f: &str| slot.origins.iter().find(|(name, _)| name == f).map(|(_, o)| o.as_str()).unwrap_or("?");
+    match &slot.value {
+        None => format!("slot {} : {ty} (unbound)", slot.name),
+        Some(Arg::Message(m)) => {
+            let fields: Vec<String> =
+                m.fields.iter().map(|(f, v)| format!("{f}: {} ({})", render::json_value(v), origin(f))).collect();
+            format!("slot {} : {ty} {{ {} }}", slot.name, fields.join(", "))
+        }
+        Some(value) => {
+            let text = value.text().unwrap_or_default();
+            format!("slot {} : {ty} = {} ({})", slot.name, render::json_value(&bson::Bson::String(text)), origin(""))
+        }
+    }
 }
 
 fn human_size(bytes: u64) -> String {

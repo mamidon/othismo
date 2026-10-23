@@ -1,11 +1,11 @@
 //! Resolves and validates a parsed image into a [`Program`] the runtime can run.
 
 use crate::iface::{self, Header, Object, Trait};
-use crate::image::{self, Ident, Image, Source, Value};
+use crate::image::{self, Ident, Image, Literal, SlotDecl, Source, Value};
 use crate::messages::{FieldType, MessageType};
 use crate::ns::{self, Namespace, Status, Verb};
 use crate::pattern::Pattern;
-use crate::payload;
+use crate::payload::{self, Payload};
 use crate::wire::{self, Message};
 use anyhow::{Context, Result, anyhow, bail};
 use bson::{Bson, Document};
@@ -97,10 +97,12 @@ pub struct Startup {
     pub body: Option<Arg>,
 }
 
-/// A message the image gives, or a slot standing for one.
+/// What the image gives in a startup request: a message, a payload, or a
+/// slot standing for either.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Arg {
     Message(Message),
+    Payload(Payload),
     Slot(usize),
 }
 
@@ -109,23 +111,60 @@ impl Arg {
     pub fn message(&self) -> Result<&Message> {
         match self {
             Arg::Message(m) => Ok(m),
+            Arg::Payload(p) => bail!("a {} payload isn't a message", p.ty),
             Arg::Slot(i) => bail!("slot {i} has no value; the image hasn't been bound"),
         }
     }
+
+    /// What it carries, as a payload, once any slot has been bound: a
+    /// message is a BSON one.
+    pub fn payload(&self) -> Result<Payload> {
+        match self {
+            Arg::Message(m) => Ok(Payload::new(payload::BSON, m.encode())),
+            Arg::Payload(p) => Ok(p.clone()),
+            Arg::Slot(i) => bail!("slot {i} has no value; the image hasn't been bound"),
+        }
+    }
+
+    /// Its text, for a text payload, once any slot has been bound.
+    pub fn text(&self) -> Result<String> {
+        let p = self.payload()?;
+        if !p.is_text() {
+            bail!("expected text, and it is {}", p.ty);
+        }
+        String::from_utf8(p.bytes).context("its text isn't UTF-8")
+    }
 }
 
-/// `require <name> : <Type> { defaults }`
+/// `require <name> : <Type> { defaults }` or `require <name> : <content
+/// type> = "<default>"`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Slot {
     pub name: String,
-    pub type_name: String,
-    /// The image's defaults: some, all or none of the type's fields.
-    pub defaults: Document,
-    /// Once bound: the value, and where each field came from, in field order.
+    pub kind: SlotKind,
+    /// Once bound: the value, and where it, or each of its fields, came from.
     #[serde(skip)]
-    pub value: Option<Message>,
+    pub value: Option<Arg>,
     #[serde(skip)]
     pub origins: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SlotKind {
+    /// A message, with the image's defaults: some, all or none of the type's fields.
+    Message { type_name: String, defaults: Document },
+    /// A payload of a content type, given as a string.
+    Payload { ty: String, default: Option<String> },
+}
+
+impl Slot {
+    /// The content type of what it stands for.
+    pub fn content_type(&self) -> &str {
+        match &self.kind {
+            SlotKind::Message { .. } => payload::BSON,
+            SlotKind::Payload { ty, .. } => ty,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -276,8 +315,16 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         if slots.iter().any(|s| s.name == *name) {
             bail!(err_at(&req.name, format!("slot `{name}` is declared twice")));
         }
-        let (type_name, defaults) = body_fields(&messages_in_scope, &req.body, false)?;
-        slots.push(Slot { name: name.clone(), type_name, defaults, value: None, origins: vec![] });
+        let kind = match &req.slot {
+            SlotDecl::Message(body) => {
+                let (type_name, defaults) = body_fields(&messages_in_scope, body, false)?;
+                SlotKind::Message { type_name, defaults }
+            }
+            SlotDecl::Payload { ty, default } => {
+                SlotKind::Payload { ty: content_type(ty)?, default: default.clone() }
+            }
+        };
+        slots.push(Slot { name: name.clone(), kind, value: None, origins: vec![] });
     }
 
     let mut index: HashMap<&str, usize> = HashMap::new();
@@ -351,7 +398,7 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
                     (None, [(c, _), ..]) => bail!("{}: {name} takes no config", c.verb_pos),
                     (Some(t), [(c, _)]) => {
                         let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
-                        if arg_type(&slots, &arg) != t {
+                        if arg_message(&slots, &arg) != Some(t) {
                             bail!(needs());
                         }
                         Some(arg)
@@ -428,9 +475,8 @@ fn check_requests(
 ) -> Result<()> {
     let name = &inst.name.name;
     for &(r, path) in requests {
-        // A message literal or a slot is a BSON payload.
-        body_arg_check(scope, slots, r.body.as_ref())?;
-        let body_type = r.body.as_ref().map(|_| payload::BSON);
+        let body = r.body.as_ref().map(|b| body_arg(scope, slots, b)).transpose()?;
+        let body_type = body.as_ref().map(|b| arg_type(slots, b));
         let Some(entry) = obj.serving(path) else {
             bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
         };
@@ -591,10 +637,6 @@ fn config_type(name: &str) -> Option<&'static str> {
     CONFIG.iter().find(|(n, _)| *n == name).map(|(_, ty)| *ty)
 }
 
-/// Checks a startup request's message literal, if it has one.
-fn body_arg_check(scope: &BTreeMap<String, MessageType>, slots: &[Slot], body: Option<&image::Body>) -> Result<()> {
-    body.map(|b| body_arg(scope, slots, b)).transpose().map(|_| ())
-}
 
 /// How the runtime implements the built-in type `name`. A `Packed.Files`
 /// serves its `includes`.
@@ -717,8 +759,16 @@ fn all_messages(headers: &BTreeMap<String, Header>, scope: &BTreeMap<String, Mes
     Ok(out)
 }
 
-/// A message literal, or a slot's name standing alone.
-fn body_arg(messages: &BTreeMap<String, MessageType>, slots: &[Slot], body: &image::Body) -> Result<Arg> {
+/// A startup request's literal: a message, a slot's name standing alone, or
+/// a payload.
+fn body_arg(messages: &BTreeMap<String, MessageType>, slots: &[Slot], literal: &Literal) -> Result<Arg> {
+    let body = match literal {
+        Literal::Message(body) => body,
+        Literal::Text { ty, text, .. } => {
+            let ty = ty.as_ref().map(content_type).transpose()?.unwrap_or_else(|| payload::TEXT.to_string());
+            return Ok(Arg::Payload(Payload::new(ty, text.as_bytes())));
+        }
+    };
     let tid = &body.type_name;
     if let Some(i) = slots.iter().position(|s| s.name == tid.name) {
         if body.fields.is_some() {
@@ -730,11 +780,33 @@ fn body_arg(messages: &BTreeMap<String, MessageType>, slots: &[Slot], body: &ima
     Ok(Arg::Message(Message { type_name, fields }))
 }
 
+/// The content type of what `arg` carries.
 fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
     match arg {
-        Arg::Message(m) => &m.type_name,
-        Arg::Slot(i) => &slots[*i].type_name,
+        Arg::Message(_) => payload::BSON,
+        Arg::Payload(p) => &p.ty,
+        Arg::Slot(i) => slots[*i].content_type(),
     }
+}
+
+/// The message type `arg` carries, if it carries a message.
+fn arg_message<'a>(slots: &'a [Slot], arg: &'a Arg) -> Option<&'a str> {
+    match arg {
+        Arg::Message(m) => Some(&m.type_name),
+        Arg::Payload(_) => None,
+        Arg::Slot(i) => match &slots[*i].kind {
+            SlotKind::Message { type_name, .. } => Some(type_name),
+            SlotKind::Payload { .. } => None,
+        },
+    }
+}
+
+/// The content type an image writes, which must be well-formed.
+fn content_type(id: &Ident) -> Result<String> {
+    if !payload::valid(&id.name) {
+        bail!(err_at(id, format!("`{}` isn't a well-formed content type", id.name)));
+    }
+    Ok(id.name.clone())
 }
 
 /// A message literal's type and fields. With `complete`, every field must be given.
@@ -1019,7 +1091,8 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
-        assert_eq!(p.slots[1].defaults, bson::doc! { "name": "x", "count": 3 }, "defaults may be partial");
+        let SlotKind::Message { defaults, .. } = &p.slots[1].kind else { panic!() };
+        assert_eq!(*defaults, bson::doc! { "name": "x", "count": 3 }, "defaults may be partial");
         assert_eq!(p.instances[1].config, Some(Arg::Slot(0)));
         assert_eq!(p.startup[0].body, Some(Arg::Slot(1)));
 
@@ -1108,6 +1181,13 @@ mod tests {
         let only_text = "object G { serves { /greeting write text/plain } }";
         let e = err_with(r#"instance g : G mount /g g write /g/greeting Text { text: "x" }"#, &[("G", only_text)]);
         assert!(e.contains("doesn't take `write application/bson` at `/greeting`"), "{e}");
+        let texts = "object T { serves { /plain write text/plain  /any write text/* } }";
+        let ok = r#"require t : text/plain = "x" instance t : T mount /t t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;
+        assert!(check_with(ok, &[("T", texts)]).is_ok(), "{:#}", check_with(ok, &[("T", texts)]).unwrap_err());
+        let e = err_with(r#"instance t : T mount /t t write /t/plain text/html "<p>""#, &[("T", texts)]);
+        assert!(e.contains("doesn't take `write text/html` at `/plain`"), "{e}");
+        let e = err_with(r#"instance t : T mount /t t write /t/plain text/ "x""#, &[("T", texts)]);
+        assert!(e.contains("`text/` isn't a well-formed content type"), "{e}");
         let e = err(r#"instance net : Listener mount /net net control /net Listen { address: "a" } read /net/a/b"#);
         assert!(e.contains("`net` serves nothing at `/a/b`"), "built-ins have headers too: {e}");
     }

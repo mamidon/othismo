@@ -259,7 +259,7 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
     let e = format!("{:#}", slots::bind(&mut opened.program.clone(), &[]).unwrap_err());
     assert!(e.ends_with("root.path: required, not provided"), "{e}");
 
-    let given = Given { origin: "--set".into(), slot: "root".into(), field: "path".into(), value: GivenValue::Text("www".into()) };
+    let given = Given { origin: "--set".into(), slot: "root".into(), field: Some("path".into()), value: GivenValue::Text("www".into()) };
     slots::bind(&mut opened.program, &[given]).unwrap();
     assert_eq!(
         pack::describe(&opened),
@@ -309,6 +309,6 @@ fn the_cli_layers_value_files_then_set() {
     assert!(out.contains("info.kind: required, not provided"), "{out}");
     let (code, out) = check(&["--set", "nonsense"]);
     assert_eq!(code, Some(1));
-    assert!(out.contains("expected slot.field=value"), "{out}");
+    assert!(out.contains("expected slot=value or slot.field=value"), "{out}");
     assert_eq!(check(&["--set"]).0, Some(2), "a missing argument is a usage error");
 }

@@ -57,12 +57,20 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// `require <name> : <Type> [{ defaults }]`: a slot the host fills in.
+/// `require <name> : <Type> [{ defaults }]` or `require <name> :
+/// <content type> [= "<default>"]`: a slot the host fills in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Require {
     pub name: Ident,
-    /// The slot's type and any default fields, which need not be all of them.
-    pub body: Body,
+    pub slot: SlotDecl,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotDecl {
+    /// A message: its type and any default fields, which need not be all of them.
+    Message(Body),
+    /// A payload of a content type, such as `text/plain`, given as a string.
+    Payload { ty: Ident, default: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +110,16 @@ pub struct Request {
     pub verb_pos: Pos,
     /// A path in the image's view.
     pub path: Path,
-    pub body: Option<Body>,
+    pub body: Option<Literal>,
+}
+
+/// What a startup request carries.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Literal {
+    /// A message literal, or a slot's name.
+    Message(Body),
+    /// `"text"`, a `text/plain` payload, or `<content type> "text"`.
+    Text { ty: Option<Ident>, text: String, pos: Pos },
 }
 
 /// `include "<source>" [at <path>]`
@@ -156,6 +173,8 @@ pub(crate) enum Tok {
     Arrow,
     /// `*` after an answer's type: a stream.
     Star,
+    /// `=`, before a slot's default.
+    Eq,
     /// A content type: `text/plain`, `text/*`, `*/*`, `text/html;charset=utf-8`.
     Type(String),
     /// A `##` comment, which documents what follows. Only headers keep them.
@@ -177,6 +196,7 @@ impl std::fmt::Display for Tok {
             Tok::Colon => write!(f, "`:`"),
             Tok::Arrow => write!(f, "`->`"),
             Tok::Star => write!(f, "`*`"),
+            Tok::Eq => write!(f, "`=`"),
             Tok::Type(s) => write!(f, "content type `{s}`"),
             Tok::Doc(_) => write!(f, "a `##` comment"),
             Tok::Eof => write!(f, "end of file"),
@@ -247,6 +267,9 @@ pub(crate) fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
             push_type(&mut toks, chars[start..i].iter().collect(), pos, Pos { line, col });
         } else if c == '*' {
             toks.push((Tok::Star, pos));
+            bump!();
+        } else if c == '=' {
+            toks.push((Tok::Eq, pos));
             bump!();
         } else if c == '{' || c == '}' || c == ',' || c == ':' {
             toks.push((
@@ -462,9 +485,22 @@ impl Parser {
         }
         .ok_or_else(|| anyhow::anyhow!("{verb_pos}: expected a verb"))?;
         let path = self.path()?;
-        let body = match self.peek() {
-            Tok::Ident(w) if !DECLS.contains(&w.as_str()) && Verb::from_keyword(w).is_none() => Some(self.body()?),
-            Tok::LBrace => Some(self.body()?),
+        let body = match self.peek().clone() {
+            Tok::Ident(w) if !DECLS.contains(&w.as_str()) && Verb::from_keyword(&w).is_none() => {
+                Some(Literal::Message(self.body()?))
+            }
+            Tok::LBrace => Some(Literal::Message(self.body()?)),
+            Tok::Str(text) => {
+                let (_, pos) = self.next();
+                Some(Literal::Text { ty: None, text, pos })
+            }
+            Tok::Type(ty) => {
+                let (_, pos) = self.next();
+                match self.next() {
+                    (Tok::Str(text), _) => Some(Literal::Text { ty: Some(Ident { name: ty, pos }), text, pos }),
+                    (other, pos) => bail!("{pos}: expected a quoted string after `{ty}`, found {other}"),
+                }
+            }
             _ => None,
         };
         Ok(Request { verb, verb_pos, path, body })
@@ -489,8 +525,17 @@ impl Parser {
         self.expect_kw("require")?;
         let name = self.ident("slot name", false)?;
         self.expect(Tok::Colon)?;
-        let body = self.body()?;
-        Ok(Require { name, body })
+        let Tok::Type(ty) = self.peek().clone() else { return Ok(Require { name, slot: SlotDecl::Message(self.body()?) }) };
+        let (_, pos) = self.next();
+        let mut default = None;
+        if *self.peek() == Tok::Eq {
+            self.next();
+            match self.next() {
+                (Tok::Str(s), _) => default = Some(s),
+                (other, pos) => bail!("{pos}: expected the slot's default, a quoted string, found {other}"),
+            }
+        }
+        Ok(Require { name, slot: SlotDecl::Payload { ty: Ident { name: ty, pos }, default } })
     }
 
     fn instance(&mut self) -> Result<Instance> {
@@ -591,13 +636,22 @@ impl Parser {
         Ok(fields)
     }
 
-    /// A value file: `slot { field: value, ... }`, any number of times.
+    /// A value file: `slot { field: value, ... }` or `slot = "text"`, any
+    /// number of times.
     fn values(&mut self) -> Result<Vec<SlotValues>> {
         let mut out = vec![];
         while *self.peek() != Tok::Eof {
             let slot = self.ident("slot name", false)?;
-            let fields = self.fields()?;
-            out.push(SlotValues { slot, fields });
+            let value = if *self.peek() == Tok::Eq {
+                self.next();
+                match self.next() {
+                    (Tok::Str(s), pos) => SlotValue::Text(s, pos),
+                    (other, pos) => bail!("{pos}: expected a quoted string, found {other}"),
+                }
+            } else {
+                SlotValue::Fields(self.fields()?)
+            };
+            out.push(SlotValues { slot, value });
         }
         Ok(out)
     }
@@ -607,15 +661,23 @@ pub fn parse(src: &str) -> Result<Image> {
     Parser::new(src, false)?.image()
 }
 
-/// One block of a value file.
+/// One slot's values in a value file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlotValues {
     pub slot: Ident,
-    pub fields: Vec<(Ident, Value)>,
+    pub value: SlotValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotValue {
+    /// `slot { field: value, ... }`, for a message.
+    Fields(Vec<(Ident, Value)>),
+    /// `slot = "text"`, for a payload.
+    Text(String, Pos),
 }
 
 /// Parses a value file, which gives slots their values in the image's own
-/// block syntax: `listen { address: "0.0.0.0:80" }`.
+/// syntax: `listen = "0.0.0.0:80"`, `db { port: 5432 }`.
 pub fn parse_values(src: &str) -> Result<Vec<SlotValues>> {
     Parser::new(src, false)?.values()
 }
@@ -663,18 +725,33 @@ mod tests {
         let reqs = &img.requests;
         let verbs: Vec<_> = reqs.iter().map(|r| r.verb).collect();
         assert_eq!(verbs, [Verb::Control, Verb::Write, Verb::Invoke, Verb::Remove, Verb::Watch]);
+        let msg = |r: &Request| match r.body.as_ref().unwrap() {
+            Literal::Message(b) => b.clone(),
+            other => panic!("{other:?}"),
+        };
         assert_eq!(reqs[0].path.path, "/net");
-        assert_eq!(reqs[0].body.as_ref().unwrap().type_name.name, "Listen");
+        assert_eq!(msg(&reqs[0]).type_name.name, "Listen");
         assert_eq!(reqs[1].path.path, "/echo/greeting");
-        let f = reqs[1].body.as_ref().unwrap().fields.as_ref().unwrap();
+        let f = msg(&reqs[1]).fields.unwrap();
         assert_eq!(f[0].1, Value::Str("hi \"there\"".into()));
         assert_eq!(f[1].1, Value::Int(-3));
         assert_eq!(f[2].1, Value::Float(1.5));
         assert_eq!(f[3].1, Value::Bool(true));
         assert_eq!(reqs[2].path.path, "/echo");
-        assert_eq!(reqs[2].body.as_ref().unwrap().fields, None);
+        assert_eq!(msg(&reqs[2]).fields, None);
         assert_eq!(reqs[3].body, None, "a verb ends a body-less request");
         assert_eq!(reqs[4].body, None);
+    }
+
+    #[test]
+    fn text_literals_are_payloads() {
+        let img = parse(r#"write /a "hi" write /b text/html "<p>" remove /c"#).unwrap();
+        let bodies: Vec<_> = img.requests.iter().map(|r| r.body.clone()).collect();
+        assert_eq!(bodies[0], Some(Literal::Text { ty: None, text: "hi".into(), pos: Pos { line: 1, col: 10 } }));
+        let Some(Literal::Text { ty: Some(ty), text, .. }) = &bodies[1] else { panic!("{:?}", bodies[1]) };
+        assert_eq!((ty.name.as_str(), text.as_str()), ("text/html", "<p>"));
+        assert_eq!(bodies[2], None);
+        assert!(parse("write /a text/plain 3").unwrap_err().to_string().contains("expected a quoted string after `text/plain`"));
     }
 
     #[test]
@@ -693,22 +770,41 @@ mod tests {
             control /net listen"#,
         )
         .unwrap();
-        let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), r.body.type_name.name.as_str())).collect();
-        assert_eq!(reqs, [("listen", "Listen"), ("admin", "Text")]);
-        assert_eq!(img.requires[0].body.fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
-        assert_eq!(img.requires[1].body.fields, None);
-        let body = img.requests[0].body.as_ref().unwrap();
+        let msg = |r: &Require| match &r.slot {
+            SlotDecl::Message(b) => b.clone(),
+            other => panic!("{other:?}"),
+        };
+        let reqs: Vec<_> = img.requires.iter().map(|r| (r.name.name.as_str(), msg(r).type_name.name)).collect();
+        assert_eq!(reqs, [("listen", "Listen".to_string()), ("admin", "Text".to_string())]);
+        assert_eq!(msg(&img.requires[0]).fields.as_ref().unwrap()[0].1, Value::Str("127.0.0.1:8080".into()));
+        assert_eq!(msg(&img.requires[1]).fields, None);
+        let Some(Literal::Message(body)) = img.requests[0].body.as_ref() else { panic!() };
         assert_eq!(body.type_name.name, "listen", "a slot is used like a unit message");
         assert!(parse("require : Text").is_err());
         assert!(parse("instance require : P").is_err(), "`require` is a keyword");
+
+        let img = parse(r#"require a : text/plain = "x" require b : text/html"#).unwrap();
+        let slots: Vec<_> = img
+            .requires
+            .iter()
+            .map(|r| match &r.slot {
+                SlotDecl::Payload { ty, default } => (ty.name.clone(), default.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(slots, [("text/plain".to_string(), Some("x".to_string())), ("text/html".into(), None)]);
+        assert!(parse("require a : text/plain = 3").unwrap_err().to_string().contains("a quoted string"));
     }
 
     #[test]
     fn parses_value_files() {
-        let v = parse_values("# prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }").unwrap();
-        assert_eq!(v.len(), 2);
-        assert_eq!((v[0].slot.name.as_str(), v[0].fields[0].0.pos), ("listen", Pos { line: 2, col: 10 }));
-        assert_eq!(v[1].fields[1].1, Value::Bool(true));
+        let v = parse_values("# prod\nlisten { address: \"0.0.0.0:80\" }\ndb { port: 5432, tls: true }\nhost = \"x\"").unwrap();
+        assert_eq!(v.len(), 3);
+        let SlotValue::Fields(listen) = &v[0].value else { panic!() };
+        assert_eq!((v[0].slot.name.as_str(), listen[0].0.pos), ("listen", Pos { line: 2, col: 10 }));
+        let SlotValue::Fields(db) = &v[1].value else { panic!() };
+        assert_eq!(db[1].1, Value::Bool(true));
+        assert_eq!(v[2].value, SlotValue::Text("x".into(), Pos { line: 4, col: 8 }));
         assert!(parse_values("listen address: 1").is_err());
         assert!(parse_values("listen : Listen { address: \"x\" }").is_err(), "the image knows the type");
     }
