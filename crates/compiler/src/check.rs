@@ -364,7 +364,7 @@ impl Builder<'_> {
                 bail!(err_at(&id, format!("`{}` isn't the runtime's {name}; import it from env", id.name)));
             }
             let at = clean_mount_point(&n.at)?;
-            let decl = MountDecl { at: at.clone(), target: self.nodes.len(), path: "/".into(), read_only: false };
+            let decl = MountDecl { at: at.clone(), target: self.nodes.len(), path: "/".into(), read_only: false, bound: false };
             push_mount(&mut self.view, decl, n.at.pos, "the image's view")?;
             let ty = TypeRef::Builtin(name);
             self.nodes.push(Node { name: at, unit, ty, decl: None, mounts: vec![], written: vec![], exports: vec![], config: None });
@@ -593,7 +593,7 @@ impl Builder<'_> {
                 match ns.resolve(p.from.unwrap_or(n), &p.path) {
                     Ok(mut r) if !self.is_image(r.inst) => {
                         r.read_only |= p.read_only;
-                        let decl = MountDecl { at: p.at.clone(), target: r.inst, path: r.path.clone(), read_only: r.read_only };
+                        let decl = MountDecl { at: p.at.clone(), target: r.inst, path: r.path.clone(), read_only: r.read_only, bound: !p.export };
                         if p.export {
                             ns.expose_resolved(p.node, &p.at, r);
                             push_mount(&mut self.nodes[p.node].exports, decl, p.pos, "what the image exports")?;
@@ -801,7 +801,7 @@ fn clean_mount_point(p: &image_definition::Path) -> Result<String> {
 }
 
 fn mount_decl(at: &image_definition::Path, target: usize, read_only: bool) -> Result<MountDecl> {
-    Ok(MountDecl { at: clean_mount_point(at)?, target, path: "/".into(), read_only })
+    Ok(MountDecl { at: clean_mount_point(at)?, target, path: "/".into(), read_only, bound: false })
 }
 
 /// Adds `decl` to `mounts`, which `whose` names in errors.
@@ -1124,7 +1124,11 @@ mod tests {
     }
 
     fn mount(at: &str, target: usize, read_only: bool) -> MountDecl {
-        MountDecl { at: at.into(), target, path: "/".into(), read_only }
+        MountDecl { at: at.into(), target, path: "/".into(), read_only, bound: false }
+    }
+
+    fn bound(at: &str, target: usize, read_only: bool) -> MountDecl {
+        MountDecl { bound: true, ..mount(at, target, read_only) }
     }
 
     #[test]
@@ -1133,7 +1137,7 @@ mod tests {
         assert_eq!(names(&p), ["/dev/cons", "echo"], "the root's needs come first, named for their mount points");
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into(), module: "Echo.wasm".into() });
-        assert_eq!(p.instances[1].mounts, [mount("/dev/cons", 0, false)]);
+        assert_eq!(p.instances[1].mounts, [bound("/dev/cons", 0, false)]);
         assert_eq!(p.view, [mount("/dev/cons", 0, false)]);
     }
 
@@ -1156,7 +1160,7 @@ mod tests {
     #[test]
     fn binds_give_what_a_path_means_in_the_images_view() {
         let p = check_src(&format!("{HEADER} instance b : B  mount /b b  instance a : A {{ bind /x /b/sub readonly  mount /c cons }}")).unwrap();
-        assert_eq!(p.instances[2].mounts, [MountDecl { at: "/x".into(), target: 1, path: "/sub".into(), read_only: true }, mount("/c", 0, false)]);
+        assert_eq!(p.instances[2].mounts, [MountDecl { at: "/x".into(), target: 1, path: "/sub".into(), read_only: true, bound: true }, mount("/c", 0, false)]);
         let d = describe(&p, &|_| None, &|_| false);
         assert!(d.contains("a     sees /x → b/sub ro, /c → cons\n"), "{d}");
     }
@@ -1503,8 +1507,8 @@ mod tests {
         let (web, a) = (1, 3);
         assert_eq!(p.instances[web].mounts, [mount("/out", 0, false), mount("/a", a, false)], "its view: its need, then its own mounts");
         let Kind::Image { exports } = &p.instances[web].kind else { panic!("{:?}", p.instances[web].kind) };
-        assert_eq!(*exports, [MountDecl { at: "/exported".into(), target: a, path: "/x".into(), read_only: false }]);
-        assert_eq!(p.instances[a].mounts, [mount("/out", 0, false)], "a bind through the need, to what the parent mounted there");
+        assert_eq!(*exports, [MountDecl { at: "/exported".into(), target: a, path: "/x".into(), read_only: false, bound: false }]);
+        assert_eq!(p.instances[a].mounts, [bound("/out", 0, false)], "a bind through the need, to what the parent mounted there");
         let served: Vec<String> = p.interfaces[&p.instances[web].type_name].serves.iter().map(|e| e.to_string()).collect();
         assert_eq!(served, ["/exported write text/plain"], "it serves what it exports, and nothing else");
 
@@ -1559,7 +1563,7 @@ mod tests {
         .unwrap();
         let c = p.instances.iter().position(|i| i.name == "c").unwrap();
         let a = p.instances.iter().position(|i| i.name == "web.a").unwrap();
-        assert_eq!(p.instances[c].mounts, [MountDecl { at: "/e".into(), target: a, path: "/x".into(), read_only: false }]);
+        assert_eq!(p.instances[c].mounts, [MountDecl { at: "/e".into(), target: a, path: "/x".into(), read_only: false, bound: true }]);
     }
 
     #[test]
