@@ -96,3 +96,29 @@ export class Stat {
     return new Stat(name, dir, length, type, load<u64>(base + at))
   }
 }
+
+/**
+ * Whether a payload of content type `given` fits where `want` is written:
+ * `*\/*` takes anything and `text/*` any text, and a parameter `want` writes
+ * must be in `given` with the same value (see src/payload.rs).
+ */
+export function fits(want: string, given: string): bool {
+  const w = want.split(";")
+  const g = given.split(";")
+  const wt = w[0].trim().toLowerCase()
+  const gt = g[0].trim().toLowerCase()
+  const ws = wt.indexOf("/")
+  const gs = gt.indexOf("/")
+  if (ws < 0 || gs < 0) return false
+  const wType = wt.substring(0, ws), wSub = wt.substring(ws + 1)
+  const gType = gt.substring(0, gs), gSub = gt.substring(gs + 1)
+  if (wType != "*" && (wType != gType || (wSub != "*" && wSub != gSub))) return false
+  for (let i = 1; i < w.length; i++) {
+    let found = false
+    for (let j = 1; j < g.length; j++) {
+      if (w[i].trim() == g[j].trim()) found = true
+    }
+    if (!found) return false
+  }
+  return true
+}

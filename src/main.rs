@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use othismo::format::{Bson, Format, Messages};
-use othismo::{doc, iface, pack, runtime, slots, suite};
+use othismo::{bindings, doc, iface, pack, runtime, slots, suite};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -8,7 +8,7 @@ const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>
        othismo test [--no-checks] <image>
        othismo build [-v] [--no-sources] <image.oth> -o <out.rti>
        othismo unpack <image> <dir>
-       othismo bindings [--library <path>] <schemas.messages> [-o <out.ts>]
+       othismo bindings [--library <path>] <header.oth | schemas.messages | env> [-o <out.ts>]
        othismo embed <header.oth> <module.wasm>
        othismo doc <module.wasm | header.oth | built-in type | env>
 
@@ -29,10 +29,13 @@ An image is a .oth source, which is built in memory, or a built .rti file.
 lists its tests, and each test runs in a fresh run of the image, with nothing
 outside started. What the image prints is shown for the tests that fail.
 
-`bindings` writes AssemblyScript classes for the message types a schema file
-declares, to <schemas.messages>.ts unless -o says otherwise; a file that
-declares none gets no file. They import the BSON library from
-\"othismo/bson\", or from --library.
+`bindings` writes AssemblyScript to <file>.ts, unless -o says otherwise. For
+a header, a server base class for each object it declares and a client for
+each of its needs, importing the SDK from \"othismo\"; for a schema file, a
+class for each message type it declares, importing the BSON library from
+\"othismo/bson\"; for `env`, the runtime's clients and server bases. --library
+says where else to import the library from. A file with nothing to bind gets
+no file.
 
 `embed` puts a module's header into the module, with the message types in
 the .messages file beside the header, replacing any already there.
@@ -115,12 +118,12 @@ fn build(args: &[String]) -> Result<Result<()>, Usage> {
 }
 
 fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
-    let (mut header, mut out, mut library) = (None, None, "othismo/bson".to_string());
+    let (mut header, mut out, mut library) = (None, None, None::<String>);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" => out = Some(PathBuf::from(args.next().ok_or(Usage)?)),
-            "--library" => library = args.next().ok_or(Usage)?.clone(),
+            "--library" => library = Some(args.next().ok_or(Usage)?.clone()),
             _ if arg.starts_with('-') || header.is_some() => return Err(Usage),
             _ => header = Some(PathBuf::from(arg)),
         }
@@ -128,19 +131,25 @@ fn bindings(args: &[String]) -> Result<Result<()>, Usage> {
     let source = header.ok_or(Usage)?;
     let out = out.unwrap_or_else(|| PathBuf::from(format!("{}.ts", source.display())));
     Ok((|| {
-        if source.extension().is_none_or(|e| e != Bson::EXTENSION) {
-            anyhow::bail!("{} isn't a schema file; bindings for message types come from a `.{}` file", source.display(), Bson::EXTENSION);
-        }
-        let schemas = iface::Loader::default().schemas(&source)?;
-        // Nothing to bind, and nothing left over from when there was.
-        if schemas.declared.is_empty() {
-            if out.exists() {
-                std::fs::remove_file(&out).with_context(|| format!("removing {}", out.display()))?;
-            }
-            return Ok(());
-        }
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        std::fs::write(&out, Bson::bindings(&schemas, &name, &library)).with_context(|| format!("writing {}", out.display()))
+        let ts = if source == Path::new("env") {
+            Some(bindings::env(library.as_deref().unwrap_or("othismo")))
+        } else if source.extension().is_some_and(|e| e == Bson::EXTENSION) {
+            let schemas = iface::Loader::default().schemas(&source)?;
+            let library = library.as_deref().unwrap_or("othismo/bson");
+            (!schemas.declared.is_empty()).then(|| Bson::bindings(&schemas, &name, library))
+        } else if source.extension().is_some_and(|e| e == "oth") {
+            let header = iface::load(&source)?;
+            bindings::namespace(&header, &name, library.as_deref().unwrap_or("othismo"), "othismo/env")
+        } else {
+            anyhow::bail!("bindings come from a header (`.oth`), a schema file (`.{}`) or env", Bson::EXTENSION);
+        };
+        match ts {
+            Some(ts) => std::fs::write(&out, ts).with_context(|| format!("writing {}", out.display())),
+            // Nothing to bind, and nothing left over from when there was.
+            None if out.exists() => std::fs::remove_file(&out).with_context(|| format!("removing {}", out.display())),
+            None => Ok(()),
+        }
     })())
 }
 

@@ -124,12 +124,15 @@ pub struct Object {
     pub origin: Option<PathBuf>,
 }
 
-/// `needs <mount point pattern> { entries }`
+/// `needs <mount point pattern> { entries }`, or `needs <mount point> <Trait>`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Need {
     pub at: Pattern,
     pub doc: String,
     pub entries: Vec<Entry>,
+    /// The trait it names, if it is a trait's whole tree.
+    #[serde(default)]
+    pub shape: Option<String>,
 }
 
 /// A path pattern and the requests it takes.
@@ -953,7 +956,14 @@ impl Shapes<'_> {
                 e.requests.retain(|r| !r.operator);
             }
             entries.retain(|e| !e.requests.is_empty());
-            needs.push(Need { at, doc: n.doc.clone(), entries });
+            let shape = match n.entries.as_slice() {
+                [e] if e.path.path == "/" => match e.items.as_slice() {
+                    [Item::Named(id)] => self.traits.get(&id.name).map(|t| t.name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            needs.push(Need { at, doc: n.doc.clone(), entries, shape });
         }
         Ok(needs)
     }

@@ -9,7 +9,7 @@
 // objects; requests made of us arrive at `Server.serve`. See
 // docs/namespace.md for the model.
 
-import { Payload } from "./payload"
+import { Payload, Stat, fits } from "./payload"
 
 // ---------------------------------------------------------------------------
 // Host interface
@@ -151,6 +151,62 @@ function bound(): Server {
 }
 
 // ---------------------------------------------------------------------------
+// What generated server bases use to route requests (see src/bindings.rs)
+
+/**
+ * The `{name}` segments of `path` that `pattern` matches, in order, then
+ * what a `**` matches, as a path; or null if it doesn't match. A pattern is
+ * a header's: `/hosts/{name}`, `/**`.
+ */
+export function route(pattern: string, path: string): string[] | null {
+  const p = pattern.split("/")
+  const s = path.split("/")
+  const out = new Array<string>()
+  for (let i = 1; i < p.length; i++) {
+    if (p[i] == "**") {
+      let rest = ""
+      for (let j = i; j < s.length; j++) rest += "/" + s[j]
+      out.push(rest)
+      return out
+    }
+    if (i >= s.length) return null
+    if (p[i].startsWith("{") && p[i].endsWith("}")) {
+      if (s[i].length == 0) return null
+      out.push(s[i])
+    } else if (p[i] != s[i]) {
+      return null
+    }
+  }
+  return p.length == s.length ? out : null
+}
+
+/** The payload `req` carries, if it is of content type `type`; otherwise `req` fails and this is null. */
+export function payloadOf(req: Request, type: string): Payload | null {
+  const body = req.body
+  if (body === null) {
+    req.fail(Errno.Invalid, "expected a " + type + " payload")
+    return null
+  }
+  if (!fits(type, body.type)) {
+    req.fail(Errno.UnsupportedType, "takes " + type + ", not " + body.type)
+    return null
+  }
+  return body
+}
+
+/** The text `req` carries, if it is of content type `type`; otherwise `req` fails and this is null. */
+export function textOf(req: Request, type: string): string | null {
+  const body = payloadOf(req, type)
+  return body === null ? null : body.asText()
+}
+
+/** `rel`, a path below a mount point, under the mount point `at`. */
+export function under(at: string, rel: string): string {
+  if (at == "/") return rel.length == 0 ? "/" : rel
+  return (at.endsWith("/") ? at.substring(0, at.length - 1) : at) + rel
+}
+
+// ---------------------------------------------------------------------------
 // Calling
 
 /** An answer to one of our calls. */
@@ -173,6 +229,50 @@ export class Response {
  */
 export class Then {
   answer(res: Response): void {}
+}
+
+/** Answers that are text, such as a console's lines. */
+export class OnText extends Then {
+  answer(res: Response): void {
+    const body = res.body
+    if (!res.ok) this.failed(res)
+    else if (body !== null) this.text(body.asText(), res.done)
+    else if (res.done) this.ended()
+  }
+
+  /** One answer's text; `done` if it is the last. */
+  text(s: string, done: bool): void {}
+  /** A stream ended with no more text. */
+  ended(): void {}
+  failed(res: Response): void {}
+}
+
+/** Answers that are payloads of any kind. */
+export class OnPayload extends Then {
+  answer(res: Response): void {
+    const body = res.body
+    if (!res.ok) this.failed(res)
+    else if (body !== null) this.payload(body, res.done)
+    else if (res.done) this.ended()
+  }
+
+  payload(p: Payload, done: bool): void {}
+  ended(): void {}
+  failed(res: Response): void {}
+}
+
+/** Answers that are stat records, as `stat` and `list` give. */
+export class OnStat extends Then {
+  answer(res: Response): void {
+    const s = Stat.decode(res.body)
+    if (!res.ok) this.failed(res)
+    else if (s !== null) this.stat(s, res.done)
+    else if (res.done) this.ended()
+  }
+
+  stat(s: Stat, done: bool): void {}
+  ended(): void {}
+  failed(res: Response): void {}
 }
 
 /** Calls awaiting answers, by ticket. */

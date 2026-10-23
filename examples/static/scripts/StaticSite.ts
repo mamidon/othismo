@@ -1,4 +1,5 @@
-import { Flag, Payload, Request, Server, Errno, Verb, isSafe, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Flag, Payload, Request, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { StaticSiteServer } from "./StaticSite.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -11,23 +12,23 @@ export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
  * forwarded, and /static, where /files is exposed as is: requests there
  * don't reach this code at all.
  */
-class StaticSite extends Server {
+class StaticSite extends StaticSiteServer {
   hits: u64 = 0
 
   start(): void {
     ns.expose("/static", "/files", Flag.ReadOnly)
   }
 
-  serve(req: Request): void {
-    if (req.path == "/hits") {
-      if (req.verb == Verb.Read) req.reply(Payload.text(this.hits.toString() + "\n", "text/plain; charset=utf-8"))
-      else req.fail(Errno.NotSupported)
-      return
-    }
-    if (!isSafe(req.verb)) {
-      req.fail(Errno.ReadOnly)
-      return
-    }
+  readHits(req: Request): void {
+    req.reply(Payload.text(this.hits.toString() + "\n", "text/plain; charset=utf-8"))
+  }
+
+  readAny(req: Request, rest: string): void { this.pass(req) }
+  statAny(req: Request, rest: string): void { this.pass(req) }
+  listAny(req: Request, rest: string): void { this.pass(req) }
+
+  /** Hands `req` to the files, at the same path, or its index.html. */
+  pass(req: Request): void {
     this.hits++
     req.forward("/files" + (req.path.endsWith("/") ? req.path + "index.html" : req.path))
   }

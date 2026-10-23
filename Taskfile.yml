@@ -5,7 +5,7 @@ version: '3'
 # is its scripts/<Type>.oth, and its message types, if it has any, are in
 # scripts/<Type>.messages; both are embedded in the .wasm once it is
 # compiled. The bindings generated from them are committed next to them, as
-# <Type>.messages.ts.
+# <Type>.oth.ts and <Type>.messages.ts.
 vars:
   # Each example is a directory holding an image named after it.
   EXAMPLES:
@@ -42,7 +42,7 @@ tasks:
 
   build:docs:
     desc: Re-render docs/*.md, and the reference from as/env/, into the static example's site
-    deps: [npm, build]
+    deps: [npm, bindings:env]
     sources:
       - docs/*.md
       - as/env/*.oth
@@ -84,8 +84,9 @@ tasks:
       - fly deploy
 
   bindings:
-    desc: Regenerate the AssemblyScript bindings from every schema file
+    desc: Regenerate the AssemblyScript bindings from every header and schema file
     cmds:
+      - task: bindings:env
       - for: { var: EXAMPLES }
         task: bindings:one
         vars: { NAME: '{{.ITEM}}' }
@@ -115,6 +116,18 @@ tasks:
         task: wasm:one
         vars: { NAME: '{{.ITEM}}' }
 
+  # The runtime's clients and server bases, which modules import as "othismo/env".
+  bindings:env:
+    internal: true
+    deps: [build]
+    sources:
+      - as/env/*.oth
+      - src/**/*.rs
+    generates:
+      - as/env.ts
+    cmds:
+      - '{{.BIN}} bindings --library ./index env -o as/env.ts'
+
   bindings:one:
     internal: true
     label: bindings:{{.NAME}}
@@ -124,12 +137,12 @@ tasks:
         cmd: '{{.BIN}} bindings {{.ITEM}}'
     vars:
       HEADERS:
-        sh: find examples/{{.NAME}}/scripts -name '*.messages'
+        sh: find examples/{{.NAME}}/scripts -name '*.messages' -o -name '*.oth'
 
   wasm:one:
     internal: true
     label: wasm:{{.NAME}}
-    deps: [npm, build]
+    deps: [npm, bindings:env]
     sources:
       - as/*.ts
       # What embed writes into each module: the header format and env's types.
@@ -140,6 +153,7 @@ tasks:
       - examples/{{.NAME}}/scripts/*.md
       - examples/{{.NAME}}/scripts/*.ts
       - exclude: examples/{{.NAME}}/scripts/*.messages.ts
+      - exclude: examples/{{.NAME}}/scripts/*.oth.ts
     generates:
       - examples/{{.NAME}}/scripts/*.wasm
     cmds:
@@ -149,7 +163,7 @@ tasks:
         cmd: npx asc {{.ITEM}} -o {{trimSuffix ".ts" .ITEM}}.wasm --optimize && {{.BIN}} embed {{trimSuffix ".ts" .ITEM}}.oth {{trimSuffix ".ts" .ITEM}}.wasm
     vars:
       SCRIPTS:
-        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v '\.messages\.ts$'
+        sh: ls examples/{{.NAME}}/scripts/*.ts | grep -v -e '\.messages\.ts$' -e '\.oth\.ts$'
 
   # Seals examples/<NAME>/<NAME>.oth into a .rti with the othismo that
   # `build` just made, so the two always match.

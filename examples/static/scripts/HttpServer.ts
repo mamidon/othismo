@@ -1,4 +1,5 @@
-import { OCTETS, Payload, Request, Response, Server, Stat, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { OCTETS, OnText, Payload, Request, Response, Stat, Errno, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { HttpServerServer, cons, tcp } from "./HttpServer.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -15,50 +16,42 @@ const MAX_BODY: i32 = 1024 * 1024
  *
  * Its own tree is /hosts/<name>, which only the operator sets: write it a
  * path in our view to serve that host from there, or remove it to stop
- * serving it. `*` is used for any host not listed. Every
+ * serving it. Its base class, generated from its header, routes those
+ * requests to the methods below. `*` is used for any host not listed. Every
  * response is logged to /dev/cons. One request per connection; every
  * response closes it.
  */
-class HttpServer extends Server {
+class HttpServer extends HttpServerServer {
   /** Host name (lowercase, no port) → root path in our view. */
   hosts: Map<string, string> = new Map<string, string>()
 
   start(): void {
-    ns.read("/net/tcp/address", new OnAddress())
-    ns.watch("/net/tcp/accept", new OnAccept())
+    tcp.readAddress(new OnAddress())
+    tcp.watchAccept(new OnAccept())
   }
 
-  serve(req: Request): void {
-    const body = req.body
-    if (req.path == "/hosts" || req.path == "/hosts/") {
-      if (req.verb != Verb.List) {
-        req.fail(Errno.IsDirectory)
-        return
-      }
-      const names = this.hosts.keys()
-      names.sort()
-      for (let i = 0; i < names.length; i++) req.stream(Stat.file(names[i]).payload())
-      req.end()
-      return
-    }
-    const name = req.path.startsWith("/hosts/") ? req.path.substring(7).toLowerCase() : ""
-    if (name.length == 0 || name.includes("/")) {
-      req.fail(Errno.NotFound)
-    } else if (req.verb == Verb.Write && req.operator && body !== null && body.isText()) {
-      this.hosts.set(name, body.asText())
-      req.end()
-    } else if (req.verb == Verb.Remove && req.operator) {
-      this.hosts.delete(name)
-      req.end()
-    } else if (req.verb == Verb.Write || req.verb == Verb.Remove) {
-      req.fail(req.operator ? Errno.Invalid : Errno.Forbidden)
-    } else if (!this.hosts.has(name)) {
-      req.fail(Errno.NotFound)
-    } else if (req.verb == Verb.Read) {
-      req.reply(Payload.text(this.hosts.get(name)))
-    } else {
-      req.fail(Errno.NotSupported)
-    }
+  listHosts(req: Request): void {
+    const names = this.hosts.keys()
+    names.sort()
+    for (let i = 0; i < names.length; i++) req.stream(Stat.file(names[i]).payload())
+    req.end()
+  }
+
+  listHostsIndex(req: Request): void { this.listHosts(req) }
+
+  writeHosts(req: Request, name: string, root: string): void {
+    this.hosts.set(name.toLowerCase(), root)
+    req.end()
+  }
+
+  removeHosts(req: Request, name: string): void {
+    this.hosts.delete(name.toLowerCase())
+    req.end()
+  }
+
+  readHosts(req: Request, name: string): void {
+    if (!this.hosts.has(name.toLowerCase())) req.fail(Errno.NotFound)
+    else req.reply(Payload.text(this.hosts.get(name.toLowerCase())))
   }
 
   /** Where requests for `host` go, or null if it isn't served. */
@@ -71,19 +64,15 @@ class HttpServer extends Server {
 
 const server = new HttpServer()
 
-class OnAddress extends Then {
-  answer(res: Response): void {
-    const body = res.body
-    if (body !== null) ns.write("/dev/cons", Payload.text("listening on http://" + body.asText() + "/"))
+class OnAddress extends OnText {
+  text(address: string, done: bool): void {
+    cons.write("listening on http://" + address + "/")
   }
 }
 
-class OnAccept extends Then {
-  answer(res: Response): void {
-    const body = res.body
-    if (body === null) return
-    const conn = body.asText()
-    ns.watch("/net/tcp/" + conn + "/data", new Connection(conn))
+class OnAccept extends OnText {
+  text(conn: string, done: bool): void {
+    tcp.watchData(conn, new Connection(conn))
   }
 }
 
@@ -239,10 +228,9 @@ class Respond extends Then {
       "Content-Length: " + length.toString() + "\r\n" +
       "Connection: close\r\n\r\n",
     )
-    const conn = "/net/tcp/" + this.conn
-    ns.write(conn + "/data", new Payload(OCTETS, headLength >= 0 ? bytes : concat(bytes, body)))
-    ns.remove(conn)
-    ns.write("/dev/cons", Payload.text(this.method + " " + this.path + " " + status.toString()))
+    tcp.writeData(this.conn, new Payload(OCTETS, headLength >= 0 ? bytes : concat(bytes, body)))
+    tcp.remove(this.conn)
+    cons.write(this.method + " " + this.path + " " + status.toString())
   }
 }
 

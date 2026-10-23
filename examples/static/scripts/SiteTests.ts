@@ -1,4 +1,5 @@
-import { OCTETS, Payload, Request, Response, Server, Stat, Errno, Then, Verb, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Errno, OCTETS, Payload, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { SiteTestsServer, net } from "./SiteTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
 
@@ -21,26 +22,21 @@ const CASES: Case[] = [
  * the site with that case's request, and once the server hangs up, answers
  * ok if the response began as it should, or an error saying how it began.
  */
-class SiteTests extends Server {
-  serve(req: Request): void {
-    if (req.path == "/tests" && req.verb == Verb.List) {
-      for (let i = 0; i < CASES.length; i++) req.stream(Stat.file(CASES[i].name).payload())
-      req.end()
+class SiteTests extends SiteTestsServer {
+  listTests(req: Request): void {
+    for (let i = 0; i < CASES.length; i++) req.stream(Stat.file(CASES[i].name).payload())
+    req.end()
+  }
+
+  writeTests(req: Request, name: string): void {
+    for (let i = 0; i < CASES.length; i++) {
+      const c = CASES[i]
+      if (c.name != name) continue
+      const request = c.line + "\r\nHost: " + c.host + "\r\n\r\n"
+      net.createDial(new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
       return
     }
-    if (req.path.startsWith("/tests/") && req.verb == Verb.Write) {
-      const name = req.path.slice("/tests/".length)
-      for (let i = 0; i < CASES.length; i++) {
-        const c = CASES[i]
-        if (c.name != name) continue
-        const request = c.line + "\r\nHost: " + c.host + "\r\n\r\n"
-        ns.create("/net/dial", new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
-        return
-      }
-      req.fail(Errno.NotFound)
-      return
-    }
-    req.fail(Errno.NotSupported)
+    req.fail(Errno.NotFound)
   }
 }
 
