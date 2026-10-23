@@ -22,10 +22,13 @@ pub fn assemblyscript(schemas: &Messages, types: &[String], library: &str) -> Bi
             }
         }
     }
-    let boxed = all.iter().flat_map(|t| &schemas.types[t].fields).any(|f| f.optional && is_value(&f.ty));
+    let fields = || all.iter().flat_map(|t| &schemas.types[t].fields);
+    let boxed = fields().any(|f| f.optional && is_value(&f.ty));
+    let uuids = fields().any(|f| has_uuid(&f.ty));
     let imports = format!(
-        "import {{ Payload }} from \"{library}\"\nimport {{ {}Message, Reader, Writer, bson, registerMessage }} from \"{library}/bson\"\n",
-        if boxed { "Box, " } else { "" }
+        "import {{ Payload }} from \"{library}\"\nimport {{ {}Message, Reader, {}Writer, bson, registerMessage }} from \"{library}/bson\"\n",
+        if boxed { "Box, " } else { "" },
+        if uuids { "Uuid, " } else { "" },
     );
     let mut code = String::new();
     let mut helpers = Helpers::default();
@@ -113,6 +116,14 @@ fn field_type(f: &Field) -> String {
     }
 }
 
+fn has_uuid(t: &FieldType) -> bool {
+    match t {
+        FieldType::Uuid => true,
+        FieldType::List(e) | FieldType::Map(e) => has_uuid(e),
+        _ => false,
+    }
+}
+
 /// Whether AssemblyScript keeps `t` by value, so that it can't be null.
 fn is_value(t: &FieldType) -> bool {
     use FieldType::*;
@@ -131,6 +142,8 @@ fn as_type(t: &FieldType) -> String {
 fn scalar(t: &FieldType) -> &'static str {
     match t {
         FieldType::Bytes => "ArrayBuffer",
+        FieldType::Time => "Date",
+        FieldType::Uuid => "Uuid",
         FieldType::String => "string",
         FieldType::Bool => "bool",
         FieldType::I8 => "i8",
@@ -188,6 +201,8 @@ impl Helpers {
             FieldType::String => format!("w.string({key}, {value})"),
             FieldType::Bool => format!("w.bool({key}, {value})"),
             FieldType::Bytes => format!("w.bytes({key}, {value})"),
+            FieldType::Time => format!("w.time({key}, {value})"),
+            FieldType::Uuid => format!("w.uuid({key}, {value})"),
             FieldType::I32 => format!("w.i32({key}, {value})"),
             FieldType::I8 | FieldType::I16 | FieldType::U8 | FieldType::U16 => format!("w.i32({key}, <i32>{value})"),
             FieldType::I64 => format!("w.i64({key}, {value})"),
@@ -230,6 +245,8 @@ impl Helpers {
             FieldType::String => format!("r.string({key})"),
             FieldType::Bool => format!("r.bool({key})"),
             FieldType::Bytes => format!("r.bytes({key})"),
+            FieldType::Time => format!("r.time({key})"),
+            FieldType::Uuid => format!("r.uuid({key})"),
             FieldType::I32 => format!("r.i32({key})"),
             FieldType::I64 => format!("r.i64({key})"),
             FieldType::F64 => format!("r.f64({key})"),
@@ -291,6 +308,7 @@ mod tests {
             message Lists { names: [string], grid: [[u8]], people: [Greeting] }
             message Maps { env: {string}, groups: {[Greeting]} }
             message Opt { nick?: string, n?: u8, g?: Greeting }
+            message Moments { at: time, ids: [uuid], when?: time }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
@@ -350,6 +368,10 @@ registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
         let read = "new Opt(r.has(\"nick\") ? <string | null>r.string(\"nick\") : null, r.has(\"n\") ? <Box<u8> | null>new Box<u8>(<u8>r.i64(\"n\")) : null, r.has(\"g\") ? <Greeting | null>Greeting.decode(r.doc(\"g\")) : null)";
         assert!(out.contains(read), "{out}");
         assert!(!assemblyscript(&schemas, &["Greeting".into()], "othismo").imports.contains("Box"), "only when it is used");
+        assert!(imports.contains(", Reader, Uuid, Writer,"), "{imports}");
+        assert!(out.contains("  at: Date\n  ids: Array<Uuid>\n  when: Date | null\n"), "{out}");
+        assert!(out.contains("w.time(\"at\", this.at)") && out.contains("w.uuid(i.toString(), v[i])"), "{out}");
+        assert!(out.contains("new Moments(r.time(\"at\"), __read_list_Uuid(r.array(\"ids\")), r.has(\"when\") ? <Date | null>r.time(\"when\") : null)"), "{out}");
         let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;
         assert!(only.find("class Nested") < only.find("class Greeting"), "the types a field names come with it: {only}");
         assert!(out.contains("export class Ping extends Message {\n  /** The `Ping` in `p`, or null if it holds none. */\n"), "{out}");

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use syntax::image_definition::{Parser, Pos, Source, Tok};
 
 /// The field types a field can be written with, besides a type's name.
-const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bytes, a message type, a list of one of those, `[T]`, or a map from strings to one, `{T}`";
+const FIELD_TYPES: &str = "string, bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bytes, time, uuid, a message type, a list of one of those, `[T]`, or a map from strings to one, `{T}`";
 
 pub fn messages(src: &str, import: &mut dyn FnMut(&str) -> Result<Messages>) -> Result<Messages> {
     let mut p = Parser::new(src, true)?;

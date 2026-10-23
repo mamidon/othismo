@@ -12,6 +12,9 @@ export schemas application/bson {
   message Record {
     name: string
     count: i32
+    ## A moment, and an id.
+    born: time
+    id: uuid
     ## Another message.
     owner: Person
     ## Lists, of anything a field can be.

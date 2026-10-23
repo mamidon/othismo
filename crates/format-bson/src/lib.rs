@@ -207,7 +207,8 @@ fn message_type<'a>(schemas: &'a Messages, name: &str) -> Result<&'a MessageType
 fn literal(t: &FieldType, text: &str) -> std::result::Result<Value, String> {
     let bad = || format!("`{text}` is not a valid {t}");
     Ok(match t {
-        FieldType::String | FieldType::Bytes => Value::Str(text.to_string()),
+        FieldType::String | FieldType::Bytes | FieldType::Uuid => Value::Str(text.to_string()),
+        FieldType::Time => text.parse().map(Value::Int).unwrap_or_else(|_| Value::Str(text.to_string())),
         FieldType::Bool => match text {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
@@ -235,6 +236,8 @@ pub fn json_value(v: &B) -> String {
         B::Int64(i) => i.to_string(),
         B::Double(x) if x.is_finite() => format!("{x:?}"),
         B::Double(x) => json_string(&x.to_string()),
+        B::Binary(b) if b.subtype == bson::spec::BinarySubtype::Uuid && b.bytes.len() == 16 => json_string(&wire::show_uuid(&b.bytes)),
+        B::DateTime(t) => t.try_to_rfc3339_string().map_or_else(|_| t.timestamp_millis().to_string(), |s| json_string(&s)),
         B::Binary(b) => match std::str::from_utf8(&b.bytes) {
             Ok(s) => json_string(s),
             Err(_) => format!("<{} bytes>", b.bytes.len()),
@@ -291,6 +294,18 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
         (FieldType::F32 | FieldType::F64, Value::Float(x)) => B::Double(*x),
         (FieldType::F32 | FieldType::F64, Value::Int(i)) => B::Double(*i as f64),
         (FieldType::Bytes, Value::Str(s)) => wire::bytes(s.as_bytes().to_vec()),
+        (FieldType::Time, Value::Str(s)) => match bson::DateTime::parse_rfc3339_str(s) {
+            Ok(t) => B::DateTime(t),
+            Err(_) => return Err(format!("`{at}` is a time, written as in RFC 3339, `\"2026-10-23T12:00:00Z\"`, or as milliseconds since 1970; {s:?} is neither")),
+        },
+        (FieldType::Time, Value::Int(ms)) => match i64::try_from(*ms) {
+            Ok(ms) => B::DateTime(bson::DateTime::from_millis(ms)),
+            Err(_) => return Err(format!("{ms} does not fit in a time")),
+        },
+        (FieldType::Uuid, Value::Str(s)) => match wire::parse_uuid(s) {
+            Some(id) => wire::uuid(id),
+            None => return Err(format!("`{at}` is a uuid, written `\"123e4567-e89b-12d3-a456-426614174000\"`; {s:?} isn't one")),
+        },
         (t, Value::Int(i)) if t.int_range().is_some() => {
             let (lo, hi) = t.int_range().unwrap();
             if !(lo..=hi).contains(i) {
@@ -450,6 +465,28 @@ mod tests {
         assert!(doc.contains("| `nick` | string, optional |"), "{doc}");
         let e = format!("{:#}", Bson::parse_messages("message A { x? i32 }", &mut |p| bail!("no {p} here")).unwrap_err());
         assert!(e.contains("1:16: expected `:`, found `i32`"), "{e}");
+    }
+
+    #[test]
+    fn fields_may_be_times_and_uuids() {
+        let m = messages("message T { at: time, id: uuid, when?: time }");
+        let src = r#"{ at: "2026-10-23T12:34:56.789Z", id: "123e4567-e89b-12d3-a456-426614174000", when: 1000 }"#;
+        let bytes = Bson::encode_message(&m, "T", &value(src)).unwrap();
+        let msg = Message::decode(&bytes).unwrap();
+        assert_eq!(msg.fields.get_datetime("at").unwrap().timestamp_millis(), 1_792_758_896_789);
+        let id = msg.fields.get_binary_generic("id");
+        assert!(id.is_err(), "not the generic subtype");
+        let shown = Bson.show(&bytes).unwrap();
+        assert_eq!(shown[0].1, r#""2026-10-23T12:34:56.789Z""#);
+        assert_eq!(shown[1].1, r#""123e4567-e89b-12d3-a456-426614174000""#);
+        assert_eq!(shown[2].1, r#""1970-01-01T00:00:01Z""#);
+        let err = |src: &str| Bson::encode_message(&m, "T", &value(src)).unwrap_err();
+        assert!(err(r#"{ at: "yesterday", id: "123e4567-e89b-12d3-a456-426614174000" }"#).contains("`T.at` is a time, written as in RFC 3339"));
+        assert!(err(r#"{ at: 0, id: "nope" }"#).contains("`T.id` is a uuid"));
+        assert!(err(r#"{ at: 99999999999999999999, id: "123e4567-e89b-12d3-a456-426614174000" }"#).contains("does not fit in a time"));
+        let schemas = Bson::schemas(&m);
+        assert_eq!(Bson.literal(&schemas, "T", "at", "5"), Ok(Value::Int(5)));
+        assert_eq!(Bson.literal(&schemas, "T", "at", "2026-10-23T00:00:00Z"), Ok(Value::Str("2026-10-23T00:00:00Z".into())));
     }
 
     #[test]

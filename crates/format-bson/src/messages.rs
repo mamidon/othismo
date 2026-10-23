@@ -19,6 +19,12 @@ pub enum FieldType {
     F64,
     /// `bytes`; `ArrayBuffer` in AssemblyScript.
     Bytes,
+    /// `time`, a moment, to the millisecond: a UTC datetime. `Date` in
+    /// AssemblyScript.
+    Time,
+    /// `uuid`: 16 bytes, binary of the UUID subtype. `Uuid` in
+    /// AssemblyScript.
+    Uuid,
     /// Another message type, by name, carried as an embedded document
     /// without a `$type`: the field's type says what it is.
     Named(String),
@@ -46,6 +52,8 @@ impl FieldType {
             "f32" => FieldType::F32,
             "f64" => FieldType::F64,
             "bytes" => FieldType::Bytes,
+            "time" => FieldType::Time,
+            "uuid" => FieldType::Uuid,
             _ => return None,
         })
     }
@@ -94,6 +102,8 @@ impl fmt::Display for FieldType {
             FieldType::F32 => "f32",
             FieldType::F64 => "f64",
             FieldType::Bytes => "bytes",
+            FieldType::Time => "time",
+            FieldType::Uuid => "uuid",
         };
         f.write_str(s)
     }

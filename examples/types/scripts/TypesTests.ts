@@ -1,5 +1,5 @@
 import { Errno, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
-import { Box, Reader, Writer, decodeMessage, encodeMessage } from "othismo/bson"
+import { Box, Reader, Uuid, Writer, decodeMessage, encodeMessage } from "othismo/bson"
 import { Person, Record, TypesTestsServer, store } from "./TypesTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
@@ -10,7 +10,8 @@ function describe(r: Record): string {
   for (let i = 0; i < r.grid.length; i++) grid.push("[" + r.grid[i].join(",") + "]")
   let team: string[] = []
   for (let i = 0; i < r.team.length; i++) team.push(person(r.team[i]))
-  return "name=" + r.name + " count=" + r.count.toString() + " owner=" + person(r.owner) +
+  return "name=" + r.name + " count=" + r.count.toString() + " born=" + r.born.getTime().toString() + " id=" + r.id.toString() +
+    " owner=" + person(r.owner) +
     " tags=[" + r.tags.join(",") + "] grid=[" + grid.join(",") + "] team=[" + team.join(",") + "]" +
     " env={" + env(r.env) + "} teams={" + teams(r.teams) + "}" +
     " nick=" + (r.nick === null ? "-" : r.nick!) + " rank=" + (r.rank === null ? "-" : r.rank!.value.toString()) +
@@ -41,7 +42,7 @@ function person(p: Person): string {
 }
 
 /** The record the image writes at startup, described. */
-const STARTUP = "name=start count=7 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}] env={HOME:/home,Content-Type:text/plain} teams={red:[{Cy 2}],blue:[]} nick=st rank=2 boss=-"
+const STARTUP = "name=start count=7 born=1792758896789 id=123e4567-e89b-12d3-a456-426614174000 owner={Ada 36} tags=[a,b] grid=[[1,2],[],[-3]] team=[{Bo 1}] env={HOME:/home,Content-Type:text/plain} teams={red:[{Cy 2}],blue:[]} nick=st rank=2 boss=-"
 
 /** A record with something in every field. */
 function sample(): Record {
@@ -50,7 +51,7 @@ function sample(): Record {
   env.set("a", "1")
   const teams = new Map<string, Array<Person>>()
   teams.set("solo", [new Person("Di", 4)])
-  return new Record("sample", -3, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)], env, teams,
+  return new Record("sample", -3, new Date(1000), Uuid.parse("00000000-0000-0000-0000-0000000000ff")!, new Person("Grace", 85), ["x"], [[], [4]], [new Person("Al", 2), new Person("Cy", 3)], env, teams,
     null, new Box<i32>(-1), new Person("Ed", 5))
 }
 
@@ -87,6 +88,16 @@ function skipsFieldsNoOneReads(): string {
   return same(r.string("after"), "found")
 }
 
+/** UUIDs are parsed and written as people write them. */
+function writesUuids(): string {
+  const id = Uuid.parse("123E4567-e89b-12d3-a456-42661417400a")
+  if (id === null) return "a UUID didn't parse"
+  if (Uuid.parse("123e4567-e89b-12d3-a456-42661417400") !== null) return "a short UUID parsed"
+  if (Uuid.parse("123e4567+e89b-12d3-a456-42661417400a") !== null) return "a UUID without its dashes parsed"
+  if (Uuid.parse("123e4567-e89b-12d3-a456-42661417400g") !== null) return "a UUID with a g in it parsed"
+  return same(id!.toString(), "123e4567-e89b-12d3-a456-42661417400a")
+}
+
 /** One test: run in the module, or a check of the record the store holds. */
 class Case {
   constructor(
@@ -100,6 +111,7 @@ class Case {
 const CASES: Case[] = [
   new Case("encodes_and_decodes", encodesAndDecodes),
   new Case("skips_fields_no_one_reads", skipsFieldsNoOneReads),
+  new Case("writes_uuids", writesUuids),
   new Case("reads_the_startup_record", null),
   new Case("round_trips_through_the_store", null, true),
 ]

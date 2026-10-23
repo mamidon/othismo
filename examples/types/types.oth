@@ -9,6 +9,8 @@ mount /store store
 write /store/record Record {
   name: "start",
   count: 7,
+  born: "2026-10-23T12:34:56.789Z",
+  id: "123e4567-e89b-12d3-a456-426614174000",
   owner: { name: "Ada", age: 36 },
   tags: ["a", "b"],
   grid: [[1, 2], [], [-3]],
