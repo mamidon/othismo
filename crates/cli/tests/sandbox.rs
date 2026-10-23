@@ -768,7 +768,7 @@ fn missing_module_is_reported() {
 
 #[test]
 fn an_image_given_a_listener_in_memory_can_be_dialed() {
-    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/site.oth");
+    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/static/site.oth");
     let request = "GET /index.html HTTP/1.1\r\nHost: anything\r\n\r\n";
     let probe = Script {
         start: vec![Act::Call {

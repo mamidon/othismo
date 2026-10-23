@@ -23,7 +23,7 @@ impl Server {
     /// With `built`, the image is first built into a .rti in a temp dir of
     /// its own, and that is run instead.
     fn start_with(name: &str, built: bool) -> Server {
-        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/static");
         for m in ["HttpServer", "StaticSite"] {
             assert!(example.join(format!("scripts/{m}.wasm")).exists(), "run `make wasm` first");
         }
@@ -128,7 +128,7 @@ fn read_response(s: &mut TcpStream) -> Response {
 }
 
 fn public(path: &str) -> Vec<u8> {
-    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/public").join(path)).unwrap()
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/static/public").join(path)).unwrap()
 }
 
 #[test]

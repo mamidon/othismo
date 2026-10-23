@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn example(rel: &str) -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(rel);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(rel);
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
         // A module's own source, not its generated bindings.
@@ -27,7 +27,7 @@ fn example(rel: &str) -> PathBuf {
 /// regenerates them.
 #[test]
 fn bindings_are_up_to_date() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let mut seen = 0;
     for dir in std::fs::read_dir(&examples).unwrap().flatten() {
         let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
@@ -111,7 +111,7 @@ fn a_built_image_runs_without_its_sources() {
 /// example's image, run as `othismo test` runs it.
 #[test]
 fn example_tests_pass() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let mut seen = 0;
     for dir in std::fs::read_dir(&examples).unwrap().flatten() {
         for img in std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.path()) {

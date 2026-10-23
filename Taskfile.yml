@@ -46,7 +46,6 @@ tasks:
     sources:
       - docs/*.md
       - as/env/*.oth
-      - src/doc.rs
       - crates/**/*.rs
       - examples/static/site.mjs
     cmds:
@@ -123,7 +122,6 @@ tasks:
     deps: [build]
     sources:
       - as/env/*.oth
-      - src/**/*.rs
       - crates/**/*.rs
     generates:
       - as/env.ts
@@ -149,7 +147,6 @@ tasks:
       - as/*.ts
       # What embed writes into each module: the header format and env's types.
       - as/env/*.oth
-      - src/iface.rs
       - crates/**/*.rs
       - examples/{{.NAME}}/scripts/*.oth
       - examples/{{.NAME}}/scripts/*.messages

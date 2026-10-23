@@ -136,6 +136,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "codegen",
+ "compiler",
+ "format",
+ "format-bson",
+ "image",
+ "protocol",
+ "runtime",
+ "syntax",
+ "wat",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -877,26 +894,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "othismo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bson",
- "codegen",
- "compiler",
- "format",
- "format-bson",
- "image",
- "protocol",
- "runtime",
- "serde",
- "sha2",
- "syntax",
- "wasmtime",
- "wat",
-]
 
 [[package]]
 name = "petgraph"

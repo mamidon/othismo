@@ -151,7 +151,7 @@ function bound(): Server {
 }
 
 // ---------------------------------------------------------------------------
-// What generated server bases use to route requests (see src/bindings.rs)
+// What generated server bases use to route requests (see crates/codegen/src/bindings.rs)
 
 /**
  * The `{name}` segments of `path` that `pattern` matches, in order, then

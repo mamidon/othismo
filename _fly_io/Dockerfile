@@ -13,10 +13,10 @@
 FROM rust:1.95-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY src/ src/
-# The runtime embeds its own header from here (src/iface.rs).
+COPY crates/ crates/
+# The compiler embeds the runtime's header from here (crates/compiler/src/iface.rs).
 COPY as/env/ as/env/
-RUN cargo build --release --locked
+RUN cargo build --release --locked --bin othismo
 
 # 2. Node: compile the site's objects to Wasm and embed their headers, render
 #    the docs to HTML, and seal docs.oth.
