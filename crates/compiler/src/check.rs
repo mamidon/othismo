@@ -4,15 +4,15 @@
 //! every view, bind and export is worked out before anything runs.
 
 use crate::iface::{self, Header, Loader, Object, Trait};
-use crate::image::{self, Ident, Image, Literal, Pos};
-use crate::ns::{self, Namespace, Status, Verb};
-use crate::pattern::Pattern;
-use crate::payload::{self, Payload};
+use syntax::image::{self, Ident, Image, Literal, Pos};
+use protocol::ns::{self, Namespace, Status, Verb};
+use protocol::pattern::Pattern;
+use protocol::payload::{self, Payload};
 pub use ::image::program::*;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
-use format::AllSchemas;
+use format::{AllSchemas, Formats};
 use std::path::{Path, PathBuf};
 
 /// The traits the runtime implements on the host. The image being run gets
@@ -135,9 +135,10 @@ struct Builder<'l> {
 
 /// Reads, parses and checks the image at `path`, with the images it
 /// instantiates and everything its files import, reading each module's
-/// header from the module.
-pub fn load(path: &Path) -> Result<Program> {
-    load_with(path, &mut Loader::new(crate::formats()))
+/// header from the module. Its payload literals and slots may be in any of
+/// `formats`.
+pub fn load(path: &Path, formats: Formats) -> Result<Program> {
+    load_with(path, &mut Loader::new(formats))
 }
 
 /// [`load`], reading every file through `loader`.
@@ -834,10 +835,13 @@ fn content_type(id: &Ident) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::Value;
-    use crate::wire;
     use format::Format;
-    use format_bson::Bson;
+    use format_bson::{Bson, wire};
+    use syntax::image::Value;
+
+    fn formats() -> Formats {
+        Formats::new(vec![Box::new(Bson)])
+    }
 
     /// The message types every scripted module declares, beside its own.
     const MESSAGES: &str = r#"
@@ -920,7 +924,7 @@ mod tests {
     /// MESSAGES among its message types. A `Ghost` has no module.
     fn check_all(img: &str, modules: &[(&str, &str)], files: &[(&str, &str)]) -> Result<Program> {
         let dir = PathBuf::from("/check");
-        let mut loader = Loader::new(crate::formats());
+        let mut loader = Loader::new(formats());
         for (name, src) in files {
             loader.files.insert(dir.join(name), src.as_bytes().to_vec());
         }
@@ -1247,7 +1251,7 @@ mod tests {
         let (header, messages) = split(greeter);
         let header = exported(&header);
         let stale = |oth: &str, schemas: &str| {
-            let mut loader = Loader::new(crate::formats());
+            let mut loader = Loader::new(formats());
             loader.files.insert("/s/Greeter.oth".into(), oth.as_bytes().to_vec());
             loader.files.insert("/s/Greeter.messages".into(), schemas.as_bytes().to_vec());
             loader.files.insert("/s/Greeter.wasm".into(), module(&header, &messages));
@@ -1260,7 +1264,7 @@ mod tests {
         assert!(e.contains("/s/Greeter.wasm is stale: the types inside it aren't /s/Greeter.messages's; rebuild it"), "{e}");
 
         // Or it is imported from the module itself.
-        let mut loader = Loader::new(crate::formats());
+        let mut loader = Loader::new(formats());
         loader.files.insert("/m/Greeter.wasm".into(), module(&header, &messages));
         loader.files.insert("/m/test.oth".into(), br#"import { Greeter } from "./Greeter.wasm" instance g : Greeter"#.to_vec());
         let p = load_with(Path::new("/m/test.oth"), &mut loader).unwrap();

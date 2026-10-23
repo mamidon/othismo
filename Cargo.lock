@@ -145,6 +145,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "compiler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "format",
+ "format-bson",
+ "image",
+ "protocol",
+ "serde",
+ "syntax",
+ "wasmtime",
+ "wat",
+]
+
+[[package]]
 name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -858,6 +874,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bson",
+ "compiler",
  "format",
  "format-bson",
  "image",

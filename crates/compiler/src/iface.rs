@@ -9,12 +9,12 @@
 //! its guides read in. A resolved header stands on its own, so it can
 //! travel inside a module.
 
-use crate::image::{self, Ident, Image, Pos, Source};
+use syntax::image::{self, Ident, Image, Pos, Source};
 pub use ::image::header::*;
 pub use syntax::decl::*;
 use format::{Format, Formats, Schemas};
-use crate::pattern::Pattern;
-use crate::payload::{self, STAT, STAT_NAME};
+use protocol::pattern::Pattern;
+use protocol::payload::{self, STAT, STAT_NAME};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -27,12 +27,12 @@ use std::sync::OnceLock;
 /// share, then each trait it implements with its stand-in in memory,
 /// PackedFiles, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
-    ("bodies.oth", include_str!("../as/env/bodies.oth")),
-    ("Console.oth", include_str!("../as/env/Console.oth")),
-    ("Listener.oth", include_str!("../as/env/Listener.oth")),
-    ("Files.oth", include_str!("../as/env/Files.oth")),
-    ("PackedFiles.oth", include_str!("../as/env/PackedFiles.oth")),
-    ("TestSuite.oth", include_str!("../as/env/TestSuite.oth")),
+    ("bodies.oth", include_str!("../../../as/env/bodies.oth")),
+    ("Console.oth", include_str!("../../../as/env/Console.oth")),
+    ("Listener.oth", include_str!("../../../as/env/Listener.oth")),
+    ("Files.oth", include_str!("../../../as/env/Files.oth")),
+    ("PackedFiles.oth", include_str!("../../../as/env/PackedFiles.oth")),
+    ("TestSuite.oth", include_str!("../../../as/env/TestSuite.oth")),
 ];
 
 /// The runtime's header, `env`: every file in `as/env/`, joined.
@@ -675,8 +675,8 @@ impl Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ns::{Status, Verb};
-    use crate::payload::ANY;
+    use protocol::ns::{Status, Verb};
+    use protocol::payload::ANY;
 
     const GREETER: &str = r#"
         ## Greets every name typed on the console.
