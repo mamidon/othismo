@@ -8,7 +8,10 @@ use othismo::ns::{Status, Verb};
 use othismo::payload::Payload;
 use othismo::runtime::Options;
 
-const MESSAGES: &str = "message Ping {}\n";
+const MESSAGES: &str = "export message Ping {}\n";
+
+/// What every fixture image imports from env.
+const ENV: &str = "import { Console, Listener, Files, Packed.Files } from env";
 
 /// One thing a scripted module does.
 enum Act {
@@ -325,10 +328,10 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("import {{ Ping }} from \"./messages.iface\"\ninstance cons : Console\n{extra}\n");
+    let mut img = format!("import {{ Ping }} from \"./messages.oth\"\n{ENV}\ninstance cons : Console\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        img.push_str(&format!("instance {obj} : {ty} {{ {members} }}\n"));
+        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {members} }}\n"));
     }
     let parsed = othismo::image::parse(&img).unwrap();
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
@@ -340,7 +343,7 @@ fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, head
         };
         f.file(&format!("scripts/{ty}.wasm"), module(&script_wat(script), &iface));
     }
-    f.file("messages.iface", MESSAGES).file("test.img", img);
+    f.file("messages.oth", MESSAGES).file("test.oth", img);
     f
 }
 
@@ -700,14 +703,14 @@ fn modules_cannot_import_anything_else() {
     let wat = r#"(module
       (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
       (memory (export "memory") 1))"#;
-    let f = fixture("wasi", &[], "instance s : S");
+    let f = fixture("wasi", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     assert!(run_err(&f).contains("module S imports `wasi_snapshot_preview1.fd_write`, which the runtime does not provide"));
 }
 
 #[test]
 fn modules_must_export_the_entry_points() {
-    let f = fixture("exports", &[], "instance s : S");
+    let f = fixture("exports", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file(
         "scripts/S.wasm",
         module(r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#, "object S {}"),
@@ -726,7 +729,7 @@ fn abort_fails_the_run_naming_the_instance() {
       (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32))
       (func (export "rt_answer") (param i32 i32 i32 i32 i32))
       (func (export "rt_start") (call $abort (i32.const 16) (i32.const 0) (i32.const 7) (i32.const 9))))"#;
-    let f = fixture("abort", &[], "instance s : S");
+    let f = fixture("abort", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     let err = run_err(&f);
     assert!(err.contains("instance `s` failed starting"), "{err}");
@@ -735,13 +738,13 @@ fn abort_fails_the_run_naming_the_instance() {
 
 #[test]
 fn missing_module_is_reported() {
-    let f = fixture("missing", &[], "instance g : Ghost");
+    let f = fixture("missing", &[], "import { Ghost } from \"./scripts/Ghost.wasm\" instance g : Ghost");
     assert!(run_err(&f).contains("did you compile Ghost.ts?"));
 }
 
 #[test]
 fn an_imported_image_runs_in_memory_and_can_be_dialed() {
-    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/static.img");
+    let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/static/static.oth");
     let request = "GET /index.html HTTP/1.1\r\nHost: anything\r\n\r\n";
     let probe = Script {
         start: vec![Act::Call {
@@ -756,9 +759,9 @@ fn an_imported_image_runs_in_memory_and_can_be_dialed() {
     let f = Fixture::new("import");
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs /net Dialer needs /out Console }"));
     f.file(
-        "test.img",
+        "test.oth",
         format!(
-            "import \"{}\"\ninstance out : Console\ninstance probe : Probe {{\n  mount /net net\n  mount /out out\n}}\n",
+            "import \"{}\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\ninstance out : Console\ninstance probe : Probe {{\n  mount /net net\n  mount /out out\n}}\n",
             site.display()
         ),
     );
@@ -778,10 +781,13 @@ fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
     let f = Fixture::new("import_files");
     // The imported image is in a directory of its own, with its files there.
     std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
-    f.file("site/site.img", "instance files : Files\nmount /files files\nwrite /files \"public\"\n");
+    f.file("site/site.oth", &format!("{ENV}\ninstance files : Files\nmount /files files\nwrite /files \"public\"\n"));
     f.file("site/public/hello.txt", "hi");
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Files } from env object Probe { needs /f Files needs /out Console }"));
-    f.file("test.img", "import \"./site/site.img\"\ninstance out : Console\ninstance probe : Probe {\n  mount /f files\n  mount /out out\n}\n");
+    f.file(
+        "test.oth",
+        format!("import \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\ninstance out : Console\ninstance probe : Probe {{\n  mount /f files\n  mount /out out\n}}\n"),
+    );
     let out = run(&f).unwrap();
     assert_eq!(out, "hi\nnot_found\n");
 
@@ -792,11 +798,11 @@ fn an_imported_images_files_are_a_snapshot_of_its_own_directory() {
 #[test]
 fn an_import_shares_names_with_the_image() {
     let f = Fixture::new("import_clash");
-    f.file("site.img", "instance cons : Console\nmount /cons cons\n");
-    f.file("test.img", "import \"./site.img\"\ninstance cons : Console\n");
+    f.file("site.oth", &format!("{ENV}\ninstance cons : Console\nmount /cons cons\n"));
+    f.file("test.oth", &format!("import \"./site.oth\"\n{ENV}\ninstance cons : Console\n"));
     assert!(run_err(&f).contains("instance `cons` is declared twice"), "{}", run_err(&f));
-    f.file("test.img", "import \"./site.img\"\ninstance other : Console\nmount /cons other\n");
+    f.file("test.oth", &format!("import \"./site.oth\"\n{ENV}\ninstance other : Console\nmount /cons other\n"));
     assert!(run_err(&f).contains("`/cons` is already mounted in the image's view"), "{}", run_err(&f));
-    f.file("test.img", "import \"./nope.img\"\n");
-    assert!(run_err(&f).contains("1:8: importing ./nope.img"), "{}", run_err(&f));
+    f.file("test.oth", "import \"./nope.oth\"\n");
+    assert!(run_err(&f).contains("1:8: importing ./nope.oth"), "{}", run_err(&f));
 }

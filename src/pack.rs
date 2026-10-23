@@ -1,7 +1,7 @@
 //! A built image: a checked [`Program`] plus everything it needs from disk,
 //! held in memory. The runtime only ever runs a `Pack`.
 //!
-//! A pack comes from building a `.img` ([`build`]) or from opening a sealed
+//! A pack comes from building a `.oth` ([`build`]) or from opening a sealed
 //! `.rti` file ([`open`]). The file is a magic number, a BSON manifest and
 //! the blobs it refers to (see `docs/images.md`):
 //!
@@ -42,7 +42,7 @@ pub struct Pack {
     /// Each `Packed.Files` instance's files, by instance name.
     pub trees: BTreeMap<String, Tree>,
     pub blobs: BTreeMap<Hash, Rc<[u8]>>,
-    /// The directory holding the image, `.img` or `.rti`. Relative host
+    /// The directory holding the image, `.oth` or `.rti`. Relative host
     /// paths (a `FilesRoot`) resolve against it.
     pub dir: PathBuf,
     /// Notes from building, for `build -v`: each path an include replaced.
@@ -222,7 +222,7 @@ pub fn is_sealed_file(path: &Path) -> bool {
     std::fs::File::open(path).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head)).is_ok() && is_sealed(&head)
 }
 
-/// Opens a sealed image if `path` is one, and otherwise builds the `.img`
+/// Opens a sealed image if `path` is one, and otherwise builds the `.oth`
 /// at `path` in memory.
 pub fn load(path: &Path) -> Result<Pack> {
     if is_sealed_file(path) { open(path) } else { build(path, BuildOptions::default()) }
@@ -240,7 +240,7 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     if !is_sealed(bytes) {
         bail!("not a built image (bad magic number)");
     }
-    let rebuild = "rebuild it from its .img with this othismo's `build`";
+    let rebuild = "rebuild it from its .oth with this othismo's `build`";
     if bytes[7] != VERSION {
         bail!("it was built by another version of othismo (format {}, and this one reads {VERSION}); {rebuild}", bytes[7]);
     }
@@ -280,7 +280,7 @@ pub fn unseal(bytes: &[u8], dir: PathBuf) -> Result<Pack> {
     }
     for inst in &pack.program.instances {
         match &inst.kind {
-            Kind::Wasm { type_name } if !pack.modules.contains_key(type_name) => {
+            Kind::Wasm { type_name, .. } if !pack.modules.contains_key(type_name) => {
                 bail!("instance `{}`: module {type_name} is missing", inst.name)
             }
             Kind::Packed { .. } if !pack.trees.contains_key(&inst.name) => {
@@ -325,17 +325,17 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
 
     let mut sources = pack.program.sources.clone();
     for inst in pack.program.instances.clone() {
-        let Kind::Wasm { type_name } = &inst.kind else { continue };
+        let Kind::Wasm { type_name, module } = &inst.kind else { continue };
         if pack.modules.contains_key(type_name) {
             continue;
         }
-        let module = module_path(&dir.join(&inst.dir), type_name);
+        let module = dir.join(module);
         let bytes = std::fs::read(&module).with_context(|| {
             format!("instance `{}`: cannot read {} (did you compile {type_name}.ts?)", inst.name, module.display())
         })?;
         let hash = pack.add(bytes);
         pack.modules.insert(type_name.clone(), hash);
-        sources.push(module.with_extension("iface"));
+        sources.push(module.with_extension("oth"));
         sources.push(module.with_extension("ts"));
     }
 
@@ -348,11 +348,6 @@ pub fn build(path: &Path, options: BuildOptions) -> Result<Pack> {
         }
     }
     Ok(pack)
-}
-
-/// Where instance type `type_name` is compiled to, next to the image.
-pub fn module_path(dir: &Path, type_name: &str) -> PathBuf {
-    dir.join("scripts").join(format!("{type_name}.wasm"))
 }
 
 /// A source's name in the pack: its path relative to the image, with `..`

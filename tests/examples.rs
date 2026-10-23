@@ -14,7 +14,7 @@ fn example(rel: &str) -> PathBuf {
     let scripts = path.parent().unwrap().join("scripts");
     for ts in std::fs::read_dir(&scripts).unwrap().flatten().map(|e| e.path()) {
         // A module's own source, not its generated bindings.
-        if ts.extension().is_some_and(|e| e == "ts") && !ts.to_string_lossy().ends_with(".iface.ts") {
+        if ts.extension().is_some_and(|e| e == "ts") && !ts.to_string_lossy().ends_with(".oth.ts") {
             assert!(ts.with_extension("wasm").exists(), "{} is not compiled; run `task test`", ts.display());
         }
     }
@@ -29,7 +29,7 @@ fn bindings_are_up_to_date() {
     let mut seen = 0;
     for dir in std::fs::read_dir(&examples).unwrap().flatten() {
         let Ok(scripts) = std::fs::read_dir(dir.path().join("scripts")) else { continue };
-        for header in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "iface")) {
+        for header in scripts.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "oth")) {
             seen += 1;
             let resolved = othismo::iface::load(&header).unwrap();
             let committed = std::fs::read_to_string(format!("{}.ts", header.display())).ok();
@@ -44,7 +44,7 @@ fn bindings_are_up_to_date() {
 #[test]
 fn hello_world_echoes_lines_through_the_binary() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_othismo"))
-        .arg(example("hello/hello.img"))
+        .arg(example("hello/hello.oth"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -58,13 +58,13 @@ fn hello_world_echoes_lines_through_the_binary() {
 
 #[test]
 fn hello_world_with_checks_off() {
-    let out = run_image(&example("hello/hello.img"), "a\nb\n", Options { no_checks: true }).unwrap();
+    let out = run_image(&example("hello/hello.oth"), "a\nb\n", Options { no_checks: true }).unwrap();
     assert_eq!(out, "a\nb\n");
 }
 
 #[test]
 fn greeter_uses_a_startup_request_and_a_second_object() {
-    let out = run_image(&example("greeter/greeter.img"), "world\nAda\n", Options::default()).unwrap();
+    let out = run_image(&example("greeter/greeter.oth"), "world\nAda\n", Options::default()).unwrap();
     assert_eq!(
         out,
         "Hello, world!\n\
@@ -83,7 +83,7 @@ fn a_built_image_runs_without_its_sources() {
     std::fs::create_dir_all(&dir).unwrap();
     let rti = dir.join("hello.rti");
     let bin = env!("CARGO_BIN_EXE_othismo");
-    let built = Command::new(bin).arg("build").arg(example("hello/hello.img")).arg("-o").arg(&rti).output().unwrap();
+    let built = Command::new(bin).arg("build").arg(example("hello/hello.oth")).arg("-o").arg(&rti).output().unwrap();
     assert!(built.status.success(), "stderr: {}", String::from_utf8_lossy(&built.stderr));
 
     // Nothing but the .rti is next to it, and it runs the same.
@@ -97,7 +97,7 @@ fn a_built_image_runs_without_its_sources() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Every example's test suites pass: each `<name>.test.img` beside an
+/// Every example's test suites pass: each `<name>.test.oth` beside an
 /// example's image, run as `othismo test` runs it.
 #[test]
 fn example_tests_pass() {
@@ -105,7 +105,7 @@ fn example_tests_pass() {
     let mut seen = 0;
     for dir in std::fs::read_dir(&examples).unwrap().flatten() {
         for img in std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.path()) {
-            if !img.to_string_lossy().ends_with(".test.img") {
+            if !img.to_string_lossy().ends_with(".test.oth") {
                 continue;
             }
             let rel = img.strip_prefix(&examples).unwrap().to_string_lossy().into_owned();

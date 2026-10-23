@@ -1,5 +1,5 @@
 ## Configures a Greeter; sent once at startup by the image.
-message Greeting {
+export message Greeting {
   ## Put before each name.
   prefix: string
   ## End with `!` rather than `.`.
@@ -8,7 +8,7 @@ message Greeting {
 
 ## Greets every name typed on the console, reports running statistics
 ## there, and has `/shouter` shout each greeting.
-object Greeter {
+export object Greeter {
   ## The console: the names, and where greetings and statistics go.
   needs /dev/cons {
     /  watch -> text/plain*, write text/plain

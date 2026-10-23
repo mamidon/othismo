@@ -2,6 +2,10 @@
 # listener, and the console for the access log. The site's files are packed
 # into the image when it is built.
 
+import { HttpServer } from "./scripts/HttpServer.oth"
+import { StaticSite } from "./scripts/StaticSite.oth"
+import { Console, Listener, Packed.Files } from env
+
 # Where to listen. Deploy with e.g. `--set listen=0.0.0.0:80`.
 require listen : text/plain = "127.0.0.1:8080"
 

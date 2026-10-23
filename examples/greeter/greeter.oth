@@ -1,7 +1,9 @@
 # Greets each name typed on stdin, shouts the greeting back, and reports
 # running statistics. Exercises a startup request, a request between two
 # objects, and a view with more than one mount.
-import { Greeting } from Greeter
+import { Greeter, Greeting } from "./scripts/Greeter.oth"
+import { Shouter } from "./scripts/Shouter.oth"
+import { Console } from env
 
 instance greeter : Greeter {
   mount /dev/cons cons

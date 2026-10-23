@@ -4,14 +4,14 @@
 ## Whatever is written to it is printed on a line of its own: text as it
 ## is, a stat record as its fields, and anything else as its content type
 ## and length.
-trait Console {
+export trait Console {
   ## Watch for every line of input, until it ends; write to print.
   /   watch -> text/plain*, write */*
 }
 
 ## The other side of a console run in memory, which an image that imports
 ## another can drive it with: type lines into it, and watch what it prints.
-trait Terminal {
+export trait Terminal {
   ## Type a line, as if on stdin.
   /typed     write text/plain
   ## Everything written to the console, as it is written.

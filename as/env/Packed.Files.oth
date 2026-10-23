@@ -1,5 +1,5 @@
-import { FileTree } from "./bodies.iface"
+import { FileTree } from "./bodies.oth"
 
 ## Files packed into the image when it was built, by its `include`s. It
 ## answers as `Files` does.
-object Packed.Files : FileTree {}
+export object Packed.Files : FileTree {}

@@ -5,13 +5,13 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: othismo [run] [--check] [--no-checks] [--with <file>]... [--set <slot[.field]=value>]... <image>
        othismo test [--no-checks] <image>
-       othismo build [-v] [--no-sources] <image.img> -o <out.rti>
+       othismo build [-v] [--no-sources] <image.oth> -o <out.rti>
        othismo unpack <image> <dir>
-       othismo bindings [--library <path>] <header.iface | env> [-o <out.ts>]
-       othismo embed <header.iface> <module.wasm>
-       othismo doc <module.wasm | header.iface | built-in type | env>
+       othismo bindings [--library <path>] <header.oth | env> [-o <out.ts>]
+       othismo embed <header.oth> <module.wasm>
+       othismo doc <module.wasm | header.oth | built-in type | env>
 
-An image is a .img source, which is built in memory, or a built .rti file.
+An image is a .oth source, which is built in memory, or a built .rti file.
 
   --check         validate the image, print each instance's view and what
                   it can reach at most, and exit without running it
@@ -29,14 +29,14 @@ lists its tests, and each test runs in a fresh run of the image, with nothing
 outside started. What the image prints is shown for the tests that fail.
 
 `bindings` writes AssemblyScript classes for a header's message types, to
-<header.iface>.ts unless -o says otherwise; a header that declares none
+<header.oth>.ts unless -o says otherwise; a header that declares none
 gets no file. They import the BSON library from \"othismo/bson\", or from
 --library.
 For `env`, the header is the runtime's own.
 
 `embed` puts a module's header into the module, replacing any already there.
-The header declares one object, named for the module: `object Echo` for
-Echo.wasm.
+The header declares one object, named for the module, and exports it:
+`export object Echo` for Echo.wasm.
 
 `doc` prints an object's guide and a reference generated from its header, as
 Markdown: a module's, from the header inside it; each object in a header
@@ -165,7 +165,7 @@ fn document(target: &str) -> Result<String> {
             let wasm = std::fs::read(path).with_context(|| format!("reading {target}"))?;
             iface::embedded(&wasm).with_context(|| target.to_string())?.with_context(|| format!("{target} has no header"))?
         }
-        Some("iface") => iface::load(path)?,
+        Some("oth") => iface::load(path)?,
         _ => anyhow::bail!("{target} is not a module, a header or a built-in type"),
     };
     let pages: Vec<String> = header.objects.iter().map(|o| doc::object(o, &header, &header.declared)).collect();

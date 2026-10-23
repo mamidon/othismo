@@ -1,9 +1,9 @@
 ## A stream of bytes each way.
-protocol Connection { watch -> application/octet-stream*, write application/octet-stream }
+export protocol Connection { watch -> application/octet-stream*, write application/octet-stream }
 
 ## A listener, and the connections it accepts. The runtime runs it as a TCP
 ## listener on the address the image configures it with.
-trait Listener {
+export trait Listener {
   ## Configured by the image only, with the address to listen on, e.g.
   ## "127.0.0.1:8080".
   /                operator write text/plain
@@ -22,7 +22,7 @@ trait Listener {
 
 ## The other side of a listener run in memory, which an image that imports
 ## another can drive it with.
-trait Dialer {
+export trait Dialer {
   ## Connect, sending the request's bytes, and get back everything the
   ## server writes, until it closes the connection.
   /dial   create application/octet-stream -> application/octet-stream*

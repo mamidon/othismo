@@ -338,7 +338,7 @@ impl<'p> Runtime<'p> {
         let mut objects = vec![];
         for (i, inst) in program.instances.iter().enumerate() {
             let obj = match &inst.kind {
-                Kind::Wasm { type_name } => {
+                Kind::Wasm { type_name, .. } => {
                     let state = HostState { me: i, shared: shared.clone() };
                     let module = pack.blob(&pack.modules[type_name]);
                     Object::Wasm(Box::new(instantiate(&engine, &linker, &inst.name, type_name, module, state)?))

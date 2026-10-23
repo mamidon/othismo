@@ -1,6 +1,9 @@
 # Echoes every line typed on stdin. Echo can see exactly one thing: the
 # console, at /dev/cons.
 
+import { Echo } from "./scripts/Echo.oth"
+import { Console } from env
+
 instance echo : Echo {
   mount /dev/cons cons
 }

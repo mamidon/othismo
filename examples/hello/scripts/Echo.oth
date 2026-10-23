@@ -1,5 +1,5 @@
 ## Echoes every line typed on the console back to it.
-object Echo {
+export object Echo {
   ## The console: the lines to echo, and where they go.
   needs /dev/cons {
     /  watch -> text/plain*, write text/plain

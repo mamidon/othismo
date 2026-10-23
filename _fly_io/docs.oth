@@ -2,14 +2,19 @@
 #
 # The Dockerfile next to this lays out a build directory around it:
 #
-#   docs.img            this file
+#   docs.oth            this file
 #   scripts/*.wasm      HttpServer and StaticSite, compiled from examples/static/scripts
 #   public/             the site, with docs/*.md freshly rendered to HTML
 #
 # and seals it into docs.rti. Fly's proxy terminates TLS and forwards plain
 # HTTP to port 8080 (internal_port in the root fly.toml), so that is where we listen.
 
-require listen : Listen { address: "0.0.0.0:8080" }
+# The objects come from their modules, whose headers are inside them.
+import { HttpServer } from "./scripts/HttpServer.wasm"
+import { StaticSite } from "./scripts/StaticSite.wasm"
+import { Console, Listener, Packed.Files } from env
+
+require listen : text/plain = "0.0.0.0:8080"
 
 # HTTP in, namespace requests out. Every host name is served the site.
 instance http : HttpServer {
@@ -31,5 +36,5 @@ instance files : Packed.Files { include "./public/" }
 mount /net  net
 mount /http http
 
-control /net listen
-control /http/hosts/* Text { text: "/www" }
+write /net listen
+write /http/hosts/* "/www"

@@ -8,12 +8,12 @@
 # records, which the protocol defines, so they are written bare.
 
 ## Something read whole.
-protocol File { read -> */*, stat }
+export protocol File { read -> */*, stat }
 
 ## Something listed.
-protocol Dir { list, stat }
+export protocol Dir { list, stat }
 
 ## A tree of files, read-only.
-trait FileTree {
+export trait FileTree {
   /**   File, Dir
 }

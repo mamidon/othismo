@@ -1,7 +1,7 @@
 //! Resolves and validates a parsed image into a [`Program`] the runtime can run.
 
-use crate::iface::{self, Header, Object, Trait};
-use crate::image::{self, Ident, Image, Literal, SlotDecl, Source, Value};
+use crate::iface::{self, Header, Loader, Object, Trait};
+use crate::image::{self, Ident, Image, Literal, SlotDecl, Value};
 use crate::messages::{FieldType, MessageType};
 use crate::ns::{self, Namespace, Status, Verb};
 use crate::pattern::Pattern;
@@ -54,7 +54,7 @@ pub struct Program {
     pub view: Vec<MountDecl>,
     /// The image's startup requests, in the order it makes them.
     pub startup: Vec<Startup>,
-    /// The files the image was checked from: the `.img` and the headers it
+    /// The files the image was checked from: the `.oth` files: the image and the headers it
     /// imports from files.
     /// Not kept in a built image, which has copies under its sources.
     #[serde(skip)]
@@ -169,8 +169,9 @@ impl Slot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Kind {
-    /// `instance x : Name` runs `scripts/Name.wasm`.
-    Wasm { type_name: String },
+    /// A module: its object's name, and where the module is, relative to
+    /// the root image's directory.
+    Wasm { type_name: String, module: String },
     Console,
     /// Listens on the address its config gives.
     Tcp,
@@ -193,123 +194,151 @@ fn err_at(id: &Ident, msg: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{}: {msg}", id.pos)
 }
 
-/// Reads, parses and checks the image at `path`, with the images it
-/// imports, reading each module's header from the module.
+/// One `.oth` file of an image: the root, or one it imports whole.
+struct Unit {
+    image: Image,
+    /// Its directory, relative to the root's: where its relative paths
+    /// (includes, a files root) start.
+    rel: PathBuf,
+    /// Imported whole by another, so the runtime's objects in it run in memory.
+    imported: bool,
+    /// What its names mean: its declarations and imports, resolved.
+    scope: Header,
+}
+
+/// What an instance's type turned out to be.
+enum TypeRef {
+    /// One of the runtime's own, by its name: a trait it implements, such
+    /// as `Listener`, or `Packed.Files`.
+    Builtin(String),
+    /// A module's object: the interface the module itself carries, the
+    /// module, relative to the root's directory, and its message types.
+    Wasm { object: Object, module: String, messages: BTreeMap<String, MessageType> },
+}
+
+/// Reads, parses and checks the image at `path`, with the images it imports
+/// whole and everything it imports declarations from, reading each module's
+/// header from the module.
 pub fn load(path: &Path) -> Result<Program> {
-    let mut sources = vec![];
-    let img = gather(path, Path::new(""), 0, &mut sources)?;
+    load_with(path, &mut Loader::default())
+}
+
+/// [`load`], reading every file through `loader`.
+pub fn load_with(path: &Path, loader: &mut Loader) -> Result<Program> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    // Each module comes from the directory of the image that uses it.
-    let mut module_dirs: BTreeMap<&str, &str> = BTreeMap::new();
-    for inst in &img.instances {
-        let ty = inst.type_name.name.as_str();
-        if ty.contains('.') || builtin(ty, false).is_some() {
-            continue;
-        }
-        if let Some(prev) = module_dirs.insert(ty, &inst.dir)
-            && prev != inst.dir
-        {
-            bail!(
-                "{}: `{ty}` would come from both {} and {}; an image can't use two modules of one name",
-                inst.type_name.pos,
-                Path::new(prev).join("scripts").display(),
-                Path::new(&inst.dir).join("scripts").display()
-            );
-        }
-    }
-    let mut modules = |name: &str| module_header(&dir.join(module_dirs.get(name).copied().unwrap_or("")), name);
-    let mut program = check(&img, dir, &mut modules).with_context(|| format!("checking {}", path.display()))?;
-    sources.extend(program.sources);
-    program.sources = sources;
+    let mut units = vec![];
+    gather(path, Path::new(""), 0, loader, &mut units)?;
+    let mut program = check(&units, dir, loader).with_context(|| format!("checking {}", path.display()))?;
+    program.sources = loader.sources.clone();
     Ok(program)
 }
 
-/// The image at `path`, with every image it imports merged in ahead of its
-/// own declarations, so their requests are made first. `rel` is `path`'s
-/// directory relative to the top image's; `sources` collects every image
-/// read.
-fn gather(path: &Path, rel: &Path, depth: usize, sources: &mut Vec<PathBuf>) -> Result<Image> {
+/// Adds the image at `path` to `units`, after every image it imports whole,
+/// so that their requests are made first. `rel` is `path`'s directory
+/// relative to the root's.
+fn gather(path: &Path, rel: &Path, depth: usize, loader: &mut Loader, units: &mut Vec<Unit>) -> Result<()> {
     if depth > 16 {
         bail!("images import each other in a loop");
     }
-    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let own = image::parse(&src).with_context(|| format!("parsing {}", path.display()))?;
-    sources.push(path.to_path_buf());
+    let image = loader.image(path)?;
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut img = Image { imports: vec![], images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
-    for imp in &own.images {
+    for imp in &image.images {
         let child = Path::new(&imp.path);
-        let child_rel = rel.join(child.parent().unwrap_or(Path::new("")));
-        let theirs = gather(&dir.join(child), &child_rel, depth + 1, sources)
+        let child_rel = iface::join(rel, &child.parent().unwrap_or(Path::new("")).to_string_lossy());
+        gather(&iface::join(dir, &imp.path), &child_rel, depth + 1, loader, units)
             .with_context(|| format!("{}: importing {}", imp.pos, imp.path))?;
-        img.imports.extend(theirs.imports);
-        img.requires.extend(theirs.requires);
-        img.instances.extend(theirs.instances);
-        img.mounts.extend(theirs.mounts);
-        img.requests.extend(theirs.requests);
     }
-    // Header files an image imports types from are relative to it.
-    img.imports.extend(own.imports.into_iter().map(|mut i| {
-        if let image::Source::Path(p) = &i.from {
-            i.from = image::Source::Path(rel.join(p).to_string_lossy().into_owned());
+    let scope = loader.resolve(&image.header, path)?;
+    units.push(Unit { image, rel: rel.to_path_buf(), imported: depth > 0, scope });
+    Ok(())
+}
+
+/// What the instance type `ty` names in `unit`: an object it declares or
+/// imports, or one of the runtime's traits it imports from env. A module's
+/// interface is the header inside it, which must be the one it was built
+/// from. `dir` is the root's directory.
+fn instance_type(unit: &Unit, ty: &Ident, dir: &Path, loader: &mut Loader) -> Result<TypeRef> {
+    if let Some(o) = unit.scope.object_named(&ty.name) {
+        let Some(origin) = &o.origin else { return Ok(TypeRef::Builtin(o.name.clone())) };
+        let module = if origin.extension().is_some_and(|e| e == "wasm") { origin.clone() } else { origin.with_extension("wasm") };
+        if loader.read(&module).is_err() {
+            bail!("cannot read {} (did you compile {}.ts?)", module.display(), o.name);
         }
-        i
-    }));
-    img.requires.extend(own.requires);
-    img.instances.extend(own.instances.into_iter().map(|mut inst| {
-        inst.dir = rel.to_string_lossy().into_owned();
-        inst.imported = depth > 0;
-        inst
-    }));
-    img.mounts.extend(own.mounts);
-    img.requests.extend(own.requests);
-    Ok(img)
+        let header = loader.header(&module)?;
+        iface::for_module(&header, &o.name).with_context(|| format!("{} has the wrong header", module.display()))?;
+        let object = header.object(&o.name).cloned().expect("for_module found it");
+        if !object.same_shape(o) {
+            bail!("{} is stale: the header inside it isn't {}'s; rebuild it", module.display(), origin.display());
+        }
+        let rel = module.strip_prefix(dir).unwrap_or(&module).to_string_lossy().into_owned();
+        return Ok(TypeRef::Wasm { object, module: rel, messages: header.messages });
+    }
+    if let Some(t) = unit.scope.traits.get(&ty.name) {
+        if NATIVE.contains(&t.name.as_str()) && iface::env().traits.get(&t.name) == Some(t) {
+            return Ok(TypeRef::Builtin(t.name.clone()));
+        }
+        let runs = NATIVE.join(", ");
+        bail!(err_at(ty, format!("`{}` is a shape the runtime has no implementation of; it runs {runs}, and {PACKED}", ty.name)));
+    }
+    if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) {
+        bail!(err_at(ty, format!("the runtime's objects are declared by their traits: `{now}`, imported from env")));
+    }
+    if NATIVE.contains(&ty.name.as_str()) || ty.name == PACKED {
+        bail!(err_at(ty, format!("`{}` is the runtime's; import it first: `import {{ {} }} from env`", ty.name, ty.name)));
+    }
+    bail!(err_at(ty, format!("unknown object `{}`; is it imported?", ty.name)))
 }
 
-/// Module `name`'s header, from the module itself: `scripts/<name>.wasm`
-/// next to the image in `dir`.
-pub fn module_header(dir: &Path, name: &str) -> Result<Header> {
-    let path = crate::pack::module_path(dir, name);
-    let wasm = std::fs::read(&path).with_context(|| format!("cannot read {} (did you compile {name}.ts?)", path.display()))?;
-    let header = iface::embedded(&wasm).with_context(|| path.display().to_string())?.ok_or_else(|| {
-        anyhow!("{} has no header; embed scripts/{name}.iface into it with `othismo embed`", path.display())
-    })?;
-    iface::for_module(&header, name).with_context(|| format!("{} has the wrong header", path.display()))?;
-    Ok(header)
-}
+/// Validates the image made of `units`, the root last: its messages against
+/// their types, and its wiring against its objects' interfaces. `dir` is the
+/// root's directory, and `loader` reads modules' headers.
+fn check(units: &[Unit], dir: &Path, loader: &mut Loader) -> Result<Program> {
+    // Everything every file declares, with the file it is in.
+    fn all<'u, T>(units: &'u [Unit], of: fn(&'u Image) -> &'u [T]) -> Vec<(usize, &'u T)> {
+        units.iter().enumerate().flat_map(|(u, unit)| of(&unit.image).iter().map(move |t| (u, t))).collect()
+    }
+    let decls = all(units, |i| &i.instances);
+    let requires = all(units, |i| &i.requires);
+    let requests = all(units, |i| &i.requests);
+    let top_mounts: Vec<image::Mount> = all(units, |i| &i.mounts).into_iter().map(|(_, m)| m.clone()).collect();
 
-/// The runtime's own message types, from its header (`as/env/`).
-pub fn env_messages() -> BTreeMap<String, MessageType> {
-    iface::env().messages.clone()
-}
-
-/// Validates `img`: its messages against their types, and its wiring
-/// against its objects' interfaces. `modules` gives each module's header,
-/// and imports from files resolve against `dir`.
-pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<Header>) -> Result<Program> {
-    let mut headers: BTreeMap<String, Header> = BTreeMap::new();
-    for inst in &img.instances {
+    let mut types: Vec<TypeRef> = vec![];
+    let mut modules: BTreeMap<String, String> = BTreeMap::new();
+    let mut sets: Vec<(String, BTreeMap<String, MessageType>)> = vec![("the runtime".into(), iface::env().messages.clone())];
+    for &(u, inst) in &decls {
         let ty = &inst.type_name;
-        if !ty.name.contains('.') && builtin(&ty.name, false).is_none() && !headers.contains_key(&ty.name) {
-            let header = modules(&ty.name).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
-            headers.insert(ty.name.clone(), header);
+        let t = instance_type(&units[u], ty, dir, loader).with_context(|| format!("{}: instance `{}`", ty.pos, inst.name.name))?;
+        if let TypeRef::Wasm { object, module, messages } = &t {
+            if let Some(prev) = modules.insert(object.name.clone(), module.clone())
+                && prev != *module
+            {
+                bail!("{}: `{}` would come from both {prev} and {module}; an image can't use two modules of one name", ty.pos, object.name);
+            }
+            sets.push((object.name.clone(), messages.clone()));
         }
+        types.push(t);
     }
-    // Only the runtime's types and the image's imports can be written in it.
-    let (messages_in_scope, sources) = resolve_imports(img, dir, &mut headers, modules)?;
-    let messages = all_messages(&headers, &messages_in_scope)?;
-    let mut interfaces: BTreeMap<String, Object> =
-        headers.iter().filter_map(|(name, h)| Some((name.clone(), h.object(name)?.clone()))).collect();
-    for inst in &img.instances {
-        if let Some(o) = builtin(&inst.type_name.name, inst.imported) {
-            interfaces.insert(o.name.clone(), o);
-        }
+    sets.extend(units.iter().map(|u| ("the image's imports".to_string(), u.scope.messages.clone())));
+    let messages = all_messages(&sets)?;
+
+    // What each instance runs as: a module's object, or one of the
+    // runtime's, which in an imported image runs in memory.
+    let mut interfaces: BTreeMap<String, Object> = BTreeMap::new();
+    let mut type_names = vec![];
+    for (&(u, _), t) in decls.iter().zip(&types) {
+        let o = match t {
+            TypeRef::Builtin(name) => builtin(name, units[u].imported).expect("only the runtime's are Builtin"),
+            TypeRef::Wasm { object, .. } => object.clone(),
+        };
+        type_names.push(o.name.clone());
+        interfaces.insert(o.name.clone(), o);
     }
 
     let mut slots: Vec<Slot> = vec![];
-    for req in &img.requires {
+    for &(u, req) in &requires {
+        let scope = &units[u].scope.messages;
         let name = &req.name.name;
-        if messages_in_scope.contains_key(name) {
+        if scope.contains_key(name) {
             bail!(err_at(&req.name, format!("`{name}` is a message type; a slot needs a name of its own")));
         }
         if slots.iter().any(|s| s.name == *name) {
@@ -317,18 +346,16 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
         }
         let kind = match &req.slot {
             SlotDecl::Message(body) => {
-                let (type_name, defaults) = body_fields(&messages_in_scope, body, false)?;
+                let (type_name, defaults) = body_fields(scope, body, false)?;
                 SlotKind::Message { type_name, defaults }
             }
-            SlotDecl::Payload { ty, default } => {
-                SlotKind::Payload { ty: content_type(ty)?, default: default.clone() }
-            }
+            SlotDecl::Payload { ty, default } => SlotKind::Payload { ty: content_type(ty)?, default: default.clone() },
         };
         slots.push(Slot { name: name.clone(), kind, value: None, origins: vec![] });
     }
 
     let mut index: HashMap<&str, usize> = HashMap::new();
-    for (i, inst) in img.instances.iter().enumerate() {
+    for (i, (_, inst)) in decls.iter().enumerate() {
         if index.insert(&inst.name.name, i).is_some() {
             bail!(err_at(&inst.name, format!("instance `{}` is declared twice", inst.name.name)));
         }
@@ -336,15 +363,15 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
 
     // The image's requests resolve in its own view, as an instance's do in
     // its. Nothing has exposed anything yet, so this is where they land.
-    let view = mount_decls(&img.mounts, &index, "the image's view")?;
-    let image_view = img.instances.len();
+    let view = mount_decls(&top_mounts, &index, "the image's view")?;
+    let image_view = decls.len();
     let mut image_ns = Namespace::new(image_view + 1);
     for m in &view {
         image_ns.mount(image_view, &m.at, m.target, m.read_only);
     }
     // (the instance it lands in, the path there, the path in the image's view)
     let mut addressed: Vec<(usize, String, String)> = vec![];
-    for r in &img.requests {
+    for (_, r) in &requests {
         let full =
             ns::clean(&r.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", r.path.pos, r.path.path))?;
         let to = image_ns
@@ -358,84 +385,75 @@ pub fn check(img: &Image, dir: &Path, modules: &mut dyn FnMut(&str) -> Result<He
     // A configurable built-in object's config is the image's write of its
     // root, taken before the object is made rather than sent as a request.
     let is_config = |to: usize, verb: Verb, path: &str| {
-        verb == Verb::Write && path == "/" && CONFIGURED.contains(&img.instances[to].type_name.name.as_str())
+        verb == Verb::Write && path == "/" && matches!(&types[to], TypeRef::Builtin(n) if CONFIGURED.contains(&n.as_str()))
     };
 
     let mut instances = vec![];
-    for (i, inst) in img.instances.iter().enumerate() {
-        let ty = &inst.type_name;
-        let requests: Vec<(&image::Request, &str)> =
-            img.requests.iter().zip(&addressed).filter(|(_, (to, ..))| *to == i).map(|(r, (_, p, _))| (r, p.as_str())).collect();
+    for (i, &(u, inst)) in decls.iter().enumerate() {
+        let unit = &units[u];
+        let made_of: Vec<(&image::Request, &str, usize)> = requests
+            .iter()
+            .zip(&addressed)
+            .filter(|(_, (to, ..))| *to == i)
+            .map(|(&(ru, r), (_, p, _))| (r, p.as_str(), ru))
+            .collect();
         let mut config = None;
-        let type_name = run_as(inst);
+        let type_name = type_names[i].clone();
         let obj = interfaces.get(&type_name);
-        if ty.name != PACKED
+        if !matches!(&types[i], TypeRef::Builtin(n) if n == PACKED)
             && let Some(inc) = inst.includes.first()
         {
-            bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, ty.name);
+            bail!("{}: `include` packs files into a {PACKED} instance, and `{}` is a {}", inc.pos, inst.name.name, inst.type_name.name);
         }
-        let configs: Vec<&(&image::Request, &str)> = requests.iter().filter(|(r, path)| is_config(i, r.verb, path)).collect();
-        let kind = match builtin(&ty.name, inst.imported) {
-            Some(builtin) => {
-                let name = builtin.name.as_str();
+        let configs: Vec<&(&image::Request, &str, usize)> = made_of.iter().filter(|(r, path, _)| is_config(i, r.verb, path)).collect();
+        let kind = match &types[i] {
+            TypeRef::Builtin(builtin) => {
+                let name = type_name.as_str();
                 if let Some(m) = inst.mounts.first() {
                     bail!(err_at(&m.target, format!("{name} has no view to mount into; it only serves")));
                 }
-                if let Some(what) = config_what(&ty.name) {
+                if let Some(what) = config_what(builtin) {
                     let needs = || {
                         err_at(
                             &inst.name,
                             format!("{name} needs exactly one config: mount it in the image's view and `write` its root with {what}"),
                         )
                     };
-                    let [(c, _)] = configs.as_slice() else { bail!(needs()) };
-                    let arg = body_arg(&messages_in_scope, &slots, c.body.as_ref().ok_or_else(needs)?)?;
+                    let [(c, _, cu)] = configs.as_slice() else { bail!(needs()) };
+                    let arg = body_arg(&units[*cu].scope.messages, &slots, c.body.as_ref().ok_or_else(needs)?)?;
                     if !payload::fits("text/*", arg_type(&slots, &arg)) {
                         bail!(needs());
                     }
                     config = Some(arg);
                 }
-                builtin_kind(&ty.name, &inst.includes)?
+                builtin_kind(builtin, &inst.includes)?
             }
-            None if let Some((_, now)) = RENAMED.iter().find(|(old, _)| *old == ty.name) => {
-                bail!(err_at(ty, format!("the runtime's objects are declared by their traits: `instance {} : {now}`", inst.name.name)))
-            }
-            None if iface::env().traits.contains_key(&ty.name) => bail!(err_at(
-                ty,
-                format!(
-                    "`{}` is a shape the runtime has no implementation of; it runs {}, and {PACKED}",
-                    ty.name,
-                    NATIVE.join(", ")
-                )
-            )),
-            None if ty.name.starts_with("Environment.") || ty.name.starts_with("Packed.") => {
-                let known = NATIVE.iter().chain([&PACKED]).copied().collect::<Vec<_>>().join(", ");
-                bail!(err_at(ty, format!("unknown built-in type `{}` (there are: {known})", ty.name)));
-            }
-            None if ty.name.contains('.') => bail!(err_at(ty, format!("`{}` is not a module name", ty.name))),
-            None => Kind::Wasm { type_name: ty.name.clone() },
+            TypeRef::Wasm { object, module, .. } => Kind::Wasm { type_name: object.name.clone(), module: module.clone() },
         };
 
         let mounts = mount_decls(&inst.mounts, &index, &format!("`{}`'s view", inst.name.name))?;
 
         if let Some(obj) = obj {
-            check_requests(inst, obj, &requests, &messages_in_scope, &slots)?;
-            check_mounts(img, inst, obj, &index, &interfaces)?;
+            let made_of: Vec<(&image::Request, &str, usize)> =
+                made_of.iter().filter(|(r, path, _)| !is_config(i, r.verb, path)).copied().collect();
+            check_requests(inst, obj, &made_of, units, &slots)?;
+            check_mounts(&type_names, inst, obj, &index, &interfaces)?;
         }
-        let in_memory = inst.imported && NATIVE.contains(&ty.name.as_str());
-        instances.push(Instance { name: inst.name.name.clone(), type_name, kind, dir: inst.dir.clone(), in_memory, config, mounts });
+        let in_memory = unit.imported && matches!(&types[i], TypeRef::Builtin(n) if NATIVE.contains(&n.as_str()));
+        let dir = unit.rel.to_string_lossy().into_owned();
+        instances.push(Instance { name: inst.name.name.clone(), type_name, kind, dir, in_memory, config, mounts });
     }
 
     let mut startup = vec![];
-    for (r, (to, path, full)) in img.requests.iter().zip(&addressed) {
+    for (&(u, r), (to, path, full)) in requests.iter().zip(&addressed) {
         if is_config(*to, r.verb, path) {
             continue;
         }
-        let body = r.body.as_ref().map(|b| body_arg(&messages_in_scope, &slots, b)).transpose()?;
+        let body = r.body.as_ref().map(|b| body_arg(&units[u].scope.messages, &slots, b)).transpose()?;
         startup.push(Startup { verb: r.verb, path: full.clone(), body });
     }
 
-    Ok(Program { messages, interfaces, slots, instances, view, startup, sources })
+    Ok(Program { messages, interfaces, slots, instances, view, startup, sources: vec![] })
 }
 
 /// A view's mounts, resolved against the instances in `index`. `whose`
@@ -459,13 +477,13 @@ fn mount_decls(mounts: &[image::Mount], index: &HashMap<&str, usize>, whose: &st
 fn check_requests(
     inst: &image::Instance,
     obj: &Object,
-    requests: &[(&image::Request, &str)],
-    scope: &BTreeMap<String, MessageType>,
+    requests: &[(&image::Request, &str, usize)],
+    units: &[Unit],
     slots: &[Slot],
 ) -> Result<()> {
     let name = &inst.name.name;
-    for &(r, path) in requests {
-        let body = r.body.as_ref().map(|b| body_arg(scope, slots, b)).transpose()?;
+    for &(r, path, u) in requests {
+        let body = r.body.as_ref().map(|b| body_arg(&units[u].scope.messages, slots, b)).transpose()?;
         let body_type = body.as_ref().map(|b| arg_type(slots, b));
         let Some(entry) = obj.serving(path) else {
             bail!("{}: `{name}` serves nothing at `{path}`", r.verb_pos);
@@ -486,7 +504,7 @@ fn check_requests(
 /// Each of `inst`'s mounts against what `obj` needs there, and each need
 /// for one mount point in particular against the mounts.
 fn check_mounts(
-    img: &Image,
+    type_names: &[String],
     inst: &image::Instance,
     obj: &Object,
     index: &HashMap<&str, usize>,
@@ -498,8 +516,8 @@ fn check_mounts(
         let at = ns::mount_point(&m.at.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", m.at.pos, m.at.path))?;
         ats.push(at.clone());
         let Some(need) = obj.need(&at) else { continue };
-        let target = &img.instances[index[m.target.name.as_str()]];
-        let Some(served) = interfaces.get(&run_as(target)) else { continue };
+        let target = index[m.target.name.as_str()];
+        let Some(served) = interfaces.get(&type_names[target]) else { continue };
         for e in &need.entries {
             for r in &e.requests {
                 if m.read_only && !r.verb.is_safe() {
@@ -612,15 +630,6 @@ fn builtin(name: &str, imported: bool) -> Option<Object> {
     Some(o)
 }
 
-/// What `inst` runs as: its type, or for one of the runtime's traits in an
-/// imported image, the trait in memory.
-fn run_as(inst: &image::Instance) -> String {
-    match builtin(&inst.type_name.name, inst.imported) {
-        Some(o) => o.name,
-        None => inst.type_name.name.clone(),
-    }
-}
-
 /// What the runtime's object `name` is configured with, whether it runs on
 /// the host or in memory, for errors; `None` if it takes no config.
 fn config_what(name: &str) -> Option<&'static str> {
@@ -656,85 +665,12 @@ fn builtin_kind(name: &str, includes: &[image::Include]) -> Result<Kind> {
     })
 }
 
-/// The message types an image can write: the runtime's and its imports,
-/// and the header files it imported them from.
-fn resolve_imports(
-    img: &Image,
-    dir: &Path,
-    headers: &mut BTreeMap<String, Header>,
-    modules: &mut dyn FnMut(&str) -> Result<Header>,
-) -> Result<(BTreeMap<String, MessageType>, Vec<PathBuf>)> {
-    let env = env_messages();
-    let mut out = env.clone();
-    let mut imported: HashMap<String, String> = HashMap::new();
-    let mut files: HashMap<PathBuf, Header> = HashMap::new();
-    let mut sources = vec![];
-    for imp in &img.imports {
-        let header = match &imp.from {
-            Source::Module(m) if m.name == "env" => iface::env(),
-            Source::Module(m) => {
-                if !headers.contains_key(&m.name) {
-                    let h = modules(&m.name).with_context(|| format!("{}: importing from {}", imp.pos, m.name))?;
-                    headers.insert(m.name.clone(), h);
-                }
-                &headers[&m.name]
-            }
-            Source::Path(p) if p == "othismo/env" => {
-                bail!("{}: the runtime's types are imported `from env`", imp.pos)
-            }
-            Source::Path(p) if p.ends_with(".ts") || !(p.starts_with('.') || p.starts_with('/')) => bail!(
-                "{}: types are imported from headers: `from env`, `from <Module>` or `from \"./<file>.iface\"`",
-                imp.pos
-            ),
-            Source::Path(p) => {
-                let mut path = dir.join(p);
-                if path.extension().is_none() {
-                    path.set_extension("iface");
-                }
-                if !files.contains_key(&path) {
-                    let h = iface::load(&path).with_context(|| format!("{}: importing from {p:?}", imp.pos))?;
-                    sources.push(path.clone());
-                    files.insert(path.clone(), h);
-                }
-                &files[&path]
-            }
-        };
-        for name in &imp.names {
-            let Some(ty) = header.messages.get(&name.name) else {
-                bail!(err_at(name, format!("{} has no message type `{}`", imp.from, name.name)));
-            };
-            // Images that import one another may well import the same types;
-            // a type is its name and fields, so only a different one clashes.
-            if let Some(prev) = imported.insert(name.name.clone(), imp.from.to_string())
-                && out.get(&name.name).is_some_and(|t| t.fields != ty.fields)
-            {
-                bail!(err_at(name, format!("`{}` is imported from {prev} and from {}, which declare it differently", name.name, imp.from)));
-            }
-            // The runtime's own types may be redeclared, but only exactly.
-            if let Some(want) = env.get(&name.name)
-                && want.fields != ty.fields
-            {
-                let fields: Vec<String> = want.fields.iter().map(|(n, t)| format!("{n}: {t}")).collect();
-                bail!(err_at(
-                    name,
-                    format!("`{}` is a runtime type and must be declared as {{ {} }}", name.name, fields.join(", "))
-                ));
-            }
-            out.insert(name.name.clone(), ty.clone());
-        }
-    }
-    Ok((out, sources))
-}
-
 /// Every message type in the image: the runtime's, every module's and the
-/// imported ones. A type is its name and fields, so two declarations of
-/// one name must agree.
-fn all_messages(headers: &BTreeMap<String, Header>, scope: &BTreeMap<String, MessageType>) -> Result<BTreeMap<String, MessageType>> {
+/// ones its files can name. A type is its name and fields, so two
+/// declarations of one name must agree. `sets` names where each set is from.
+fn all_messages(sets: &[(String, BTreeMap<String, MessageType>)]) -> Result<BTreeMap<String, MessageType>> {
     let mut out: BTreeMap<String, MessageType> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
-    let sets = std::iter::once(("the runtime", &iface::env().messages))
-        .chain(headers.iter().map(|(name, h)| (name.as_str(), &h.messages)))
-        .chain(std::iter::once(("the image's imports", scope)));
     for (origin, types) in sets {
         for (name, ty) in types {
             match out.get(name) {
@@ -745,7 +681,7 @@ fn all_messages(headers: &BTreeMap<String, Header>, scope: &BTreeMap<String, Mes
                 Some(_) => {}
                 None => {
                     out.insert(name.clone(), ty.clone());
-                    from.insert(name.clone(), origin.to_string());
+                    from.insert(name.clone(), origin.clone());
                 }
             }
         }
@@ -838,16 +774,26 @@ mod tests {
     use super::*;
 
     const MESSAGES: &str = r#"
-        message Greeting { text: string }
-        message Config { name: string, count: u8, ratio: f64, on: bool }
-        message Ping {}
-        message Blob { data: bytes }
+        export message Greeting { text: string }
+        export message Config { name: string, count: u8, ratio: f64, on: bool }
+        export message Ping {}
+        export message Blob { data: bytes }
     "#;
 
-    /// A resolved header, whose imports can only be from env.
-    fn header(src: &str) -> Header {
+    /// `src` with every declaration exported.
+    fn exported(src: &str) -> String {
+        let mut out = src.to_string();
+        for kw in ["message ", "protocol ", "trait ", "object "] {
+            out = out.replace(&format!("export {kw}"), kw).replace(kw, &format!("export {kw}"));
+        }
+        out
+    }
+
+    /// A module whose header is `src`, which can only import from env.
+    fn module(src: &str) -> Vec<u8> {
         let file = iface::parse(src).unwrap();
-        iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap()
+        let header = iface::resolve(&file, &mut |_| Ok(iface::env().clone()), &|_| unreachable!()).unwrap();
+        iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap()
     }
 
     /// Every request there is, of every verb, with a payload of any type or
@@ -863,27 +809,53 @@ mod tests {
         reqs.join(", ")
     }
 
-    /// A module that needs nothing and serves anything, anywhere.
-    fn permissive(name: &str) -> Header {
-        header(&format!("object {name} {{ serves {{ /** {} }} }}", anything()))
+    /// The header of a module that needs nothing and serves anything, anywhere.
+    fn permissive(name: &str) -> String {
+        format!("object {name} {{ serves {{ /** {} }} }}", anything())
     }
 
-    /// Checks `img` next to MESSAGES, in messages.iface. Modules have the
-    /// headers in `modules`, or else a permissive one.
+    /// Checks `img` as /check/test.oth, beside MESSAGES in messages.oth. Any
+    /// instance type it doesn't import is imported for it at the top: from
+    /// env if it is the runtime's, and otherwise from ./<Type>.oth, which
+    /// has its module beside it, with the header in `modules` or else a
+    /// permissive one. A `Ghost` has no module.
     fn check_with(img: &str, modules: &[(&str, &str)]) -> Result<Program> {
-        let dir = std::env::temp_dir().join(format!("othismo_check_{}_{:?}", std::process::id(), std::thread::current().id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("messages.iface"), MESSAGES).unwrap();
-        let mut headers = |name: &str| -> Result<Header> {
-            match modules.iter().find(|(n, _)| *n == name) {
-                Some((_, src)) => Ok(header(src)),
-                None if name == "Ghost" => bail!("no module Ghost"),
-                None => Ok(permissive(name)),
+        let dir = PathBuf::from("/check");
+        let mut loader = Loader::default();
+        loader.files.insert(dir.join("messages.oth"), MESSAGES.into());
+        let parsed = image::parse(img)?;
+        let mut imported: Vec<String> =
+            parsed.header.imports.iter().flat_map(|i| i.names.iter().map(|n| n.local.name.clone())).collect();
+        let (mut prelude, mut from_env) = (String::new(), vec![]);
+        for inst in &parsed.instances {
+            let ty = inst.type_name.name.clone();
+            if imported.contains(&ty) {
+                continue;
             }
-        };
-        let res = image::parse(img).and_then(|img| check(&img, &dir, &mut headers));
-        std::fs::remove_dir_all(&dir).ok();
-        res
+            imported.push(ty.clone());
+            if iface::env().exports.contains(&ty) {
+                from_env.push(ty);
+                continue;
+            }
+            if ty.contains('.') {
+                continue;
+            }
+            let src = exported(&modules.iter().find(|(n, _)| *n == ty).map(|(_, s)| s.to_string()).unwrap_or_else(|| permissive(&ty)));
+            if ty != "Ghost" {
+                loader.files.insert(dir.join(format!("{ty}.wasm")), module(&src));
+            }
+            loader.files.insert(dir.join(format!("{ty}.oth")), src.into_bytes());
+            prelude.push_str(&format!("import {{ {ty} }} from \"./{ty}.oth\" "));
+        }
+        if !from_env.is_empty() {
+            prelude.push_str(&format!("import {{ {} }} from env ", from_env.join(", ")));
+        }
+        for (ty, src) in modules {
+            loader.files.entry(dir.join(format!("{ty}.oth"))).or_insert_with(|| exported(src).into_bytes());
+            loader.files.entry(dir.join(format!("{ty}.wasm"))).or_insert_with(|| module(&exported(src)));
+        }
+        loader.files.insert(dir.join("test.oth"), format!("{prelude}{img}").into_bytes());
+        load_with(&dir.join("test.oth"), &mut loader)
     }
 
     fn check_src(img: &str) -> Result<Program> {
@@ -899,7 +871,7 @@ mod tests {
     }
 
     const HEADER: &str = r#"
-        import { Greeting, Config, Ping, Blob } from "./messages.iface"
+        import { Greeting, Config, Ping, Blob } from "./messages.oth"
         instance cons : Console
     "#;
 
@@ -908,7 +880,7 @@ mod tests {
         let p = check_src(&format!("{HEADER} instance echo : Echo {{ mount /dev/cons cons }}")).unwrap();
         assert_eq!(p.instances.len(), 2);
         assert_eq!(p.instances[0].kind, Kind::Console);
-        assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into() });
+        assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into(), module: "Echo.wasm".into() });
         assert_eq!(p.instances[1].mounts, [MountDecl { at: "/dev/cons".into(), target: 0, read_only: false }]);
         assert!(p.messages.contains_key("Greeting"));
     }
@@ -956,9 +928,11 @@ mod tests {
     }
 
     #[test]
-    fn a_type_may_be_imported_again_unchanged() {
-        let twice = r#"import { Greeting } from "./messages.iface" import { Greeting } from "./messages.iface""#;
-        assert!(check_src(twice).is_ok(), "as two images that import one another may");
+    fn a_name_is_imported_once_in_a_file() {
+        let twice = r#"import { Greeting } from "./messages.oth" import { Greeting } from "./messages.oth""#;
+        assert!(format!("{:#}", check_src(twice).unwrap_err()).contains("`Greeting` is already imported"));
+        let renamed = r#"import { Greeting, Ping as Pong } from "./messages.oth""#;
+        assert!(format!("{:#}", check_src(renamed).unwrap_err()).contains("`Ping` can't be renamed"));
     }
 
     #[test]
@@ -1017,9 +991,15 @@ mod tests {
         let e = err(r#"instance net : Listener mount /net net write /net "a" write /net/x "b""#);
         assert!(e.contains("`net` doesn't take `write` at `/x`"), "{e}");
         let e = err("instance c : Environment.Stdin");
-        assert!(e.contains("unknown built-in type `Environment.Stdin`"), "{e}");
+        assert!(e.contains("unknown object `Environment.Stdin`"), "{e}");
         let e = err("instance net : Environment.Tcp");
-        assert!(e.contains("the runtime's objects are declared by their traits: `instance net : Listener`"), "{e}");
+        assert!(e.contains("the runtime's objects are declared by their traits: `Listener`, imported from env"), "{e}");
+        let e = format!("{:#}", load_with(Path::new("/l/test.oth"), &mut {
+            let mut l = Loader::default();
+            l.files.insert("/l/test.oth".into(), b"instance net : Listener".to_vec());
+            l
+        }).unwrap_err());
+        assert!(e.contains("`Listener` is the runtime's; import it first: `import { Listener } from env`"), "{e}");
         let e = err("instance t : FileTree");
         assert!(e.contains("`FileTree` is a shape the runtime has no implementation of; it runs Console, Listener, Files, and Packed.Files"), "{e}");
     }
@@ -1061,7 +1041,7 @@ mod tests {
         let e = err(r#"instance a : A instance f : Packed.Files { mount /a a }"#);
         assert!(e.contains("only serves"), "{e}");
         let e = err(r#"instance f : Packed.Dirs"#);
-        assert!(e.contains("unknown built-in type `Packed.Dirs` (there are: Console, Listener, Files, Packed.Files)"), "{e}");
+        assert!(e.contains("unknown object `Packed.Dirs`"), "{e}");
     }
 
     #[test]
@@ -1101,7 +1081,7 @@ mod tests {
     fn types_are_imported_from_headers() {
         let greeter = "message Greeting { prefix: string } object Greeter { serves { /greeting write application/bson } }";
         let p = check_with(
-            r#"import { Greeting } from Greeter
+            r#"import { Greeting } from "./Greeter.oth"
             instance g : Greeter mount /g g write /g/greeting Greeting { prefix: "hi" }"#,
             &[("Greeter", greeter)],
         )
@@ -1116,12 +1096,32 @@ mod tests {
         let e = err_with(r#"instance g : Greeter mount /g g write /g/greeting Greeting { prefix: "hi" }"#, &[("Greeter", greeter)]);
         assert!(e.contains("unknown message type `Greeting`; is it imported?"), "{e}");
 
-        let e = err(r#"import { Line } from "othismo/env""#);
-        assert!(e.contains("imported `from env`"), "{e}");
         let e = err(r#"import { Ping } from "./messages.ts""#);
-        assert!(e.contains("types are imported from headers"), "{e}");
+        assert!(e.contains("/check/messages.ts is neither a `.oth` file nor a module (`.wasm`)"), "{e}");
         let e = err("instance g : Ghost");
-        assert!(e.contains("instance `g`") && e.contains("no module Ghost"), "{e}");
+        assert!(e.contains("instance `g`") && e.contains("cannot read /check/Ghost.wasm (did you compile Ghost.ts?)"), "{e}");
+        let e = err("instance g : Nobody.Here");
+        assert!(e.contains("unknown object `Nobody.Here`; is it imported?"), "{e}");
+
+        // Renamed, the object is still itself.
+        let p = check_with(r#"import { Greeter as G } from "./Greeter.oth" instance g : G"#, &[("Greeter", greeter)]).unwrap();
+        assert_eq!(p.instances[0].type_name, "Greeter");
+
+        // A module must be the one its header was built into.
+        let stale = "message Greeting { prefix: string } object Greeter { serves { /greeting write text/plain } }";
+        let mut loader = Loader::default();
+        loader.files.insert("/s/Greeter.oth".into(), exported(stale).into_bytes());
+        loader.files.insert("/s/Greeter.wasm".into(), module(&exported(greeter)));
+        loader.files.insert("/s/test.oth".into(), br#"import { Greeter } from "./Greeter.oth" instance g : Greeter"#.to_vec());
+        let e = format!("{:#}", load_with(Path::new("/s/test.oth"), &mut loader).unwrap_err());
+        assert!(e.contains("/s/Greeter.wasm is stale: the header inside it isn't /s/Greeter.oth's; rebuild it"), "{e}");
+
+        // Or it is imported from the module itself.
+        let mut loader = Loader::default();
+        loader.files.insert("/m/Greeter.wasm".into(), module(&exported(greeter)));
+        loader.files.insert("/m/test.oth".into(), br#"import { Greeter } from "./Greeter.wasm" instance g : Greeter"#.to_vec());
+        let p = load_with(Path::new("/m/test.oth"), &mut loader).unwrap();
+        assert_eq!(p.instances[0].kind, Kind::Wasm { type_name: "Greeter".into(), module: "Greeter.wasm".into() });
     }
 
     #[test]
@@ -1137,7 +1137,7 @@ mod tests {
     #[test]
     fn startup_requests_must_be_served() {
         let greeter = "object G { serves { /greeting write application/bson  /hosts/{name} operator write text/plain, operator remove } }";
-        let ok = r#"import { Greeting } from "./messages.iface" instance g : G mount /g g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
+        let ok = r#"import { Greeting } from "./messages.oth" instance g : G mount /g g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
         let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
@@ -1146,7 +1146,7 @@ mod tests {
         let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let only_text = "object G { serves { /greeting write text/plain } }";
-        let e = err_with(r#"import { Greeting } from "./messages.iface" instance g : G mount /g g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
+        let e = err_with(r#"import { Greeting } from "./messages.oth" instance g : G mount /g g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
         assert!(e.contains("doesn't take `write application/bson` at `/greeting`"), "{e}");
         let texts = "object T { serves { /plain write text/plain  /any write text/* } }";
         let ok = r#"require t : text/plain = "x" instance t : T mount /t t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;

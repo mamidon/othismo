@@ -7,7 +7,7 @@ import { Listener } from env
 ## and the answer becomes the response. Other methods are refused. It knows
 ## nothing about files. Every response is logged to `/dev/cons`. One request
 ## per connection; every response closes it.
-object HttpServer {
+export object HttpServer {
   guide "./HttpServer.md"
 
   ## The listener it serves HTTP on.

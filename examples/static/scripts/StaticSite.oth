@@ -5,7 +5,7 @@ import { FileTree } from env
 ## Requests for paths ending in `/` get `index.html` added. It forwards each
 ## request to `/files` and never sees the bytes it serves. `/static` is
 ## `/files` exposed as is, so requests there don't reach it at all.
-object StaticSite : FileTree {
+export object StaticSite : FileTree {
   ## The site's files. Nothing is ever written here.
   needs /files FileTree
 

@@ -7,7 +7,7 @@ use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-const A: &str = "object A { needs /dev/cons { / write */* }  serves { / write */* } }";
+const A: &str = "export object A { needs /dev/cons { / write */* }  serves { / write */* } }";
 
 /// Modules aren't run here, so they needn't do anything; they only need headers.
 fn a() -> Vec<u8> {
@@ -16,14 +16,17 @@ fn a() -> Vec<u8> {
 
 fn fixture(name: &str) -> Fixture {
     let f = Fixture::new(name);
-    f.file("messages.iface", "message Ping {}\n")
+    f.file("messages.oth", "export message Ping {}\n")
         .file("scripts/A.wasm", a())
-        .file("scripts/A.iface", A)
+        .file("scripts/A.oth", A)
         .file("scripts/A.ts", "// A's source\n")
         .file("scripts/B.wasm", module("(module)", "object B {}"))
         .file(
-            "test.img",
-            r#"import { Ping } from "./messages.iface"
+            "test.oth",
+            r#"import { Ping } from "./messages.oth"
+            import { A } from "./scripts/A.oth"
+            import { B } from "./scripts/B.wasm"
+            import { Console } from env
             instance cons : Console
             instance a : A { mount /dev/cons cons }  mount /a a  write /a Ping
             instance b : B { mount /a a readonly }
@@ -52,7 +55,7 @@ fn sealing_round_trips_and_is_reproducible() {
     let sources: Vec<&str> = built.sources.keys().map(String::as_str).collect();
     assert_eq!(
         sources,
-        ["messages.iface", "scripts/A.iface", "scripts/A.ts", "test.img"],
+        ["messages.oth", "scripts/A.oth", "scripts/A.ts", "test.oth"],
         "B has no header file or TypeScript, which is fine: its module carries its header"
     );
 }
@@ -83,7 +86,7 @@ fn corrupt_and_truncated_files_are_refused() {
     let e = err(&old);
     let want = format!("built by another version of othismo (format 1, and this one reads {}); rebuild it", pack::VERSION);
     assert!(e.contains(&want), "{e}");
-    assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .img");
+    assert!(pack::is_sealed(&old), "still recognised as a built image, so it isn't parsed as a .oth");
 }
 
 #[test]
@@ -94,7 +97,7 @@ fn load_tells_built_images_from_sources() {
     let loaded = pack::load(&rti).unwrap();
     assert_eq!(loaded.dir, f.dir);
     assert!(loaded.program.sources.is_empty());
-    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 2);
+    assert_eq!(pack::load(&f.image()).unwrap().program.sources.len(), 3, "the image, the messages and A's header");
 
     let e = format!("{:#}", pack::build(&rti, BuildOptions::default()).unwrap_err());
     assert!(e.contains("is already built"), "{e}");
@@ -109,12 +112,12 @@ fn unpacking_writes_modules_and_sources() {
     assert_eq!(std::fs::read(out.join("modules/A.wasm")).unwrap(), a());
     assert!(out.join("modules/B.wasm").exists());
     assert_eq!(read("sources/scripts/A.ts"), "// A's source\n");
-    assert!(read("sources/test.img").contains("instance a2 : A"));
+    assert!(read("sources/test.oth").contains("instance a2 : A"));
 }
 
 /// An image whose only instance is `files : Packed.Files { <includes> }`.
 fn packed(f: &Fixture, includes: &str) -> anyhow::Result<Pack> {
-    f.file("test.img", format!("instance files : Packed.Files {{ {includes} }}"));
+    f.file("test.oth", format!("import {{ Packed.Files }} from env instance files : Packed.Files {{ {includes} }}"));
     pack::build(&f.image(), BuildOptions::default())
 }
 
@@ -243,8 +246,9 @@ fn packed_trees_survive_sealing_and_unpacking() {
 fn slots_are_sealed_unbound_and_described_once_bound() {
     let f = Fixture::new("pack_slots");
     f.file(
-        "test.img",
-        r#"require listen : text/plain = "127.0.0.1:8080"
+        "test.oth",
+        r#"import { Console, Files, Listener } from env
+        require listen : text/plain = "127.0.0.1:8080"
         require root : text/plain
         instance net   : Listener
         instance files : Files
@@ -278,15 +282,16 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
 fn the_cli_layers_value_files_then_set() {
     let f = Fixture::new("pack_cli_values");
     f.file(
-        "test.img",
-        r#"import { Info } from "./info.iface"
+        "test.oth",
+        r#"import { Info } from "./info.oth"
+        import { Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
         require info : Info
         instance net : Listener
         mount /net net
         write /net listen"#,
     )
-    .file("info.iface", "message Info { kind: string, size: i64, mime: string }")
+    .file("info.oth", "export message Info { kind: string, size: i64, mime: string }")
     .file("a.vals", "listen = \"a\"\ninfo { kind: \"file\", size: 1, mime: \"\" }")
     .file("b.vals", "info { size: 2 }");
     let check = |extra: &[&str]| {

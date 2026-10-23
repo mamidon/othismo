@@ -1,0 +1,9 @@
+# The static site's tests. The site runs as static.oth declares it, but in
+# memory: nothing listens on the host. SiteTests dials its listener with each
+# test's request. Run them with `othismo test static.test.oth`.
+import "./static.oth"
+import { SiteTests } from "./scripts/SiteTests.oth"
+
+instance tests : SiteTests {
+  mount /net net
+}

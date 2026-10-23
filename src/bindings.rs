@@ -146,8 +146,8 @@ mod tests {
         let file = iface::parse(src).unwrap();
         let mut env = |_: &crate::image::Source| Ok(iface::env().clone());
         let header = iface::resolve(&file, &mut env, &|_| unreachable!()).unwrap();
-        let out = assemblyscript(&header, "G.iface", "othismo/bson");
-        assert!(out.starts_with("// Generated from G.iface by `othismo bindings`."), "{out}");
+        let out = assemblyscript(&header, "G.oth", "othismo/bson");
+        assert!(out.starts_with("// Generated from G.oth by `othismo bindings`."), "{out}");
         let greeting = r#"/** Configures a Greeter. */
 export class Greeting extends Message {
   /** Put before each name. */

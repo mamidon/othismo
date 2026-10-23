@@ -1,7 +1,8 @@
-//! Lexer, AST and parser for the image language (`.img` files). Headers
-//! (`.iface` files, see [`crate::iface`]) are written in the same language
-//! and share the lexer and parser.
+//! Lexer, AST and parser for `.oth` files, which hold images and headers
+//! alike: declarations (message types, protocols, traits and objects, see
+//! [`crate::iface`]) and an image's instances, views and requests.
 
+use crate::iface;
 use crate::ns::Verb;
 use anyhow::{Result, bail};
 
@@ -18,9 +19,12 @@ impl std::fmt::Display for Pos {
     }
 }
 
+/// A parsed `.oth` file: its declarations, which other files can import,
+/// and the image it describes, which is empty for a header.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
-    pub imports: Vec<Import>,
+    /// Its imports, declarations and exports.
+    pub header: iface::File,
     /// `import "<image>"`: other images, whose instances, mounts, slots and
     /// requests become this one's.
     pub images: Vec<Path>,
@@ -32,26 +36,35 @@ pub struct Image {
     pub requests: Vec<Request>,
 }
 
+/// `import { A, B as C } from <source>`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
-    pub names: Vec<Ident>,
+    pub names: Vec<ImportName>,
     pub from: Source,
     pub pos: Pos,
 }
 
-/// Where an import's types come from.
+/// `A`, or `A as B`: a name the source exports, and what it is called here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportName {
+    pub name: Ident,
+    pub local: Ident,
+}
+
+/// Where an import's declarations come from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
-    /// `from env` or `from Greeter`: the runtime's header, or a module's.
-    Module(Ident),
-    /// `from "./shared.iface"`: a file, relative to the importing one.
+    /// `from env`: the runtime's header.
+    Env,
+    /// `from "./scripts/Greeter.oth"`: a file, relative to the importing
+    /// one; a `.oth` file, or a module, whose header is inside it.
     Path(String),
 }
 
 impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Source::Module(m) => f.write_str(&m.name),
+            Source::Env => f.write_str("env"),
             Source::Path(p) => write!(f, "{p:?}"),
         }
     }
@@ -369,12 +382,12 @@ fn push_type(toks: &mut Vec<(Tok, Pos)>, mut ty: String, pos: Pos, end: Pos) {
 // Parser
 
 /// Words that can never be names. Member keywords (`mount`, `include`,
-/// `readonly` and `at`) only mean something inside an instance block, and
-/// the verbs only where a request can start.
-pub(crate) const KEYWORDS: &[&str] = &["import", "from", "require", "instance", "true", "false"];
+/// `readonly` and `at`) only mean something inside an instance block, `as`
+/// only in an import, and the verbs only where a request can start.
+pub(crate) const KEYWORDS: &[&str] = &["import", "export", "from", "require", "instance", "true", "false"];
 
-/// Words that start a declaration at the top of an image, besides the verbs.
-const DECLS: &[&str] = &["import", "require", "instance", "mount"];
+/// Words that start a declaration at the top of a file, besides the verbs.
+const DECLS: &[&str] = &["import", "export", "require", "instance", "mount", "message", "protocol", "trait", "object"];
 
 pub(crate) struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -450,9 +463,16 @@ impl Parser {
         }
     }
 
-    fn image(&mut self) -> Result<Image> {
-        let mut image = Image { imports: vec![], images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
+    fn file(&mut self) -> Result<Image> {
+        let header = iface::File { imports: vec![], messages: vec![], protocols: vec![], traits: vec![], objects: vec![], exports: vec![] };
+        let mut image = Image { header, images: vec![], requires: vec![], instances: vec![], mounts: vec![], requests: vec![] };
         loop {
+            let doc = self.docs();
+            let pos = self.pos();
+            let documented = matches!(self.peek(), Tok::Ident(kw) if ["export", "message", "protocol", "trait", "object"].contains(&kw.as_str()));
+            if !documented {
+                self.no_docs(&doc, pos)?;
+            }
             match self.peek().clone() {
                 Tok::Eof => return Ok(image),
                 Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => {
@@ -460,7 +480,22 @@ impl Parser {
                     let (Tok::Str(path), pos) = self.next() else { unreachable!("just matched") };
                     image.images.push(Path { path, pos });
                 }
-                Tok::Ident(kw) if kw == "import" => image.imports.push(self.import()?),
+                Tok::Ident(kw) if kw == "import" => image.header.imports.push(self.import()?),
+                Tok::Ident(kw) if kw == "export" => {
+                    self.next();
+                    if *self.peek() == Tok::LBrace {
+                        self.no_docs(&doc, pos)?;
+                        self.next();
+                        image.header.exports.extend(self.ident_list("name to export")?);
+                        self.expect(Tok::RBrace)?;
+                    } else {
+                        let name = self.declaration(&mut image.header, doc, pos)?;
+                        image.header.exports.push(name);
+                    }
+                }
+                Tok::Ident(kw) if ["message", "protocol", "trait", "object"].contains(&kw.as_str()) => {
+                    self.declaration(&mut image.header, doc, pos)?;
+                }
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
                 Tok::Ident(kw) if kw == "require" => image.requires.push(self.require()?),
                 Tok::Ident(kw) if kw == "mount" => {
@@ -473,11 +508,43 @@ impl Parser {
                      own verb, such as `write`",
                     self.pos()
                 ),
-                other => {
-                    bail!("{}: expected `import`, `require`, `instance`, `mount` or a verb, found {other}", self.pos())
-                }
+                other => bail!(
+                    "{pos}: expected `import`, `export`, `message`, `protocol`, `trait`, `object`, `require`, `instance`, \
+                     `mount` or a verb, found {other}"
+                ),
             }
         }
+    }
+
+    /// A message type, protocol, trait or object, added to `header`; its name.
+    fn declaration(&mut self, header: &mut iface::File, doc: String, pos: Pos) -> Result<Ident> {
+        Ok(match self.peek().clone() {
+            Tok::Ident(kw) if kw == "message" => {
+                let m = self.message(doc)?;
+                let name = m.name.clone();
+                header.messages.push(m);
+                name
+            }
+            Tok::Ident(kw) if kw == "protocol" => {
+                let p = self.protocol(doc)?;
+                let name = p.name.clone();
+                header.protocols.push(p);
+                name
+            }
+            Tok::Ident(kw) if kw == "trait" => {
+                let t = self.trait_decl(doc)?;
+                let name = t.name.clone();
+                header.traits.push(t);
+                name
+            }
+            Tok::Ident(kw) if kw == "object" => {
+                let o = self.object(doc)?;
+                let name = o.name.clone();
+                header.objects.push(o);
+                name
+            }
+            other => bail!("{pos}: `export` comes before a message, protocol, trait or object, or `{{ names }}`, found {other}"),
+        })
     }
 
     /// `<verb> <path> [T { ... }]`. A body-less request ends where the next
@@ -511,17 +578,34 @@ impl Parser {
         Ok(Request { verb, verb_pos, path, body })
     }
 
-    /// `import { A, B } from env`, `from Module` or `from "./file.iface"`.
+    /// `import { A, B as C } from env` or `from "./file.oth"`.
     pub(crate) fn import(&mut self) -> Result<Import> {
         let pos = self.expect_kw("import")?;
         self.expect(Tok::LBrace)?;
-        let names = self.ident_list("type name")?;
+        let mut names = vec![];
+        loop {
+            let name = self.ident("name to import", true)?;
+            let local = if self.is_kw("as") {
+                self.next();
+                self.ident("name to import it as", false)?
+            } else {
+                name.clone()
+            };
+            names.push(ImportName { name, local });
+            if *self.peek() != Tok::Comma {
+                break;
+            }
+            self.next();
+        }
         self.expect(Tok::RBrace)?;
         self.expect_kw("from")?;
         let from = match self.next() {
             (Tok::Str(s), _) => Source::Path(s),
-            (Tok::Ident(name), pos) if !KEYWORDS.contains(&name.as_str()) => Source::Module(Ident { name, pos }),
-            (other, pos) => bail!("{pos}: expected a module name or a quoted path to import from, found {other}"),
+            (Tok::Ident(name), _) if name == "env" => Source::Env,
+            (Tok::Ident(name), pos) if !KEYWORDS.contains(&name.as_str()) => bail!(
+                "{pos}: import from a file, relative to this one, such as `from \"./scripts/{name}.oth\"`, or from env"
+            ),
+            (other, pos) => bail!("{pos}: expected env or a quoted path to import from, found {other}"),
         };
         Ok(Import { names, from, pos })
     }
@@ -663,7 +747,7 @@ impl Parser {
 }
 
 pub fn parse(src: &str) -> Result<Image> {
-    Parser::new(src, false)?.image()
+    Parser::new(src, true)?.file()
 }
 
 /// One slot's values in a value file.
@@ -691,16 +775,16 @@ pub fn parse_values(src: &str) -> Result<Vec<SlotValues>> {
 mod tests {
     use super::*;
 
-    fn names(ids: &[Ident]) -> Vec<&str> {
-        ids.iter().map(|i| i.name.as_str()).collect()
+    fn names(ids: &[ImportName]) -> Vec<String> {
+        ids.iter().map(|i| if i.name == i.local { i.name.name.clone() } else { format!("{} as {}", i.name.name, i.local.name) }).collect()
     }
 
     #[test]
     fn parses_full_syntax() {
         let img = parse(
             r#"
-            import { Greeting, Ping } from "./messages"   # trailing comment
-            import { Tick } from "./other"
+            import { Greeting, Ping as Pong } from "./messages.oth"   # trailing comment
+            import { Tick } from "./other.oth"
 
             instance cons : Console
             instance net : Listener
@@ -717,9 +801,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(img.imports.len(), 2);
-        assert_eq!(names(&img.imports[0].names), ["Greeting", "Ping"]);
-        assert_eq!(img.imports[0].from, Source::Path("./messages".into()));
+        let imports = &img.header.imports;
+        assert_eq!(imports.len(), 2);
+        assert_eq!(names(&imports[0].names), ["Greeting", "Ping as Pong"]);
+        assert_eq!(imports[0].from, Source::Path("./messages.oth".into()));
 
         assert_eq!(img.instances.len(), 3);
         assert_eq!(img.instances[0].type_name.name, "Console");
@@ -831,11 +916,32 @@ mod tests {
     }
 
     #[test]
-    fn imports_name_a_module_or_a_path() {
-        let img = parse("import { Line } from env\nimport { Greeting } from Greeter").unwrap();
-        let froms: Vec<String> = img.imports.iter().map(|i| i.from.to_string()).collect();
-        assert_eq!(froms, ["env", "Greeter"]);
-        assert!(parse("import { Line } from instance").is_err(), "a keyword isn't a module");
+    fn imports_name_env_or_a_path() {
+        let img = parse("import { Console } from env\nimport { Greeting } from \"./scripts/Greeter.oth\"").unwrap();
+        let froms: Vec<String> = img.header.imports.iter().map(|i| i.from.to_string()).collect();
+        assert_eq!(froms, ["env", "\"./scripts/Greeter.oth\""]);
+        assert!(parse("import { Line } from instance").is_err(), "a keyword isn't a source");
+        let e = parse("import { Greeting } from Greeter").unwrap_err().to_string();
+        assert!(e.contains("such as `from \"./scripts/Greeter.oth\"`"), "{e}");
+    }
+
+    #[test]
+    fn one_file_declares_and_instantiates() {
+        let img = parse(
+            "## A greeting.\nexport message Greeting { text: string }\nprotocol P { read }\nexport { P }\n\
+             ## An object.\nexport object O {}\ninstance o : O\nwrite /o Greeting { text: \"hi\" }",
+        )
+        .unwrap();
+        let h = &img.header;
+        assert_eq!((h.messages.len(), h.protocols.len(), h.objects.len()), (1, 1, 1));
+        assert_eq!(h.messages[0].doc, "A greeting.");
+        assert_eq!(h.objects[0].doc, "An object.");
+        let exports: Vec<&str> = h.exports.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(exports, ["Greeting", "P", "O"]);
+        assert_eq!((img.instances.len(), img.requests.len()), (1, 1));
+        let e = parse("## an instance\ninstance o : O").unwrap_err().to_string();
+        assert!(e.contains("documents what follows"), "{e}");
+        assert!(parse("export instance o : O").unwrap_err().to_string().contains("`export` comes before"));
     }
 
     #[test]

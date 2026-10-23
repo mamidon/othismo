@@ -204,23 +204,26 @@ fn literal(t: FieldType, text: &str) -> std::result::Result<Value, String> {
 mod tests {
     use super::*;
     use crate::check;
-    use crate::image;
     use std::path::Path;
 
     /// Checks `src`, whose one module, `A`, takes what IMAGE writes to it.
     fn program(src: &str) -> Program {
-        let a = "message Info { kind: string, size: i64, mime: string }
-            object A { serves { /info write application/bson  /x write */*  /host write text/plain } }";
+        let a = "export message Info { kind: string, size: i64, mime: string }
+            export object A { serves { /info write application/bson  /x write */*  /host write text/plain } }";
         let header = crate::iface::resolve(&crate::iface::parse(a).unwrap(), &mut |_| Ok(crate::iface::env().clone()), &|_| {
             unreachable!()
         })
         .unwrap();
-        let mut modules = |_: &str| Ok(header.clone());
-        check::check(&image::parse(src).unwrap(), Path::new("."), &mut modules).unwrap()
+        let wasm = crate::iface::embed(&wat::parse_str("(module)").unwrap(), &header).unwrap();
+        let mut loader = crate::iface::Loader::default();
+        loader.files.insert("/slots/A.oth".into(), a.into());
+        loader.files.insert("/slots/A.wasm".into(), wasm);
+        let src = format!("import {{ A, Info }} from \"./A.oth\" import {{ Console, Listener }} from env {src}");
+        loader.files.insert("/slots/test.oth".into(), src.into_bytes());
+        check::load_with(Path::new("/slots/test.oth"), &mut loader).unwrap()
     }
 
     const IMAGE: &str = r#"
-        import { Info } from A
         require listen : text/plain = "127.0.0.1:8080"
         require info : Info { kind: "file" }
         require host : text/plain = "localhost"

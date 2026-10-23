@@ -1,11 +1,13 @@
-//! Headers: `.iface` files declaring a module's message types, what it
-//! serves, what it needs and its documentation. See `docs/objects.md`.
+//! Headers: the declarations in `.oth` files, which declare message types,
+//! protocols, traits and objects: what each object serves, what it needs
+//! and its documentation. See `docs/objects.md`.
 //!
-//! A header is parsed into a [`File`], then resolved into a [`Header`]: its
-//! imports followed, every type it mentions declared, and its guide read in.
-//! A resolved header stands on its own, so it can travel inside a module.
+//! A file's declarations are parsed into a [`File`], then resolved into a
+//! [`Header`]: its imports followed, every name it mentions declared, and
+//! its guides read in. A resolved header stands on its own, so it can
+//! travel inside a module.
 
-use crate::image::{self, Ident, Import, Parser, Pos, Source, Tok};
+use crate::image::{self, Ident, Image, Import, Parser, Pos, Source, Tok};
 use crate::messages::{FieldType, MessageType};
 use crate::ns::{Status, Verb};
 use crate::pattern::{self, Pattern};
@@ -15,19 +17,19 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The runtime's own header, one file at a time: the bodies its objects
 /// share, then each trait it implements with the types it adds,
 /// Packed.Files, and TestSuite. A file may import from the files before it.
 const ENV_SOURCES: &[(&str, &str)] = &[
-    ("bodies.iface", include_str!("../as/env/bodies.iface")),
-    ("Console.iface", include_str!("../as/env/Console.iface")),
-    ("Listener.iface", include_str!("../as/env/Listener.iface")),
-    ("Files.iface", include_str!("../as/env/Files.iface")),
-    ("Packed.Files.iface", include_str!("../as/env/Packed.Files.iface")),
-    ("TestSuite.iface", include_str!("../as/env/TestSuite.iface")),
+    ("bodies.oth", include_str!("../as/env/bodies.oth")),
+    ("Console.oth", include_str!("../as/env/Console.oth")),
+    ("Listener.oth", include_str!("../as/env/Listener.oth")),
+    ("Files.oth", include_str!("../as/env/Files.oth")),
+    ("Packed.Files.oth", include_str!("../as/env/Packed.Files.oth")),
+    ("TestSuite.oth", include_str!("../as/env/TestSuite.oth")),
 ];
 
 /// The runtime's header, `env`: every file in `as/env/`, joined.
@@ -41,7 +43,7 @@ pub fn env() -> &'static Header {
             let mut earlier = |s: &Source| -> Result<Header> {
                 let found = match s {
                     Source::Path(p) => done.get(p.strip_prefix("./").unwrap_or(p)),
-                    Source::Module(_) => None,
+                    Source::Env => None,
                 };
                 found.cloned().ok_or_else(|| anyhow::anyhow!("env/{name} can only import from the env files before it"))
             };
@@ -54,6 +56,9 @@ pub fn env() -> &'static Header {
             env.objects.extend(header.objects.iter().cloned());
             done.insert(name, header);
         }
+        // Everything in it can be imported.
+        env.exports = env.messages.keys().chain(env.protocols.keys()).chain(env.traits.keys()).cloned().collect();
+        env.exports.extend(env.objects.iter().map(|o| o.name.clone()));
         env
     })
 }
@@ -73,7 +78,15 @@ pub struct Header {
     /// Every trait the header can name, its own and its imports.
     #[serde(default)]
     pub traits: BTreeMap<String, Trait>,
+    /// The objects it declares itself.
     pub objects: Vec<Object>,
+    /// The objects it imports, by the names it gives them.
+    #[serde(default)]
+    pub imported: BTreeMap<String, Object>,
+    /// The names it exports: its own declarations written `export`, and
+    /// imported ones it names in `export { ... }`.
+    #[serde(default)]
+    pub exports: Vec<String>,
 }
 
 /// `protocol <Name> { ... }`: the requests one path takes, with any
@@ -106,6 +119,10 @@ pub struct Object {
     pub guide: Option<String>,
     pub needs: Vec<Need>,
     pub serves: Vec<Entry>,
+    /// The file it was read from: a `.oth` file, whose module is the `.wasm`
+    /// beside it, or a module. `None` for the runtime's own.
+    #[serde(skip)]
+    pub origin: Option<PathBuf>,
 }
 
 /// `needs <mount point pattern> { entries }`
@@ -147,8 +164,14 @@ pub struct Answer {
 }
 
 impl Header {
+    /// The object it declares itself as `name`.
     pub fn object(&self, name: &str) -> Option<&Object> {
         self.objects.iter().find(|o| o.name == name)
+    }
+
+    /// The object `name` stands for in it: its own, or one it imports.
+    pub fn object_named(&self, name: &str) -> Option<&Object> {
+        self.object(name).or_else(|| self.imported.get(name))
     }
 }
 
@@ -156,7 +179,15 @@ impl Trait {
     /// An object that serves the trait's tree and needs nothing: how the
     /// runtime sees an instance declared by the trait.
     pub fn as_object(&self) -> Object {
-        Object { name: self.name.clone(), doc: self.doc.clone(), traits: vec![], guide: None, needs: vec![], serves: self.entries.clone() }
+        Object {
+            name: self.name.clone(),
+            doc: self.doc.clone(),
+            traits: vec![],
+            guide: None,
+            needs: vec![],
+            serves: self.entries.clone(),
+            origin: None,
+        }
     }
 }
 
@@ -164,6 +195,11 @@ impl Object {
     /// The entry serving `path`, a clean path in the object's served tree.
     pub fn serving(&self, path: &str) -> Option<&Entry> {
         pattern::best(&self.serves, |e| &e.path, path)
+    }
+
+    /// Whether `other` has the same shape: what it serves, needs and declares.
+    pub fn same_shape(&self, other: &Object) -> bool {
+        self.name == other.name && self.traits == other.traits && self.needs == other.needs && self.serves == other.serves
     }
 
     /// The `needs` block for the mount point `at`.
@@ -274,7 +310,7 @@ impl fmt::Display for Request {
 // In modules
 
 /// The custom section a module's header travels in, as BSON.
-pub const SECTION: &str = "othismo.iface";
+pub const SECTION: &str = "othismo.oth";
 
 /// `wasm` with `header` in its [`SECTION`], replacing any already there.
 pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
@@ -296,13 +332,14 @@ pub fn embed(wasm: &[u8], header: &Header) -> Result<Vec<u8>> {
 }
 
 /// Checks that `header` is fit for module `name`: it declares exactly one
-/// object, named for the module.
+/// object, named for the module, and exports it.
 pub fn for_module(header: &Header, name: &str) -> Result<()> {
     match header.objects.as_slice() {
+        [o] if o.name == name && !header.exports.contains(&o.name) => bail!("it doesn't export `{name}`; write `export object {name}`"),
         [o] if o.name == name => Ok(()),
         [o] => bail!("it declares object `{}`, but the module is `{name}`", o.name),
-        [] => bail!("it declares no object; a module's header declares `object {name}`"),
-        _ => bail!("it declares {} objects; a module's header declares just `object {name}`", header.objects.len()),
+        [] => bail!("it declares no object; a module's header declares `export object {name}`"),
+        _ => bail!("it declares {} objects; a module's header declares just `export object {name}`", header.objects.len()),
     }
 }
 
@@ -379,7 +416,7 @@ fn read_leb128(bytes: &[u8], i: &mut usize) -> Result<usize> {
 // ---------------------------------------------------------------------------
 // Parsed
 
-/// A parsed header file.
+/// A `.oth` file's declarations: what it imports, declares and exports.
 #[derive(Debug, Clone, PartialEq)]
 pub struct File {
     pub imports: Vec<Import>,
@@ -387,6 +424,9 @@ pub struct File {
     pub protocols: Vec<ProtocolDecl>,
     pub traits: Vec<TraitDecl>,
     pub objects: Vec<ObjectDecl>,
+    /// What it exports: declarations written `export`, and imported ones
+    /// named in `export { ... }`.
+    pub exports: Vec<Ident>,
 }
 
 /// `protocol <Name> { <item>, ... }`: the requests one path takes.
@@ -463,13 +503,15 @@ pub struct RequestDecl {
     pub answer: Option<(Ident, bool)>,
 }
 
+/// The declarations in a `.oth` file. Anything else in it is an image, which
+/// importing its declarations leaves alone.
 pub fn parse(src: &str) -> Result<File> {
-    Parser::new(src, true)?.header()
+    Ok(image::parse(src)?.header)
 }
 
 impl Parser {
     /// Consecutive `##` lines, joined; empty if there are none.
-    fn docs(&mut self) -> String {
+    pub(crate) fn docs(&mut self) -> String {
         let mut lines = vec![];
         while let Tok::Doc(line) = self.peek() {
             lines.push(line.clone());
@@ -478,37 +520,14 @@ impl Parser {
         lines.join("\n")
     }
 
-    fn no_docs(&mut self, doc: &str, pos: Pos) -> Result<()> {
+    pub(crate) fn no_docs(&mut self, doc: &str, pos: Pos) -> Result<()> {
         if !doc.is_empty() {
             bail!("{pos}: a `##` comment documents what follows it, and nothing documentable does");
         }
         Ok(())
     }
 
-    fn header(&mut self) -> Result<File> {
-        let mut file = File { imports: vec![], messages: vec![], protocols: vec![], traits: vec![], objects: vec![] };
-        loop {
-            let doc = self.docs();
-            let pos = self.pos();
-            match self.peek().clone() {
-                Tok::Eof => {
-                    self.no_docs(&doc, pos)?;
-                    return Ok(file);
-                }
-                Tok::Ident(kw) if kw == "import" => {
-                    self.no_docs(&doc, pos)?;
-                    file.imports.push(self.import()?);
-                }
-                Tok::Ident(kw) if kw == "message" => file.messages.push(self.message(doc)?),
-                Tok::Ident(kw) if kw == "protocol" => file.protocols.push(self.protocol(doc)?),
-                Tok::Ident(kw) if kw == "trait" => file.traits.push(self.trait_decl(doc)?),
-                Tok::Ident(kw) if kw == "object" => file.objects.push(self.object(doc)?),
-                other => bail!("{pos}: expected `import`, `message`, `protocol`, `trait` or `object`, found {other}"),
-            }
-        }
-    }
-
-    fn message(&mut self, doc: String) -> Result<MessageDecl> {
+    pub(crate) fn message(&mut self, doc: String) -> Result<MessageDecl> {
         self.expect_kw("message")?;
         let name = self.ident("message name", false)?;
         self.expect(Tok::LBrace)?;
@@ -531,7 +550,7 @@ impl Parser {
         }
     }
 
-    fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {
+    pub(crate) fn protocol(&mut self, doc: String) -> Result<ProtocolDecl> {
         self.expect_kw("protocol")?;
         let name = self.ident("protocol name", false)?;
         self.expect(Tok::LBrace)?;
@@ -548,14 +567,14 @@ impl Parser {
         Ok(ProtocolDecl { name, doc, items })
     }
 
-    fn trait_decl(&mut self, doc: String) -> Result<TraitDecl> {
+    pub(crate) fn trait_decl(&mut self, doc: String) -> Result<TraitDecl> {
         self.expect_kw("trait")?;
         let name = self.ident("trait name", false)?;
         let entries = self.entries()?;
         Ok(TraitDecl { name, doc, entries })
     }
 
-    fn object(&mut self, doc: String) -> Result<ObjectDecl> {
+    pub(crate) fn object(&mut self, doc: String) -> Result<ObjectDecl> {
         self.expect_kw("object")?;
         let name = self.ident("object name", true)?;
         let mut traits = vec![];
@@ -705,30 +724,46 @@ pub fn resolve(
     let mut messages: BTreeMap<String, MessageType> = BTreeMap::new();
     let mut protocols: BTreeMap<String, Protocol> = BTreeMap::new();
     let mut traits: BTreeMap<String, Trait> = BTreeMap::new();
+    let mut imported: BTreeMap<String, Object> = BTreeMap::new();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
     for imp in &file.imports {
         let header = import(&imp.from).with_context(|| format!("{}: importing from {}", imp.pos, imp.from))?;
-        for name in &imp.names {
-            reserve(name)?;
-            if let Some(prev) = from.insert(name.name.clone(), imp.from.to_string()) {
-                bail!(err_at(name, format!("`{}` is already imported from {prev}", name.name)));
+        for n in &imp.names {
+            let (name, local) = (&n.name, &n.local);
+            reserve(local)?;
+            if let Some(prev) = from.insert(local.name.clone(), imp.from.to_string()) {
+                bail!(err_at(local, format!("`{}` is already imported from {prev}", local.name)));
+            }
+            let declared = header.messages.contains_key(&name.name)
+                || header.protocols.contains_key(&name.name)
+                || header.traits.contains_key(&name.name)
+                || header.object_named(&name.name).is_some();
+            if !declared {
+                bail!(err_at(name, format!("{} has no message type, protocol, trait or object `{}`", imp.from, name.name)));
+            }
+            if !header.exports.contains(&name.name) {
+                bail!(err_at(name, format!("{} doesn't export `{}`", imp.from, name.name)));
             }
             if let Some(ty) = header.messages.get(&name.name) {
-                messages.insert(name.name.clone(), ty.clone());
+                if local.name != name.name {
+                    bail!(err_at(local, format!("a message type is named on the wire, so `{}` can't be renamed", name.name)));
+                }
+                messages.insert(local.name.clone(), ty.clone());
             } else if let Some(p) = header.protocols.get(&name.name) {
-                protocols.insert(name.name.clone(), p.clone());
+                protocols.insert(local.name.clone(), p.clone());
             } else if let Some(t) = header.traits.get(&name.name) {
-                traits.insert(name.name.clone(), t.clone());
-            } else {
-                bail!(err_at(name, format!("{} has no message type, protocol or trait `{}`", imp.from, name.name)));
+                traits.insert(local.name.clone(), t.clone());
+            } else if let Some(o) = header.object_named(&name.name) {
+                imported.insert(local.name.clone(), o.clone());
             }
         }
     }
 
-    // A name means one thing, whether a message type, a protocol or a trait.
+    // A name means one thing, whether a message type, a protocol, a trait or an object.
     let mut names: Vec<(&Ident, &str)> = file.messages.iter().map(|m| (&m.name, "message")).collect();
     names.extend(file.protocols.iter().map(|p| (&p.name, "protocol")));
     names.extend(file.traits.iter().map(|t| (&t.name, "trait")));
+    names.extend(file.objects.iter().map(|o| (&o.name, "object")));
     for (i, &(name, kind)) in names.iter().enumerate() {
         reserve(name)?;
         if let Some(prev) = from.get(&name.name) {
@@ -779,9 +814,6 @@ pub fn resolve(
 
     let mut objects: Vec<Object> = vec![];
     for o in &file.objects {
-        if objects.iter().any(|prev| prev.name == o.name.name) {
-            bail!(err_at(&o.name, format!("object `{}` is declared twice", o.name.name)));
-        }
         let guide = match &o.guide {
             Some((path, pos)) => Some(guide(path).with_context(|| format!("{pos}: reading the guide {path:?}"))?),
             None => None,
@@ -811,11 +843,22 @@ pub fn resolve(
             }
         }
         let traits = o.traits.iter().map(|t| t.name.clone()).collect();
-        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves });
+        objects.push(Object { name: o.name.name.clone(), doc: o.doc.clone(), traits, guide, needs, serves, origin: None });
+    }
+    let mut exports: Vec<String> = vec![];
+    for e in &file.exports {
+        let known = names.iter().any(|(n, _)| n.name == e.name) || from.contains_key(&e.name);
+        if !known {
+            bail!(err_at(e, format!("`{}` is neither declared nor imported here, so it can't be exported", e.name)));
+        }
+        if exports.contains(&e.name) {
+            bail!(err_at(e, format!("`{}` is exported twice", e.name)));
+        }
+        exports.push(e.name.clone());
     }
     let declared = file.messages.iter().map(|m| m.name.name.clone()).collect();
     let Shapes { protocols, traits, .. } = shapes;
-    Ok(Header { messages, declared, protocols, traits, objects })
+    Ok(Header { messages, declared, protocols, traits, objects, imported, exports })
 }
 
 /// What a protocol's or a trait's name stands for, written out.
@@ -999,29 +1042,111 @@ fn same(a: &Pattern, b: &Pattern) -> bool {
     a.specificity(b) == Ordering::Equal && a.covers(b) && b.covers(a)
 }
 
-/// Reads and resolves the header at `path`. `from env` is the runtime's
-/// header, `from Name` is `Name.iface` next to this one, and a quoted path
-/// is relative to this one.
-pub fn load(path: &Path) -> Result<Header> {
-    load_depth(path, 0)
+/// `dir` followed by the relative path `rel`, without its `.` segments.
+pub fn join(dir: &Path, rel: &str) -> PathBuf {
+    let mut out = dir.to_path_buf();
+    for c in Path::new(rel).components() {
+        match c {
+            std::path::Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
-fn load_depth(path: &Path, depth: usize) -> Result<Header> {
-    if depth > 16 {
-        bail!("headers import each other in a loop");
-    }
-    let src = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let file = parse(&src).with_context(|| format!("parsing {}", path.display()))?;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let mut import = |s: &Source| -> Result<Header> {
-        match s {
-            Source::Module(m) if m.name == "env" => Ok(env().clone()),
-            Source::Module(m) => load_depth(&dir.join(format!("{}.iface", m.name)), depth + 1),
-            Source::Path(p) => load_depth(&dir.join(p), depth + 1),
+/// Reads and resolves the header at `path`: a `.oth` file's declarations,
+/// or the header inside a module.
+pub fn load(path: &Path) -> Result<Header> {
+    Loader::default().header(path)
+}
+
+/// Reads `.oth` files and the headers inside modules, each once, following
+/// imports relative to the file that makes them.
+#[derive(Default)]
+pub struct Loader {
+    /// What to read instead of the file on disk, by path: for tests.
+    pub files: BTreeMap<PathBuf, Vec<u8>>,
+    /// Every `.oth` file read, in the order they were first read.
+    pub sources: Vec<PathBuf>,
+    headers: BTreeMap<PathBuf, Header>,
+    /// The `.oth` files being resolved, to catch one that imports itself.
+    loading: Vec<PathBuf>,
+}
+
+impl Loader {
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        match self.files.get(path) {
+            Some(bytes) => Ok(bytes.clone()),
+            None => std::fs::read(path).with_context(|| format!("reading {}", path.display())),
         }
-    };
-    let guide = |p: &str| -> Result<String> { Ok(std::fs::read_to_string(dir.join(p))?) };
-    resolve(&file, &mut import, &guide).with_context(|| format!("in {}", path.display()))
+    }
+
+    /// The `.oth` file at `path`, parsed whole.
+    pub fn image(&mut self, path: &Path) -> Result<Image> {
+        let src = String::from_utf8(self.read(path)?).with_context(|| format!("{} isn't UTF-8", path.display()))?;
+        if !self.sources.iter().any(|p| p == path) {
+            self.sources.push(path.to_path_buf());
+        }
+        image::parse(&src).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// The header at `path`: a `.oth` file's declarations, or the header
+    /// inside a module (`.wasm`).
+    pub fn header(&mut self, path: &Path) -> Result<Header> {
+        if let Some(h) = self.headers.get(path) {
+            return Ok(h.clone());
+        }
+        let header = match path.extension().and_then(|e| e.to_str()) {
+            Some("wasm") => {
+                let Ok(wasm) = self.read(path) else {
+                    let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                    bail!("cannot read {} (did you compile {name}.ts?)", path.display());
+                };
+                let mut header = embedded(&wasm)
+                    .with_context(|| path.display().to_string())?
+                    .ok_or_else(|| anyhow::anyhow!("{} has no header; embed one with `othismo embed`", path.display()))?;
+                for o in &mut header.objects {
+                    o.origin = Some(path.to_path_buf());
+                }
+                header
+            }
+            Some("oth") => {
+                if self.loading.iter().any(|p| p == path) {
+                    bail!("{} imports itself, through the files it imports", path.display());
+                }
+                self.loading.push(path.to_path_buf());
+                let header = self.image(path).and_then(|img| self.resolve(&img.header, path));
+                self.loading.pop();
+                header?
+            }
+            _ => bail!("{} is neither a `.oth` file nor a module (`.wasm`)", path.display()),
+        };
+        self.headers.insert(path.to_path_buf(), header.clone());
+        Ok(header)
+    }
+
+    /// Resolves `file`, the declarations of the `.oth` file at `path`.
+    pub fn resolve(&mut self, file: &File, path: &Path) -> Result<Header> {
+        let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        // Guides are read first, since resolving borrows the loader for imports.
+        let mut guides: BTreeMap<String, Result<String, String>> = BTreeMap::new();
+        for (g, _) in file.objects.iter().filter_map(|o| o.guide.as_ref()) {
+            let text = self.read(&dir.join(g)).map_err(|e| format!("{e:#}")).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()));
+            guides.insert(g.clone(), text);
+        }
+        let guide = |g: &str| -> Result<String> { guides[g].clone().map_err(|e| anyhow::anyhow!(e)) };
+        let mut import = |s: &Source| -> Result<Header> {
+            match s {
+                Source::Env => Ok(env().clone()),
+                Source::Path(p) => self.header(&join(&dir, p)),
+            }
+        };
+        let mut header = resolve(file, &mut import, &guide).with_context(|| format!("in {}", path.display()))?;
+        for o in &mut header.objects {
+            o.origin = Some(path.to_path_buf());
+        }
+        Ok(header)
+    }
 }
 
 #[cfg(test)]
@@ -1061,7 +1186,7 @@ mod tests {
         let file = parse(src)?;
         let mut import = |s: &Source| -> Result<Header> {
             match s {
-                Source::Module(m) if m.name == "env" => Ok(env().clone()),
+                Source::Env => Ok(env().clone()),
                 other => bail!("no {other} here"),
             }
         };
@@ -1074,19 +1199,19 @@ mod tests {
 
     const SHAPES: &str = r#"
         ## A site, declared before the trees it is made of.
-        trait Site {
+        export trait Site {
           /hits     read -> text/plain
           ## The static files.
           /static   Tree
           /**       File
         }
 
-        trait Tree {
+        export trait Tree {
           /     Dir
           /**   File, Dir
         }
 
-        protocol File { read -> */*, stat }
+        export protocol File { read -> */*, stat }
         protocol Dir {
           list,
           stat,
@@ -1117,11 +1242,16 @@ mod tests {
 
     #[test]
     fn protocols_and_traits_can_be_imported() {
-        let file = parse("import { Tree, File } from Shapes object T { needs /f Tree serves { /x File } }").unwrap();
+        let file = parse(r#"import { Tree as Files, File } from "./shapes.oth" object T { needs /f Files serves { /x File } }"#).unwrap();
         let mut import = |_: &Source| resolve_str(SHAPES);
         let h = resolve(&file, &mut import, &|_| unreachable!()).unwrap();
         assert_eq!(h.object("T").unwrap().needs[0].entries.len(), 2);
         assert_eq!(h.object("T").unwrap().serves[0].to_string(), "/x read -> */*, stat");
+        assert_eq!(h.traits["Files"].name, "Tree", "a renamed trait is the same trait");
+
+        let unexported = parse(r#"import { Dir } from "./shapes.oth""#).unwrap();
+        let e = format!("{:#}", resolve(&unexported, &mut import, &|_| unreachable!()).unwrap_err());
+        assert!(e.contains("\"./shapes.oth\" doesn't export `Dir`"), "{e}");
     }
 
     #[test]
@@ -1199,8 +1329,12 @@ mod tests {
         assert!(err("message A { x: i32 x: i32 }").contains("two fields called `x`"));
         assert!(err("message A {} message A {}").contains("declared twice"));
         assert!(err("message Stat {}").contains("reserved"));
-        assert!(err("import { Nope } from env").contains("env has no message type, protocol or trait `Nope`"));
-        assert!(err("import { X } from Other").contains("no Other here"));
+        assert!(err("import { Nope } from env").contains("env has no message type, protocol, trait or object `Nope`"));
+        assert!(err(r#"import { X } from "./other.oth""#).contains("no \"./other.oth\" here"));
+        assert!(err("import { X } from Other").contains("import from a file, relative to this one, such as `from \"./scripts/Other.oth\"`"));
+        assert!(err("protocol P { read } export { P, Q }").contains("`Q` is neither declared nor imported here"));
+        assert!(err("export protocol P { read } export { P }").contains("`P` is exported twice"));
+        assert!(err("object A {} object A {}").contains("object `A` is declared twice"));
         let e = err("message Greeting {} object A { serves { /x write Greeting } }");
         assert!(e.contains("`Greeting`: a header names a payload by its content type, such as `text/plain` or `application/bson`, not by a message type"), "{e}");
         assert!(err("object A { serves { /x read -> text/ } }").contains("isn't a well-formed content type"));

@@ -1,5 +1,5 @@
 ## Writes each line it is given to the console, in capitals.
-object Shouter {
+export object Shouter {
   needs /dev/cons {
     /  write text/plain
   }
