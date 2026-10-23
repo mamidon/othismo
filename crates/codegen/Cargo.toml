@@ -1,0 +1,13 @@
+[package]
+name = "codegen"
+description = "Generates AssemblyScript bindings and Markdown reference documentation from headers"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+format.workspace = true
+compiler.workspace = true
+
+[dev-dependencies]
+format-bson.workspace = true

@@ -1,14 +1,25 @@
-[package]
-name = "othismo"
+# The othismo workspace. Its crates are in crates/, and the AssemblyScript
+# SDK, the runtime's header and reusable objects are in sdk/.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+protocol = { path = "crates/protocol" }
+syntax = { path = "crates/syntax" }
+format = { path = "crates/format" }
+format-bson = { path = "crates/format-bson" }
+image = { path = "crates/image" }
+runtime = { path = "crates/runtime" }
+compiler = { path = "crates/compiler" }
+codegen = { path = "crates/codegen" }
 anyhow = "1.0.104"
 bson = { version = "3.1.0", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"
 wasmtime = { version = "48.0.7", features = ["anyhow"] }
-
-[dev-dependencies]
 wat = "1.262.0"

@@ -1,0 +1,10 @@
+[package]
+name = "syntax"
+description = "The .oth language: its lexer, its parse tree and its parsers, for images, headers, schema files and value files"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+anyhow.workspace = true
+serde.workspace = true

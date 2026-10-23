@@ -134,7 +134,7 @@ instance web   : Site { bind /net/tcp /net/tcp }
 <p>An instance&#39;s type is one of:</p>
 <ul>
 <li>an <strong>object</strong> imported from a module&#39;s header. <code>StaticSite</code>, declared in
-<code>scripts/StaticSite.oth</code>, runs <code>scripts/StaticSite.wasm</code>;</li>
+<code>sdk/objects/site/StaticSite.oth</code>, runs <code>StaticSite.wasm</code> beside it;</li>
 <li>one of the <strong>runtime&#39;s objects</strong> that touch nothing outside the image,
 imported from <code>env</code>: <code>PackedFiles</code>, <code>MemoryConsole</code>, <code>MemoryListener</code>;</li>
 <li>an <strong>image</strong>, imported by its default name.</li>
@@ -171,8 +171,8 @@ instantiates the image.</li>
 <p>An instance of an image is an object made of objects, as a Plan 9 namespace
 can itself be served as a tree:</p>
 <pre><code class="language-text"># site.oth: the static site, which touches nothing of its own
-import { HttpServer } from &quot;./scripts/HttpServer.oth&quot;
-import { StaticSite } from &quot;./scripts/StaticSite.oth&quot;
+import { HttpServer } from &quot;../../sdk/objects/http/HttpServer.oth&quot;
+import { StaticSite } from &quot;../../sdk/objects/site/StaticSite.oth&quot;
 import { Listener, Console, PackedFiles } from env
 
 needs /net/tcp  Listener
@@ -436,7 +436,7 @@ started, and a test can only reach what the image has in memory. A test that
 never answers fails. What the image prints on its consoles is shown for each
 test that fails, and the command exits with a failure if any did.</p>
 <h2 id="the-file-format">The file format</h2>
-<pre><code class="language-text">&quot;RTIMAGE&quot; 0x06        magic and format version
+<pre><code class="language-text">&quot;RTIMAGE&quot; 0x07        magic and format version
 u64 (LE)              length of the manifest
 manifest              one BSON document
 blobs                 file and module contents, back to back

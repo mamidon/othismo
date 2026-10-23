@@ -61,7 +61,7 @@ to it.</p>
 <h2 id="what-an-object-is">What an object is</h2>
 <p>A <strong>module</strong> is a compiled <code>.wasm</code> file. An <strong>object</strong> is one running
 instance of a module, declared in an image:</p>
-<pre><code class="language-text">import { StaticSite } from &quot;./scripts/StaticSite.oth&quot;
+<pre><code class="language-text">import { StaticSite } from &quot;../../sdk/objects/site/StaticSite.oth&quot;
 
 instance pages : StaticSite {
   mount /files files readonly
@@ -74,10 +74,10 @@ of its served tree, and a <strong>client</strong>, making requests of the paths 
 Nothing else about it is visible from outside: not its memory, not its
 functions, not the language it was written in.</p>
 <h2 id="the-interface">The interface</h2>
-<p>Each module has a header next to its source, <code>scripts/StaticSite.oth</code>,
+<p>Each module has a header next to its source, <code>StaticSite.oth</code>,
 written in the same language as images. It declares the module&#39;s object: what
 it serves, what it needs, and its documentation. The module itself is the
-<code>.wasm</code> with the same name beside it, <code>scripts/StaticSite.wasm</code>.</p>
+<code>.wasm</code> with the same name beside it, <code>StaticSite.wasm</code>.</p>
 <pre><code class="language-text">import { FileTree } from env
 
 ## Serves a static site from a files tree it is given read-only.

@@ -1,0 +1,11 @@
+[package]
+name = "format"
+description = "Payload formats: the trait a format implements, and a registry of formats by content type"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+syntax.workspace = true
+anyhow.workspace = true
+serde.workspace = true

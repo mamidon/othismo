@@ -338,6 +338,11 @@ them:
 | `./Greeter.oth` | `GreeterServer`, and a client for each of its needs | generated from `Greeter.oth` |
 | `./Greeter.messages` | `Greeting`, registered with `"othismo/bson"` | generated from `Greeter.messages` by BSON's generator |
 
+The SDK is in `sdk/`: the library in `sdk/assemblyscript/`, the runtime's
+header in `sdk/env/`, and reusable objects in `sdk/objects/`, such as
+`HttpServer` and `StaticSite`, which an image imports by path:
+`import { HttpServer } from "../../sdk/objects/http/HttpServer.oth"`.
+
 A `Payload` is a content type and an `ArrayBuffer`. One whose type the
 module doesn't understand can be passed on unchanged.
 

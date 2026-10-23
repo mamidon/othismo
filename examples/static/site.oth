@@ -2,8 +2,8 @@
 # gives it a listener and a console for the access log. Its files are packed
 # into the image when it is built.
 
-import { HttpServer } from "./scripts/HttpServer.oth"
-import { StaticSite } from "./scripts/StaticSite.oth"
+import { HttpServer } from "../../sdk/objects/http/HttpServer.oth"
+import { StaticSite } from "../../sdk/objects/site/StaticSite.oth"
 import { Console, Listener, PackedFiles } from env
 
 needs /net/tcp  Listener

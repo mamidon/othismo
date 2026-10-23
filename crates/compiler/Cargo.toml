@@ -1,0 +1,19 @@
+[package]
+name = "compiler"
+description = "Resolves and checks .oth images and headers, and builds the packs the runtime runs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+syntax.workspace = true
+format.workspace = true
+image.workspace = true
+anyhow.workspace = true
+bson.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+format-bson.workspace = true
+wasmtime.workspace = true
+wat.workspace = true

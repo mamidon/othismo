@@ -136,12 +136,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "codegen",
+ "compiler",
+ "format",
+ "format-bson",
+ "image",
+ "protocol",
+ "runtime",
+ "syntax",
+ "wat",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "codegen"
+version = "0.1.0"
+dependencies = [
+ "compiler",
+ "format",
+ "format-bson",
+ "protocol",
+]
+
+[[package]]
+name = "compiler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "format",
+ "format-bson",
+ "image",
+ "protocol",
+ "serde",
+ "syntax",
+ "wasmtime",
+ "wat",
 ]
 
 [[package]]
@@ -483,6 +526,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "format"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "serde",
+ "syntax",
+]
+
+[[package]]
+name = "format-bson"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "format",
+ "protocol",
+ "serde",
+ "syntax",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -660,6 +725,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
+name = "image"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bson",
+ "format",
+ "protocol",
+ "serde",
+ "sha2",
+ "syntax",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,18 +896,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "othismo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bson",
- "serde",
- "sha2",
- "wasmtime",
- "wat",
-]
-
-[[package]]
 name = "petgraph"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -885,6 +951,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1010,6 +1083,16 @@ dependencies = [
  "rustc-hash",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "protocol",
+ "wasmtime",
 ]
 
 [[package]]
@@ -1185,6 +1268,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "syntax"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "serde",
 ]
 
 [[package]]

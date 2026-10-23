@@ -4,6 +4,6 @@
   "devDependencies": {
     "assemblyscript": "0.28.20",
     "marked": "14.1.4",
-    "othismo": "file:./as"
+    "othismo": "file:./sdk/assemblyscript"
   }
 }
