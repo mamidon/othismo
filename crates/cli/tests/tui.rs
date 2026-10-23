@@ -146,3 +146,84 @@ fn q_quits() {
     assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
 }
 
+
+fn draw(app: &mut App) {
+    let mut terminal = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+}
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c));
+    }
+}
+
+#[test]
+fn the_choices_wait_for_typing_and_esc_keeps_them_closed() {
+    let mut app = app("static/static.test.oth");
+    type_line(&mut app, ":look web");
+    assert_eq!((app.focus, app.input.as_str()), (Focus::Command, ""));
+    assert!(!app.popup_open(), "nothing typed yet: the arrows are history's");
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.input, ":look web", "the last line, recalled");
+    press(&mut app, KeyCode::Up);
+    assert!(!app.popup_open(), "going through history, the choices stay out of the way");
+    // Picked with the arrows, enter puts it in rather than sending the line.
+    app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    typed(&mut app, "wr");
+    assert!(app.popup_open());
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.input, "write ");
+    // Closed with esc, they stay closed while typing goes on.
+    typed(&mut app, "/http/hosts/b");
+    press(&mut app, KeyCode::Esc);
+    typed(&mut app, ".example \"/www\"");
+    assert!(!app.popup_open());
+    press(&mut app, KeyCode::Enter);
+    until(&mut app, "the answer", |a| a.log_text().iter().any(|l| l.contains("ok done")));
+    // A new line brings them back.
+    typed(&mut app, "re");
+    assert!(app.popup_open());
+}
+
+#[test]
+fn the_transcript_scrolls_and_the_divider_moves() {
+    let mut app = app("static/static.test.oth");
+    type_line(&mut app, ":look web.pages");
+    type_line(&mut app, "read /files/index.html");
+    until(&mut app, "the page", |a| a.log_text().iter().any(|l| l.contains("</html>")));
+    draw(&mut app);
+    let screen_has = |app: &mut App, s: &str| screen(app).contains(s);
+    assert!(screen_has(&mut app, "</html>"), "the end shows first");
+    press(&mut app, KeyCode::PageUp);
+    draw(&mut app);
+    assert!(!screen_has(&mut app, "</html>") && screen_has(&mut app, "more · wheel or PgDn"), "scrolled back");
+    // The wheel scrolls what it is over: here, the transcript.
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    let wheel = |kind| MouseEvent { kind, column: 10, row: 33, modifiers: KeyModifiers::NONE };
+    for _ in 0..20 {
+        app.mouse(wheel(MouseEventKind::ScrollDown));
+    }
+    draw(&mut app);
+    assert!(screen_has(&mut app, "</html>"), "and back to the end");
+    // + and - in the table give the transcript more room, or less.
+    leave_command_line(&mut app);
+    let rule = |app: &mut App| screen(app).lines().position(|l| l.contains("to resize")).unwrap();
+    let before = rule(&mut app);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('+'));
+    }
+    assert_eq!(rule(&mut app), before - 4);
+}
+
+#[test]
+fn the_inspector_has_its_side_to_itself() {
+    let mut app = app("static/static.test.oth");
+    let s = screen(&mut app);
+    let last_table_row = s.lines().position(|l| l.contains("to resize")).unwrap();
+    // Below the table, the inspector's border still runs down its side.
+    let below: Vec<&str> = s.lines().skip(last_table_row + 1).take(5).collect();
+    assert!(below.iter().all(|l| l.contains('│')), "{s}");
+}

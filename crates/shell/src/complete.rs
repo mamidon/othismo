@@ -223,7 +223,11 @@ fn path_item(w: &World, here: Viewpoint, verb: Verb, path: &str, is_dir: bool, n
     let item = match (&checked, is_dir) {
         (Ok(_), _) => Item::new(name, &format!("{path} ")).detail(owner),
         (Err(_), true) => {
-            let mut i = Item::new(format!("{name}/"), &format!("{path}/")).detail(format!("{owner} · itself: {}", why(w, here, verb, path)));
+            // Going on into it is what matters; say why it won't do itself
+            // only if that isn't simply that nothing is served there.
+            let why = why(w, here, verb, path);
+            let detail = if why == "not_found" { owner } else { format!("{owner} · itself: {why}") };
+            let mut i = Item::new(format!("{name}/"), &format!("{path}/")).detail(detail);
             i.more = true;
             i
         }

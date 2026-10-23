@@ -14,8 +14,12 @@ use anyhow::Result;
 use protocol::ns::{Resolved, Status, Verb};
 use protocol::payload::Stat;
 use ratatui::Frame;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row as TableRow, Table, TableState, Wrap};
@@ -64,20 +68,24 @@ fn styled(s: impl Into<String>, c: Color) -> Span<'static> {
 /// Run `session` on the whole screen until the operator quits.
 pub fn run(session: Session, title: &str) -> Result<()> {
     let mut terminal = ratatui::init();
+    // The wheel scrolls and the divider drags; holding shift (option in
+    // some terminals) still selects text.
+    execute!(std::io::stdout(), EnableMouseCapture)?;
     let mut app = App::new(session, title);
     let result = (|| -> Result<()> {
         loop {
             terminal.draw(|f| app.draw(f))?;
-            if event::poll(Duration::from_millis(50))?
-                && let TermEvent::Key(key) = event::read()?
-                && key.kind != KeyEventKind::Release
-                && !app.key(key)
-            {
-                return Ok(());
+            if event::poll(Duration::from_millis(50))? {
+                match event::read()? {
+                    TermEvent::Key(key) if key.kind != KeyEventKind::Release && !app.key(key) => return Ok(()),
+                    TermEvent::Mouse(m) => app.mouse(m),
+                    _ => {}
+                }
             }
             app.pump(Duration::ZERO);
         }
     })();
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -143,8 +151,24 @@ pub struct App {
     /// What can come next on the command line, and which is chosen.
     pub completion: Completion,
     chosen: usize,
-    /// The operator closed it; typing opens it again.
+    /// The operator closed it: it stays closed until tab, or a new line.
     hidden: bool,
+    /// The operator asked for it with tab, though nothing is typed yet.
+    asked: bool,
+    /// The operator picked one with the keys or the mouse, so ⏎ puts it in.
+    picked: bool,
+    /// Rows given to the transcript; the table has the rest.
+    log_height: u16,
+    /// How far the transcript is scrolled back, in rows from its end.
+    log_back: usize,
+    /// How wide the transcript was last drawn, to keep scrolling steady.
+    log_width: usize,
+    /// How far the inspector is scrolled down, in rows.
+    inspector_down: u16,
+    /// Where things were last drawn, for the mouse.
+    areas: Areas,
+    /// The divider between the table and the transcript is being dragged.
+    dragging: bool,
     refreshed: Instant,
     quit: bool,
 }
@@ -168,6 +192,14 @@ impl App {
             completion: Completion::default(),
             chosen: 0,
             hidden: false,
+            asked: false,
+            picked: false,
+            log_height: 10,
+            log_back: 0,
+            log_width: 80,
+            inspector_down: 0,
+            areas: Areas::default(),
+            dragging: false,
             refreshed: Instant::now(),
             quit: false,
         };
@@ -280,6 +312,8 @@ impl App {
                 self.hidden = false;
                 self.recomplete();
             }
+            KeyCode::Char('+') | KeyCode::Char('=') => self.resize(1),
+            KeyCode::Char('-') => self.resize(-1),
             KeyCode::Char('r') => {
                 self.session.refresh();
                 self.listings.clear();
@@ -294,22 +328,40 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let choosing = self.popup_open() && !self.completion.items.is_empty();
         let n = self.completion.items.len().max(1);
+        let half = (self.areas.log.height / 2).max(1) as isize;
         match key.code {
-            KeyCode::Esc if self.popup_open() => self.hidden = true,
+            KeyCode::Esc if self.popup_open() => {
+                self.hidden = true;
+                self.picked = false;
+            }
             KeyCode::Esc => self.focus = Focus::Tree,
-            KeyCode::Tab if self.hidden => self.hidden = false,
+            KeyCode::Tab if !self.popup_open() => {
+                self.hidden = false;
+                self.asked = true;
+            }
             KeyCode::Tab => self.accept(),
+            // A choice picked with the keys goes in; otherwise the line is sent.
+            KeyCode::Enter if choosing && self.picked => self.accept(),
             KeyCode::Enter => {
                 let line = std::mem::take(&mut self.input);
                 self.cursor = 0;
                 self.recalled = None;
-                self.hidden = false;
+                (self.hidden, self.asked, self.picked) = (false, false, false);
+                self.log_back = 0;
                 self.submit(&line);
             }
-            KeyCode::Down if choosing => self.chosen = (self.chosen + 1) % n,
-            KeyCode::Up if choosing => self.chosen = (self.chosen + n - 1) % n,
+            KeyCode::Down if choosing => {
+                self.chosen = (self.chosen + 1) % n;
+                self.picked = true;
+            }
+            KeyCode::Up if choosing => {
+                self.chosen = (self.chosen + n - 1) % n;
+                self.picked = true;
+            }
             KeyCode::Up => self.recall(-1),
             KeyCode::Down => self.recall(1),
+            KeyCode::PageUp => self.scroll_log(half),
+            KeyCode::PageDown => self.scroll_log(-half),
             KeyCode::Left => self.cursor = self.input[..self.cursor].chars().next_back().map_or(0, |c| self.cursor - c.len_utf8()),
             KeyCode::Right => self.cursor = self.input[self.cursor..].chars().next().map_or(self.cursor, |c| self.cursor + c.len_utf8()),
             KeyCode::Home => self.cursor = 0,
@@ -326,17 +378,91 @@ impl App {
             KeyCode::Char(c) if !ctrl => {
                 self.input.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
-                self.hidden = false;
+                self.picked = false;
             }
             _ => {}
+        }
+        if self.input.is_empty() {
+            // A new line: the choices come back once something is typed.
+            self.hidden = false;
         }
         if !matches!(key.code, KeyCode::Up | KeyCode::Down) || !choosing {
             self.recomplete();
         }
     }
 
-    fn popup_open(&self) -> bool {
-        self.focus == Focus::Command && !self.hidden && (!self.completion.items.is_empty() || self.completion.hint.is_some())
+    /// Whether the choices are showing: once something is typed, or tab
+    /// asks for them, until esc closes them.
+    pub fn popup_open(&self) -> bool {
+        self.focus == Focus::Command
+            && !self.hidden
+            && (!self.input.is_empty() || self.asked)
+            && (!self.completion.items.is_empty() || self.completion.hint.is_some())
+    }
+
+    /// Gives the transcript `by` more rows, taking them from the table.
+    fn resize(&mut self, by: i16) {
+        let most = self.areas.left.height.saturating_sub(7).max(3);
+        self.log_height = (self.log_height as i16 + by).clamp(3, most as i16) as u16;
+    }
+
+    /// Scrolls the transcript back by `rows`, or on with a negative number.
+    fn scroll_log(&mut self, rows: isize) {
+        self.log_back = (self.log_back as isize + rows).max(0) as usize;
+    }
+
+    /// Handles the mouse: the wheel scrolls what it is over, a click picks a
+    /// choice or a row, and the divider above the transcript drags.
+    pub fn mouse(&mut self, m: MouseEvent) {
+        let at = Position { x: m.column, y: m.row };
+        let a = self.areas;
+        let on_divider = a.left.contains(at) && at.y == a.log.y.saturating_sub(1);
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = m.kind == MouseEventKind::ScrollUp;
+                if self.popup_open() && a.popup.contains(at) && !self.completion.items.is_empty() {
+                    let n = self.completion.items.len();
+                    self.chosen = if up { (self.chosen + n - 1) % n } else { (self.chosen + 1) % n };
+                    self.picked = true;
+                } else if a.log.contains(at) {
+                    self.scroll_log(if up { 3 } else { -3 });
+                } else if a.inspector.contains(at) {
+                    self.inspector_down = if up { self.inspector_down.saturating_sub(3) } else { self.inspector_down + 3 };
+                } else if a.table.contains(at) {
+                    self.step(if up { -3 } else { 3 });
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.popup_open() && a.popup.contains(at) {
+                    let i = a.popup_first + at.y.saturating_sub(a.popup.y) as usize;
+                    if i < self.completion.items.len() {
+                        self.chosen = i;
+                        self.accept();
+                    }
+                } else if on_divider {
+                    self.dragging = true;
+                } else if a.table.contains(at) && at.y > a.table.y {
+                    let i = self.table.offset() + (at.y - a.table.y - 1) as usize;
+                    if self.rows.get(i).is_some_and(Row::selectable) {
+                        if self.table.selected() == Some(i) && self.focus == Focus::Tree {
+                            self.look_from_selected();
+                        } else {
+                            self.select(i);
+                        }
+                    }
+                    self.focus = Focus::Tree;
+                } else if a.command.contains(at) {
+                    self.focus = Focus::Command;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
+                let bottom = a.command.y;
+                let height = bottom.saturating_sub(at.y + 1);
+                self.resize(height as i16 - self.log_height as i16);
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.dragging = false,
+            _ => {}
+        }
     }
 
     /// Works out what can come next where the cursor is.
@@ -360,6 +486,7 @@ impl App {
 
     /// Puts the chosen completion in, and works out what can come after it.
     fn accept(&mut self) {
+        self.picked = false;
         let Some(item) = self.completion.items.get(self.chosen).cloned() else { return };
         if item.placeholder {
             return;
@@ -416,6 +543,8 @@ impl App {
             let at = at.max(0) as usize;
             self.recalled = Some(at);
             self.set_input(self.history[at].clone());
+            // Going through history, the arrows stay with it.
+            self.hidden = true;
         }
     }
 
@@ -456,6 +585,9 @@ impl App {
     }
 
     fn select(&mut self, i: usize) {
+        if self.table.selected() != Some(i) {
+            self.inspector_down = 0;
+        }
         self.table.select(Some(i));
         self.place().selected = i;
     }
@@ -794,23 +926,21 @@ impl App {
     // ---- drawing -----------------------------------------------------------------
 
     pub fn draw(&mut self, f: &mut Frame) {
-        let [route, pov, main, log, command, status] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(6),
-            Constraint::Length(9),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .areas(f.area());
+        let [route, pov, body, status] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(8), Constraint::Length(1)]).areas(f.area());
         f.render_widget(Paragraph::new(self.route_line()).style(Style::new().bg(colour::BAR)), route);
         f.render_widget(Paragraph::new(dim(self.pov_line())).style(Style::new().bg(colour::BAR)), pov);
-        let (table, inspector) = if main.width >= 110 {
-            let [t, i] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(40)]).areas(main);
-            (t, Some(i))
+        // The inspector has its side to itself, top to bottom.
+        let (left, inspector) = if body.width >= 110 {
+            let [l, i] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(42)]).areas(body);
+            (l, Some(i))
         } else {
-            (main, None)
+            (body, None)
         };
+        let log_height = self.log_height.clamp(3, left.height.saturating_sub(7).max(3));
+        let [table, log, command] =
+            Layout::vertical([Constraint::Min(4), Constraint::Length(log_height), Constraint::Length(1)]).areas(left);
+        self.areas = Areas { left, table, log, command, inspector: inspector.unwrap_or_default(), ..Areas::default() };
         self.draw_table(f, table);
         if let Some(i) = inspector {
             self.draw_inspector(f, i);
@@ -825,10 +955,9 @@ impl App {
 
     /// What can come next, above the command line: the choices, and what
     /// the chosen one is.
-    fn draw_popup(&self, f: &mut Frame, command: Rect) {
-        let c = &self.completion;
-        let screen = f.area();
-        let width = screen.width.saturating_sub(4).min(110);
+    fn draw_popup(&mut self, f: &mut Frame, command: Rect) {
+        let c = self.completion.clone();
+        let width = command.width.saturating_sub(4).min(110);
         let x = command.x + 2;
         if c.items.is_empty() {
             let text = c.hint.clone().unwrap_or_default();
@@ -853,6 +982,7 @@ impl App {
         f.render_widget(block, area);
         let [list, doc] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).spacing(1).areas(inner);
         let first = self.chosen.saturating_sub(shown - 1);
+        (self.areas.popup, self.areas.popup_first) = (list, first);
         let lines: Vec<Line> = c.items[first..first + shown]
             .iter()
             .enumerate()
@@ -931,8 +1061,8 @@ impl App {
         let open = self.session.open.len();
         let left = format!(" {} · pid {} · {open} open request{}    ", self.title, std::process::id(), if open == 1 { "" } else { "s" });
         let keys = match self.focus {
-            Focus::Tree => "↑↓ move  →← open/close  ⏎ look from  ⌫ up  esc roots  : command  r refresh  q quit",
-            Focus::Command => "tab complete  ⏎ send  ↑↓ choose or history  esc close, then back to the table  ^C cancel the latest stream",
+            Focus::Tree => "↑↓ move  →← open/close  ⏎ look from  ⌫ up  esc roots  : command  + − resize  r refresh  q quit",
+            Focus::Command => "tab complete  ⏎ send  ↑↓ history (or choose)  PgUp PgDn scroll  esc close, then back  ^C cancel stream",
         };
         Line::from(vec![Span::raw(left), dim(keys)])
     }
@@ -961,7 +1091,13 @@ impl App {
             .header(header)
             .column_spacing(2)
             .row_highlight_style(Style::new().bg(colour::SELECTED))
-            .block(Block::new().borders(Borders::RIGHT | Borders::BOTTOM).border_style(Style::new().fg(colour::BAR)));
+            // Its bottom border divides it from the transcript, and drags.
+            .block(
+                Block::new()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::new().fg(if self.dragging { colour::WARN } else { colour::DIM }))
+                    .title_bottom(Line::from(dim(" drag, or + −, to resize ")).right_aligned()),
+            );
         f.render_stateful_widget(table, area, &mut self.table);
     }
 
@@ -1034,13 +1170,26 @@ impl App {
                 }
             }
         }
-        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(Block::new().borders(Borders::BOTTOM).border_style(Style::new().fg(colour::BAR))), area.inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 }));
+        let block = Block::new().borders(Borders::LEFT).border_style(Style::new().fg(colour::DIM));
+        let inner = block.inner(area).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+        f.render_widget(block, area);
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((self.inspector_down, 0)), inner);
     }
 
-    fn draw_log(&self, f: &mut Frame, area: Rect) {
+    /// The transcript, its long lines wrapped, scrolled back `log_back` rows.
+    fn draw_log(&mut self, f: &mut Frame, area: Rect) {
+        self.log_width = area.width.max(1) as usize;
+        let rows: Vec<Line> = self.log.iter().flat_map(|l| wrap(l, self.log_width)).collect();
         let shown = area.height as usize;
-        let from = self.log.len().saturating_sub(shown);
-        f.render_widget(Paragraph::new(self.log[from..].to_vec()), area);
+        self.log_back = self.log_back.min(rows.len().saturating_sub(shown));
+        let end = rows.len() - self.log_back;
+        f.render_widget(Paragraph::new(rows[end.saturating_sub(shown)..end].to_vec()), area);
+        if self.log_back > 0 {
+            let note = format!(" ↓ {} more · wheel or PgDn ", self.log_back);
+            let w = (note.chars().count() as u16).min(area.width);
+            let at = Rect { x: area.right() - w, y: area.bottom() - 1, width: w, height: 1 };
+            f.render_widget(Paragraph::new(note).style(Style::new().fg(colour::WARN).bg(colour::BAR)), at);
+        }
     }
 
     fn draw_command(&self, f: &mut Frame, area: Rect) {
@@ -1072,7 +1221,12 @@ impl App {
     }
 
     fn say(&mut self, line: impl Into<Line<'static>>) {
-        self.log.push(line.into());
+        let line = line.into();
+        // Scrolled back, what is being read stays put as more arrives.
+        if self.log_back > 0 {
+            self.log_back += wrap(&line, self.log_width).len();
+        }
+        self.log.push(line);
         if self.log.len() > KEPT {
             self.log.drain(..self.log.len() - KEPT);
         }
@@ -1102,6 +1256,40 @@ impl App {
 
 /// A line of the tree that names nothing: `branch` in the first column, and
 /// what it says in the last, which has room.
+/// Where the parts of the screen were last drawn.
+#[derive(Debug, Clone, Copy, Default)]
+struct Areas {
+    left: Rect,
+    table: Rect,
+    log: Rect,
+    command: Rect,
+    inspector: Rect,
+    /// The completion's list, and the index of its first line.
+    popup: Rect,
+    popup_first: usize,
+}
+
+/// `line` cut into rows of at most `width` characters.
+fn wrap(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+    let mut rows = vec![];
+    let (mut row, mut used): (Vec<Span<'static>>, usize) = (vec![], 0);
+    for span in &line.spans {
+        let mut rest: &str = &span.content;
+        while !rest.is_empty() {
+            if used == width {
+                rows.push(Line::from(std::mem::take(&mut row)));
+                used = 0;
+            }
+            let cut = rest.char_indices().nth(width - used).map_or(rest.len(), |(i, _)| i);
+            row.push(Span::styled(rest[..cut].to_string(), span.style));
+            used += rest[..cut].chars().count();
+            rest = &rest[cut..];
+        }
+    }
+    rows.push(Line::from(row));
+    rows
+}
+
 fn note(branch: String, text: &str) -> Row {
     let mut cells = vec![Line::from(dim(branch))];
     cells.extend((0..7).map(|_| Line::default()));
@@ -1199,5 +1387,19 @@ impl Tree {
             node.mount = true;
         }
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_lines_wrap_keeping_their_styles() {
+        let line = Line::from(vec![styled("abcd", colour::OK), Span::raw("efghij")]);
+        let rows: Vec<String> = wrap(&line, 4).iter().map(|l| l.to_string()).collect();
+        assert_eq!(rows, ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap(&line, 4)[0].spans[0].style.fg, Some(colour::OK));
+        assert_eq!(wrap(&Line::default(), 4).len(), 1, "an empty line is still a row");
     }
 }
