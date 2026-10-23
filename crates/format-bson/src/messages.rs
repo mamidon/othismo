@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Bool,
@@ -19,6 +19,24 @@ pub enum FieldType {
     F64,
     /// `bytes`; `ArrayBuffer` in AssemblyScript.
     Bytes,
+    /// `time`, a moment, to the millisecond: a UTC datetime. `Date` in
+    /// AssemblyScript.
+    Time,
+    /// `uuid`: 16 bytes, binary of the UUID subtype. `Uuid` in
+    /// AssemblyScript.
+    Uuid,
+    /// Another message type, by name, carried as an embedded document
+    /// without a `$type`: the field's type says what it is. Or an enum, by
+    /// name, carried as the name of its value.
+    Named(String),
+    /// `any`, any message: an embedded document with its `$type`, as a
+    /// payload's. `Message` in AssemblyScript.
+    Any,
+    /// `[T]`, a list of `T`: an array. `Array<T>` in AssemblyScript.
+    List(Box<FieldType>),
+    /// `{T}`, `T`s by string keys: a document. `Map<string, T>` in
+    /// AssemblyScript.
+    Map(Box<FieldType>),
 }
 
 impl FieldType {
@@ -38,12 +56,24 @@ impl FieldType {
             "f32" => FieldType::F32,
             "f64" => FieldType::F64,
             "bytes" => FieldType::Bytes,
+            "time" => FieldType::Time,
+            "uuid" => FieldType::Uuid,
+            "any" => FieldType::Any,
             _ => return None,
         })
     }
 
+    /// The message types it names.
+    pub fn names(&self) -> Vec<&str> {
+        match self {
+            FieldType::Named(n) => vec![n],
+            FieldType::List(t) | FieldType::Map(t) => t.names(),
+            _ => vec![],
+        }
+    }
+
     /// Inclusive range of values an integer type can hold.
-    pub fn int_range(self) -> Option<(i128, i128)> {
+    pub fn int_range(&self) -> Option<(i128, i128)> {
         Some(match self {
             FieldType::I8 => (i8::MIN as i128, i8::MAX as i128),
             FieldType::I16 => (i16::MIN as i128, i16::MAX as i128),
@@ -61,6 +91,9 @@ impl FieldType {
 impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
+            FieldType::Named(n) => return f.write_str(n),
+            FieldType::List(t) => return write!(f, "[{t}]"),
+            FieldType::Map(t) => return write!(f, "{{{t}}}"),
             FieldType::String => "string",
             FieldType::Bool => "bool",
             FieldType::I8 => "i8",
@@ -74,16 +107,47 @@ impl fmt::Display for FieldType {
             FieldType::F32 => "f32",
             FieldType::F64 => "f64",
             FieldType::Bytes => "bytes",
+            FieldType::Time => "time",
+            FieldType::Uuid => "uuid",
+            FieldType::Any => "any",
         };
         f.write_str(s)
     }
+}
+
+/// One of a message type's fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Field {
+    pub name: String,
+    pub ty: FieldType,
+    /// `name?: T`: a value may leave it out.
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl Field {
+    pub fn new(name: impl Into<String>, ty: FieldType) -> Field {
+        Field { name: name.into(), ty, optional: false }
+    }
+}
+
+/// `enum Color { red, green }`: one of a set of names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnumType {
+    pub name: String,
+    pub values: Vec<String>,
+    /// Its `##` documentation, and each value's, as for a message type.
+    #[serde(default)]
+    pub doc: String,
+    #[serde(default)]
+    pub value_docs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessageType {
     pub name: String,
     /// Fields in declaration order.
-    pub fields: Vec<(String, FieldType)>,
+    pub fields: Vec<Field>,
     /// The type's `##` documentation, Markdown; empty if it has none.
     #[serde(default)]
     pub doc: String,
@@ -94,12 +158,12 @@ pub struct MessageType {
 
 impl MessageType {
     /// An undocumented type.
-    pub fn new(name: impl Into<String>, fields: Vec<(String, FieldType)>) -> MessageType {
+    pub fn new(name: impl Into<String>, fields: Vec<Field>) -> MessageType {
         let field_docs = vec![String::new(); fields.len()];
         MessageType { name: name.into(), fields, doc: String::new(), field_docs }
     }
 
-    pub fn field(&self, name: &str) -> Option<FieldType> {
-        self.fields.iter().find(|(n, _)| n == name).map(|(_, t)| *t)
+    pub fn field(&self, name: &str) -> Option<&Field> {
+        self.fields.iter().find(|f| f.name == name)
     }
 }

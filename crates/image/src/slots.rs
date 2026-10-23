@@ -156,13 +156,14 @@ pub fn bind(program: &mut Program, formats: &Formats, given: &[Given]) -> Result
                     problems.push(format!("{}: {e}", slot.name));
                     vec![]
                 });
-                let missing: Vec<&str> = wanted.iter().map(String::as_str).filter(|n| !fields.iter().any(|(f, ..)| f == n)).collect();
+                let missing: Vec<&str> =
+                    wanted.iter().filter(|(n, required)| *required && !fields.iter().any(|(f, ..)| f == n)).map(|(n, _)| n.as_str()).collect();
                 for m in &missing {
                     problems.push(format!("{}.{m}: required, not provided", slot.name));
                 }
                 // Where each field came from, in the type's order.
                 let mut origins: Vec<(String, String)> = vec![];
-                for name in &wanted {
+                for (name, _) in &wanted {
                     origins.extend(fields.iter().find(|(f, ..)| f == name).map(|(f, _, o)| (f.clone(), o.clone())));
                 }
                 let pos = Pos { line: 0, col: 0 };

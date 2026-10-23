@@ -38,6 +38,57 @@ export class Unknown extends Message {
   typeName(): string { return this.type; }
 }
 
+/**
+ * The value of an optional field of a type that can't be null, such as
+ * `i32`, when it has one: the field is `Box<i32> | null`.
+ */
+export class Box<T> {
+  constructor(public value: T) {}
+}
+
+/** A UUID: 16 bytes, written `123e4567-e89b-12d3-a456-426614174000`. */
+export class Uuid {
+  constructor(public bytes: ArrayBuffer) {
+    if (bytes.byteLength != 16) abort("a UUID is 16 bytes");
+  }
+
+  /** The UUID `s` writes, or null if it isn't one. */
+  static parse(s: string): Uuid | null {
+    if (s.length != 36) return null;
+    const out = new Uint8Array(16);
+    let n = 0;
+    for (let i = 0; i < 36; i++) {
+      const c = s.charCodeAt(i);
+      if (i == 8 || i == 13 || i == 18 || i == 23) {
+        if (c != 0x2D) return null;
+        continue;
+      }
+      const d = hexDigit(c);
+      if (d < 0) return null;
+      out[n >> 1] |= <u8>(n & 1 ? d : d << 4);
+      n++;
+    }
+    return new Uuid(out.buffer);
+  }
+
+  toString(): string {
+    const b = Uint8Array.wrap(this.bytes);
+    let s = "";
+    for (let i = 0; i < 16; i++) {
+      if (i == 4 || i == 6 || i == 8 || i == 10) s += "-";
+      s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+    }
+    return s;
+  }
+}
+
+function hexDigit(c: i32): i32 {
+  if (c >= 0x30 && c <= 0x39) return c - 0x30;
+  if (c >= 0x61 && c <= 0x66) return c - 0x61 + 10;
+  if (c >= 0x41 && c <= 0x46) return c - 0x41 + 10;
+  return -1;
+}
+
 type Decoder = (r: Reader) => Message;
 
 const decoders = new Map<string, Decoder>();
@@ -82,8 +133,13 @@ export namespace bson {
 
 const BSON_DOUBLE: u8 = 0x01;
 const BSON_STRING: u8 = 0x02;
+const BSON_DOCUMENT: u8 = 0x03;
+const BSON_ARRAY: u8 = 0x04;
 const BSON_BINARY: u8 = 0x05;
 const BSON_BOOL: u8 = 0x08;
+const BSON_DATETIME: u8 = 0x09;
+const BSON_NULL: u8 = 0x0A;
+const BSON_UNDEFINED: u8 = 0x06;
 const BSON_INT32: u8 = 0x10;
 const BSON_INT64: u8 = 0x12;
 
@@ -131,6 +187,51 @@ export class Writer {
     this.raw(changetype<usize>(v), v.byteLength);
   }
 
+  /** For time fields: milliseconds since 1970, as a UTC datetime. */
+  time(name: string, v: Date): void {
+    this.key(BSON_DATETIME, name);
+    this.u64(<u64>v.getTime());
+  }
+
+  /** For uuid fields: binary of the UUID subtype. */
+  uuid(name: string, v: Uuid): void {
+    this.key(BSON_BINARY, name);
+    this.u32(16);
+    this.u8(4); // UUID subtype
+    this.raw(changetype<usize>(v.bytes), 16);
+  }
+
+  /**
+   * For `any` fields: `m`, with its type, as a document, as a payload
+   * carries it. An `Unknown` one goes as it came.
+   */
+  message(name: string, m: Message): void {
+    this.element(BSON_DOCUMENT, name, encodeMessage(m));
+  }
+
+  /** For message fields: `m`'s fields, as an embedded document. */
+  doc(name: string, m: Message): void {
+    const sub = new Writer();
+    m.encode(sub);
+    this.element(BSON_DOCUMENT, name, sub.finish());
+  }
+
+  /** For list fields: `items`, whose keys are "0", "1", ..., as an array. */
+  array(name: string, items: Writer): void {
+    this.element(BSON_ARRAY, name, items.finish());
+  }
+
+  /** For map fields: `entries`, by their keys, as a document. */
+  map(name: string, entries: Writer): void {
+    this.element(BSON_DOCUMENT, name, entries.finish());
+  }
+
+  /** An element of any BSON type, its value's bytes as BSON lays them out. */
+  element(tag: u8, name: string, value: ArrayBuffer): void {
+    this.key(tag, name);
+    this.raw(changetype<usize>(value), value.byteLength);
+  }
+
   finish(): ArrayBuffer {
     this.u8(0);
     const out = this.buf.slice(0, this.len);
@@ -175,6 +276,36 @@ export class Writer {
   }
 }
 
+/**
+ * The size of the value of an element of type `tag` at `p`, so that one of
+ * a type no message field has can be stepped over: a newer sender may add
+ * such fields. Only a type whose size can't be known aborts.
+ */
+function size(tag: u8, p: usize, end: usize, name: string): usize {
+  switch (tag) {
+    case BSON_UNDEFINED: case BSON_NULL: case 0x7F: case 0xFF: return 0; // and max key, min key
+    case BSON_BOOL: return 1;
+    case BSON_INT32: return 4;
+    case BSON_DOUBLE: case BSON_DATETIME: case 0x11: case BSON_INT64: return 8; // and timestamp
+    case 0x07: return 12; // object id
+    case 0x13: return 16; // decimal128
+    case BSON_STRING: case 0x0D: case 0x0E: return 4 + <usize>load<u32>(p); // and code, symbol
+    case BSON_BINARY: return 5 + <usize>load<u32>(p);
+    case BSON_DOCUMENT: case BSON_ARRAY: case 0x0F: return <usize>load<u32>(p); // document, array, code with scope
+    case 0x0C: return 4 + <usize>load<u32>(p) + 12; // db pointer
+    case 0x0B: { // regex: two cstrings
+      let q = p;
+      for (let n = 0; n < 2; n++) {
+        while (q < end && load<u8>(q) != 0) q++;
+        q++;
+      }
+      return q - p;
+    }
+  }
+  abort("unknown BSON element type in field " + name);
+  return 0;
+}
+
 class Field {
   constructor(
     public tag: u8,
@@ -182,9 +313,13 @@ class Field {
   ) {}
 }
 
-/** Reads fields out of one BSON document. Missing or mistyped fields abort. */
+/**
+ * Reads fields out of one BSON document. Missing or mistyped fields abort;
+ * fields no one asks for are skipped, whatever their type.
+ */
 export class Reader {
   private fields: Map<string, Field> = new Map<string, Field>();
+  private names: string[] = [];
 
   constructor(private buf: ArrayBuffer) {
     const base = changetype<usize>(buf);
@@ -199,12 +334,8 @@ export class Reader {
       const name = String.UTF8.decodeUnsafe(p, q - p);
       p = q + 1;
       this.fields.set(name, new Field(tag, p));
-      if (tag == BSON_DOUBLE || tag == BSON_INT64) p += 8;
-      else if (tag == BSON_INT32) p += 4;
-      else if (tag == BSON_BOOL) p += 1;
-      else if (tag == BSON_STRING) p += 4 + <usize>load<u32>(p);
-      else if (tag == BSON_BINARY) p += 5 + <usize>load<u32>(p);
-      else abort("unsupported BSON element type in field " + name);
+      this.names.push(name);
+      p += size(tag, p, end, name);
     }
   }
 
@@ -240,6 +371,58 @@ export class Reader {
     const len = <i32>load<u32>(f.offset);
     const out = new ArrayBuffer(len);
     memory.copy(changetype<usize>(out), f.offset + 5, <usize>len);
+    return out;
+  }
+
+  time(name: string): Date {
+    return new Date(load<i64>(this.field(name, BSON_DATETIME).offset));
+  }
+
+  uuid(name: string): Uuid {
+    const f = this.field(name, BSON_BINARY);
+    if (load<u32>(f.offset) != 16 || load<u8>(f.offset + 4) != 4) abort("field " + name + " is not a UUID");
+    const out = new ArrayBuffer(16);
+    memory.copy(changetype<usize>(out), f.offset + 5, 16);
+    return new Uuid(out);
+  }
+
+  /** An `any` field's message: an `Unknown` one if its type isn't registered. */
+  message(name: string): Message {
+    return decodeMessage(this.embedded(this.field(name, BSON_DOCUMENT)));
+  }
+
+  /** A message field's fields, for its type's `decode`. */
+  doc(name: string): Reader {
+    return new Reader(this.embedded(this.field(name, BSON_DOCUMENT)));
+  }
+
+  /** A list field's items, each under its index: "0", "1", .... */
+  array(name: string): Reader {
+    return new Reader(this.embedded(this.field(name, BSON_ARRAY)));
+  }
+
+  /** A map field's entries, each under its key. */
+  map(name: string): Reader {
+    return this.doc(name);
+  }
+
+  /** Whether an optional field is there: present, and not null. */
+  has(name: string): bool {
+    if (!this.fields.has(name)) return false;
+    const tag = this.fields.get(name).tag;
+    return tag != BSON_NULL && tag != BSON_UNDEFINED;
+  }
+
+  /** Every field's name, in order. */
+  keys(): string[] {
+    return this.names.slice();
+  }
+
+  /** A copy of an embedded document. */
+  private embedded(f: Field): ArrayBuffer {
+    const len = <i32>load<u32>(f.offset);
+    const out = new ArrayBuffer(len);
+    memory.copy(changetype<usize>(out), f.offset, <usize>len);
     return out;
   }
 

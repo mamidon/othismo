@@ -445,7 +445,7 @@ library supports. A payload is one BSON document whose first key, <code>$type</c
 names its message type; the remaining keys are its fields. <code>$type</code> is the
 wire&#39;s: images, value files and <code>--set</code> name the type before the braces,
 <code>Greeting { ... }</code>, and the format writes it. Its schemas declare message
-types:</p>
+types, and enums for their fields:</p>
 <pre><code class="language-text">export schemas application/bson {
   ## Configures a Greeter; sent once at startup by the image.
   message Greeting {
@@ -456,44 +456,113 @@ types:</p>
   }
 }
 </code></pre>
+<p>Fields may be other messages, lists, maps from strings, enums and <code>any</code>
+message, and may be optional:</p>
+<pre><code class="language-text">schemas application/bson {
+  message Party {
+    host: Friend
+    guests: [Friend]
+    ## Optional: a party may leave it out.
+    style?: Style
+    seats: {u8}
+  }
+
+  message Friend { name: string, since: time, id: uuid }
+
+  ## How to greet.
+  enum Style { plain, shouted }
+}
+</code></pre>
 <div class="table"><table>
 <thead>
 <tr>
 <th>Field type</th>
 <th>BSON</th>
+<th>AssemblyScript</th>
 </tr>
 </thead>
 <tbody><tr>
 <td><code>string</code></td>
 <td>string</td>
+<td><code>string</code></td>
 </tr>
 <tr>
 <td><code>bool</code></td>
 <td>boolean</td>
+<td><code>bool</code></td>
 </tr>
 <tr>
 <td><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>u8</code>, <code>u16</code></td>
 <td>int32</td>
+<td>the same</td>
 </tr>
 <tr>
 <td><code>i64</code>, <code>u32</code>, <code>u64</code></td>
 <td>int64</td>
+<td>the same</td>
 </tr>
 <tr>
 <td><code>f32</code>, <code>f64</code></td>
 <td>double</td>
+<td>the same</td>
 </tr>
 <tr>
 <td><code>bytes</code></td>
 <td>binary (generic subtype)</td>
+<td><code>ArrayBuffer</code></td>
+</tr>
+<tr>
+<td><code>time</code></td>
+<td>UTC datetime, to the millisecond</td>
+<td><code>Date</code></td>
+</tr>
+<tr>
+<td><code>uuid</code></td>
+<td>binary (UUID subtype)</td>
+<td><code>Uuid</code></td>
+</tr>
+<tr>
+<td>a message type, <code>Friend</code></td>
+<td>document, without <code>$type</code></td>
+<td><code>Friend</code></td>
+</tr>
+<tr>
+<td>an enum, <code>Style</code></td>
+<td>string, the value&#39;s name</td>
+<td><code>Style</code></td>
+</tr>
+<tr>
+<td><code>any</code></td>
+<td>document, with its <code>$type</code> first</td>
+<td><code>Message</code></td>
+</tr>
+<tr>
+<td><code>[T]</code>, a list</td>
+<td>array</td>
+<td><code>Array&lt;T&gt;</code></td>
+</tr>
+<tr>
+<td><code>{T}</code>, a map from strings</td>
+<td>document</td>
+<td><code>Map&lt;string, T&gt;</code></td>
 </tr>
 </tbody></table></div>
-<p>Fields are flat, and there are no nested messages, arrays or optional fields
-yet. Adding them changes only this format.</p>
-<p>A message type is its name and its exact fields. Two modules in one image
-may both declare <code>Greeting</code> if they agree on its fields, and can&#39;t be used
-together if they don&#39;t; that is the format&#39;s rule, checked when the image is
-built.</p>
+<p>A field written <code>name?: T</code> is optional: a value may leave it out, and so
+does the wire, and a reader takes a null as left out too. In AssemblyScript
+it may be null, so one whose type can&#39;t be, such as <code>i32</code> or an enum, is a
+<code>Box&lt;i32&gt; | null</code>. A message field&#39;s type is known, so it carries no
+<code>$type</code>; an <code>any</code> field holds a message of whatever type, which says its own.
+A type may be named before it is declared, and importing a type brings the
+types its fields name.</p>
+<p>Literals write these as you would expect: <code>[ ... ]</code> for a list, <code>{ key: value }</code> for a map, quoting keys that aren&#39;t names, a string for an enum&#39;s
+value, a time in RFC 3339, <code>&quot;2026-10-23T12:00:00Z&quot;</code>, or as milliseconds
+since 1970, and a uuid as people write one. A message in an <code>any</code> field names
+its type, <code>extra: Note { text: &quot;hi&quot; }</code>.</p>
+<p>A message type is its name and its exact fields, and an enum its name and
+values. Two modules in one image may both declare <code>Greeting</code> if they agree
+on it, and can&#39;t be used together if they don&#39;t; that is the format&#39;s rule,
+checked when the image is built. An enum is not a payload, so headers can&#39;t
+name one.</p>
 <h3 id="where-schemas-live">Where schemas live</h3>
 <p>A module&#39;s schemas are in its header, in a <code>schemas &lt;content type&gt; { ... }</code>
 block, one per content type. The block&#39;s body is in the format&#39;s own
@@ -607,7 +676,7 @@ them:</p>
 </tr>
 <tr>
 <td><code>&quot;othismo/bson&quot;</code></td>
-<td><code>Message</code>, <code>Writer</code>, <code>Reader</code>, <code>registerMessage</code>, <code>bson.payload(msg)</code> and <code>bson.decode(payload)</code></td>
+<td><code>Message</code>, <code>Writer</code>, <code>Reader</code>, <code>registerMessage</code>, <code>bson.payload(msg)</code> and <code>bson.decode(payload)</code>, and <code>Box</code> and <code>Uuid</code> for fields</td>
 <td>the library</td>
 </tr>
 <tr>
@@ -648,7 +717,10 @@ fields, encoders and decoders, generated by its format, for the types the
 file declares and those its objects take or answer. Every format&#39;s classes
 have <code>static fromPayload(p): T | null</code> and <code>toPayload()</code>, which the server
 bases and clients use. For BSON, <code>bson.decode(payload)</code> gives a <code>Message</code>,
-or an <code>Unknown</code> message for a type the module has no class for.</p>
+or an <code>Unknown</code> message for a type the module has no class for, which is
+passed on unchanged, in an <code>any</code> field too. Each enum is an AssemblyScript
+enum, with <code>nameOf&lt;Enum&gt;(v)</code> for a value&#39;s name. A reader skips fields it
+doesn&#39;t ask for, whatever their BSON type.</p>
 <p>So a module that uses another gets, from that module&#39;s <code>.wasm</code>, the paths
 and verbs it can call, and the messages each one takes, as methods and
 classes its compiler checks, without reading anyone&#39;s guide to find out

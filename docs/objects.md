@@ -296,7 +296,7 @@ from that header.
 What a module sends and receives in its payloads is described by its
 **schemas**, in a `schemas` block of its header for the payload's content
 type. The block's body is in that format's own language; Othismo reads only
-as far as its closing brace. For BSON it declares message types:
+as far as its closing brace. For BSON it declares message types, and enums:
 
 ```text
 ## Greets every name typed on the console…

@@ -49,8 +49,9 @@ pub trait Format: Send + Sync {
     /// Checks a literal of type `ty` that may leave fields out, such as a
     /// slot's default.
     fn check(&self, schemas: &Schemas, ty: &str, value: &Value) -> Result<(), String>;
-    /// Every field a value of type `ty` gives, in order.
-    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<String>, String>;
+    /// Every field a value of type `ty` can give, in order, and whether it
+    /// must.
+    fn fields(&self, schemas: &Schemas, ty: &str) -> Result<Vec<(String, bool)>, String>;
     /// Raw text, as `--set` gives it, as field `field` of a value of type `ty`.
     fn literal(&self, schemas: &Schemas, ty: &str, field: &str, raw: &str) -> Result<Value, String>;
     /// An encoded payload's fields, each as JSON-ish text, for `--check`.

@@ -184,6 +184,9 @@ pub enum Value {
     Object(Vec<(Ident, Value)>),
     /// `[ value, ... ]`
     List(Vec<Value>),
+    /// `Name { ... }`: a value that names its type, as a format may need
+    /// to know, such as BSON's for a field that holds any message.
+    Typed(Ident, Box<Value>),
 }
 
 impl std::fmt::Display for Value {
@@ -201,6 +204,7 @@ impl std::fmt::Display for Value {
                 let items: Vec<String> = items.iter().map(|v| v.to_string()).collect();
                 write!(f, "[{}]", items.join(", "))
             }
+            Value::Typed(ty, v) => write!(f, "{} {v}", ty.name),
         }
     }
 }
@@ -228,6 +232,9 @@ pub enum Tok {
     Star,
     /// `=`, before a slot's default.
     Eq,
+    /// `?`, which a format's schemas may use: BSON marks optional fields
+    /// with it.
+    Question,
     /// A content type: `text/plain`, `text/*`, `*/*`, `text/html;charset=utf-8`.
     Type(String),
     /// A `##` comment, which documents what follows. Only headers keep them.
@@ -255,6 +262,7 @@ impl std::fmt::Display for Tok {
             Tok::Arrow => write!(f, "`->`"),
             Tok::Star => write!(f, "`*`"),
             Tok::Eq => write!(f, "`=`"),
+            Tok::Question => write!(f, "`?`"),
             Tok::Type(s) => write!(f, "content type `{s}`"),
             Tok::Doc(_) => write!(f, "a `##` comment"),
             Tok::Raw(_) => write!(f, "a schemas block's body"),
@@ -330,8 +338,8 @@ pub fn lex(src: &str, docs: bool) -> Result<Vec<(Tok, Pos)>> {
         } else if c == '[' || c == ']' {
             toks.push((if c == '[' { Tok::LBracket } else { Tok::RBracket }, pos));
             bump!();
-        } else if c == '=' {
-            toks.push((Tok::Eq, pos));
+        } else if c == '=' || c == '?' {
+            toks.push((if c == '=' { Tok::Eq } else { Tok::Question }, pos));
             bump!();
         } else if c == '{' && opens_schemas(&toks) {
             toks.push((Tok::LBrace, pos));
@@ -750,8 +758,8 @@ impl Parser {
         })
     }
 
-    /// A value: a string, a number, `true`, `false`, `{ name: value, ... }`
-    /// or `[ value, ... ]`.
+    /// A value: a string, a number, `true`, `false`, `{ name: value, ... }`,
+    /// `[ value, ... ]`, or `Name { name: value, ... }`.
     pub fn value(&mut self) -> Result<Value> {
         Ok(match self.next() {
             (Tok::Str(s), _) => Value::Str(s),
@@ -759,6 +767,7 @@ impl Parser {
             (Tok::Float(x), _) => Value::Float(x),
             (Tok::Ident(s), _) if s == "true" => Value::Bool(true),
             (Tok::Ident(s), _) if s == "false" => Value::Bool(false),
+            (Tok::Ident(name), pos) if *self.peek() == Tok::LBrace => Value::Typed(Ident { name, pos }, Box::new(self.value()?)),
             (Tok::LBrace, _) => {
                 let mut fields: Vec<(Ident, Value)> = vec![];
                 while *self.peek() != Tok::RBrace {

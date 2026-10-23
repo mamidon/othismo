@@ -208,7 +208,8 @@ A payload is written one of these ways:
   name them (see [Objects](objects.md#messages)), and the format of the
   block that declares it encodes the literal. The literal's syntax is one
   for every format: strings, numbers, `true` and `false`, and nested
-  `{ name: value }` and `[ ... ]`. The format checks it against the type
+  `{ name: value }`, `[ ... ]` and `Name { ... }`, a value that names its
+  type, where a format needs to know it. The format checks it against the type
   when the image is built, and the server must take that type there.
   Writing the content type instead, `application/bson { ... }`, is an
   error.

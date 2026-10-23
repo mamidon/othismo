@@ -12,7 +12,7 @@ use std::path::Path;
 /// and declares `Info`.
 fn program(src: &str) -> Program {
     let a = "export object A { serves { /info write Info  /x write */*  /host write text/plain } }
-             export schemas application/bson { message Info { kind: string, size: i64, mime: string } }";
+             export schemas application/bson { message Info { kind: string, size: i64, mime: string, tags?: [string] } }";
     let mut loader = othismo::iface::Loader::new(othismo::formats());
     loader.files.insert("/slots/A.oth".into(), a.into());
     let header = loader.header(Path::new("/slots/A.oth")).unwrap();
@@ -72,6 +72,19 @@ fn later_values_win_field_by_field() {
     assert_eq!(origins(0), ["=--set"]);
     assert_eq!(origins(1), ["kind=default", "size=--set", "mime=--set"]);
     assert_eq!(p.startup[2].body.as_ref().unwrap().text().unwrap(), "localhost", "a default");
+}
+
+#[test]
+fn optional_fields_need_not_be_given() {
+    let mut p = program(IMAGE);
+    bind(&mut p, &othismo::formats(), &[text("--set", "info", "size", "1"), text("--set", "info", "mime", "")]).unwrap();
+    assert_eq!(fields(p.startup[0].body.as_ref().unwrap()), bson::doc! { "kind": "file", "size": 1i64, "mime": "" });
+
+    let mut p = program(IMAGE);
+    let values = [text("--set", "info", "size", "1"), text("--set", "info", "mime", ""), text("--set", "info", "tags", r#"["a", "b"]"#)];
+    bind(&mut p, &othismo::formats(), &values).unwrap();
+    assert_eq!(fields(p.startup[0].body.as_ref().unwrap()), bson::doc! { "kind": "file", "size": 1i64, "mime": "", "tags": ["a", "b"] });
+    assert_eq!(p.slots[1].origins.last().unwrap(), &("tags".to_string(), "--set".to_string()));
 }
 
 #[test]

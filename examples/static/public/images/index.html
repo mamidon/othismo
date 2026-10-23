@@ -266,7 +266,8 @@ type is one the file declares in a schemas block or imports, as headers
 name them (see <a href="objects.md#messages">Objects</a>), and the format of the
 block that declares it encodes the literal. The literal&#39;s syntax is one
 for every format: strings, numbers, <code>true</code> and <code>false</code>, and nested
-<code>{ name: value }</code> and <code>[ ... ]</code>. The format checks it against the type
+<code>{ name: value }</code>, <code>[ ... ]</code> and <code>Name { ... }</code>, a value that names its
+type, where a format needs to know it. The format checks it against the type
 when the image is built, and the server must take that type there.
 Writing the content type instead, <code>application/bson { ... }</code>, is an
 error.</li>

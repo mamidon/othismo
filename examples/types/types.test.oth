@@ -1,0 +1,32 @@
+# Tests the BSON format's field types: the store starts with a record the
+# image writes, and TypesTests reads it back, and round-trips its own. Run
+# them with `othismo test types.test.oth`.
+
+import { Record, Store } from "./scripts/Store.oth"
+import { TypesTests } from "./scripts/TypesTests.oth"
+
+instance store : Store
+
+instance tests : TypesTests {
+  mount /store store
+}
+
+mount /store store
+write /store/record Record {
+  name: "start",
+  count: 7,
+  born: "2026-10-23T12:34:56.789Z",
+  id: "123e4567-e89b-12d3-a456-426614174000",
+  owner: { name: "Ada", age: 36 },
+  tags: ["a", "b"],
+  grid: [[1, 2], [], [-3]],
+  team: [{ name: "Bo", age: 1 }],
+  env: { HOME: "/home", "Content-Type": "text/plain" },
+  teams: { red: [{ name: "Cy", age: 2 }], blue: [] },
+  nick: "st",
+  rank: 2,
+  color: "green",
+  palette: ["blue", "red"],
+  extra: Note { text: "hi" },
+  extras: [Person { name: "Zed", age: 9 }],
+}
