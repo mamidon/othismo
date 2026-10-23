@@ -6,9 +6,10 @@
 //! where the operator looks from. Opening a row lists what is served there,
 //! asked of whoever serves it by the operator ([`Session::look_inside`]).
 
+use crate::complete::{self, Completion};
 use crate::session::{Event, Outcome, Session};
 use crate::show;
-use crate::world::{Class, Hop, Viewpoint, World};
+use crate::world::{Class, Hop, Source, Viewpoint, World};
 use anyhow::Result;
 use protocol::ns::{Resolved, Status, Verb};
 use protocol::payload::Stat;
@@ -17,7 +18,7 @@ use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, Key
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row as TableRow, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row as TableRow, Table, TableState, Wrap};
 use runtime::operator::How;
 use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
@@ -139,6 +140,11 @@ pub struct App {
     cursor: usize,
     history: Vec<String>,
     recalled: Option<usize>,
+    /// What can come next on the command line, and which is chosen.
+    pub completion: Completion,
+    chosen: usize,
+    /// The operator closed it; typing opens it again.
+    hidden: bool,
     refreshed: Instant,
     quit: bool,
 }
@@ -159,6 +165,9 @@ impl App {
             cursor: 0,
             history: vec![],
             recalled: None,
+            completion: Completion::default(),
+            chosen: 0,
+            hidden: false,
             refreshed: Instant::now(),
             quit: false,
         };
@@ -194,6 +203,7 @@ impl App {
                         let listed = if answer.status == Status::Ok { Listing::Got(stats) } else { Listing::Failed(answer.status) };
                         self.listings.insert(key, listed);
                         self.rebuild();
+                        self.recomplete();
                     }
                     return;
                 }
@@ -213,7 +223,10 @@ impl App {
                 }
             }
             Event::Printed(line) => self.say(Line::from(vec![styled("  console │ ", colour::HOST), Span::raw(line)])),
-            Event::Refreshed => self.rebuild(),
+            Event::Refreshed => {
+                self.rebuild();
+                self.recomplete();
+            }
             Event::Stopped(why) => {
                 let why = why.map(|w| format!(": {w}")).unwrap_or_default();
                 self.say(styled(format!("the image stopped{why}"), colour::ERR));
@@ -262,7 +275,11 @@ impl App {
             KeyCode::Enter => self.look_from_selected(),
             KeyCode::Backspace => self.up(),
             KeyCode::Esc => self.go(None, None),
-            KeyCode::Char(':') => self.focus = Focus::Command,
+            KeyCode::Char(':') => {
+                self.focus = Focus::Command;
+                self.hidden = false;
+                self.recomplete();
+            }
             KeyCode::Char('r') => {
                 self.session.refresh();
                 self.listings.clear();
@@ -275,14 +292,22 @@ impl App {
 
     fn command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let choosing = self.popup_open() && !self.completion.items.is_empty();
+        let n = self.completion.items.len().max(1);
         match key.code {
+            KeyCode::Esc if self.popup_open() => self.hidden = true,
             KeyCode::Esc => self.focus = Focus::Tree,
+            KeyCode::Tab if self.hidden => self.hidden = false,
+            KeyCode::Tab => self.accept(),
             KeyCode::Enter => {
                 let line = std::mem::take(&mut self.input);
                 self.cursor = 0;
                 self.recalled = None;
+                self.hidden = false;
                 self.submit(&line);
             }
+            KeyCode::Down if choosing => self.chosen = (self.chosen + 1) % n,
+            KeyCode::Up if choosing => self.chosen = (self.chosen + n - 1) % n,
             KeyCode::Up => self.recall(-1),
             KeyCode::Down => self.recall(1),
             KeyCode::Left => self.cursor = self.input[..self.cursor].chars().next_back().map_or(0, |c| self.cursor - c.len_utf8()),
@@ -301,9 +326,49 @@ impl App {
             KeyCode::Char(c) if !ctrl => {
                 self.input.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
+                self.hidden = false;
             }
             _ => {}
         }
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) || !choosing {
+            self.recomplete();
+        }
+    }
+
+    fn popup_open(&self) -> bool {
+        self.focus == Focus::Command && !self.hidden && (!self.completion.items.is_empty() || self.completion.hint.is_some())
+    }
+
+    /// Works out what can come next where the cursor is.
+    fn recomplete(&mut self) {
+        let listings = &self.listings;
+        let listed = |inst: usize, path: &str| match listings.get(&(inst, path.to_string())) {
+            Some(Listing::Got(stats)) => Some(stats.clone()),
+            Some(Listing::Failed(_)) => Some(vec![]),
+            _ => None,
+        };
+        let c = complete::complete(&self.session, &listed, &self.input[..self.cursor]);
+        if c.items.len() != self.completion.items.len() || c.from != self.completion.from {
+            self.chosen = 0;
+        }
+        if let Some((inst, path)) = c.wants.clone() {
+            self.list(inst, &path);
+        }
+        self.completion = c;
+        self.chosen = self.chosen.min(self.completion.items.len().saturating_sub(1));
+    }
+
+    /// Puts the chosen completion in, and works out what can come after it.
+    fn accept(&mut self) {
+        let Some(item) = self.completion.items.get(self.chosen).cloned() else { return };
+        if item.placeholder {
+            return;
+        }
+        let from = self.completion.from.min(self.cursor);
+        self.input.replace_range(from..self.cursor, &item.insert);
+        self.cursor = from + item.caret.unwrap_or(item.insert.len());
+        self.chosen = 0;
+        self.recomplete();
     }
 
     /// Runs a typed line, as the command line's Enter does.
@@ -331,6 +396,7 @@ impl App {
     fn set_input(&mut self, s: String) {
         self.cursor = s.len();
         self.input = s;
+        self.recomplete();
     }
 
     fn recall(&mut self, by: isize) {
@@ -651,7 +717,6 @@ impl App {
         let w = &self.session.world;
         let Ok(r) = w.resolve(here, path) else { return };
         let open = self.places.get(&Some(here)).map(|p| &p.open);
-        let inst = w.instance(r.inst);
         // What a listing says is there, then what is known without one: what
         // it has exposed, which its server never sees requests for, and what
         // its header says it serves.
@@ -659,32 +724,11 @@ impl App {
             Some(Listing::Got(stats)) => stats.iter().map(|s| (s.clone(), Source::Listed)).collect(),
             _ => vec![],
         };
-        let mut add = |stat: Stat, source: Source| match entries.iter_mut().find(|(s, _)| s.name == stat.name) {
-            Some((s, _)) => s.dir |= stat.dir,
-            None => entries.push((stat, source)),
-        };
-        let dir = r.path.trim_end_matches('/');
-        for l in &inst.exposed {
-            if let Some((parent, name)) = l.at.rsplit_once('/')
-                && parent == dir
-            {
-                add(Stat::dir(name), Source::Exposed);
-            }
-        }
-        let mut patterns: Vec<(String, String)> = vec![];
-        for e in &inst.interface.serves {
-            let Some(rest) = e.path.below(&r.path) else { continue };
-            let mut segs = rest.split('/').filter(|s| !s.is_empty());
-            let Some(first) = segs.next() else { continue };
-            let deeper = segs.next().is_some() || rest.ends_with('/');
-            match first {
-                "**" => {}
-                _ if first.starts_with('{') => {
-                    if !patterns.iter().any(|(p, _)| p == first) {
-                        patterns.push((first.to_string(), e.doc.lines().next().unwrap_or_default().to_string()));
-                    }
-                }
-                _ => add(if deeper { Stat::dir(first) } else { Stat::file(first, 0, "") }, Source::Declared),
+        let (known, patterns) = w.known_under(r.inst, &r.path);
+        for k in known {
+            match entries.iter_mut().find(|(s, _)| s.name == k.name) {
+                Some((s, _)) => s.dir |= k.dir,
+                None => entries.push((if k.dir { Stat::dir(&k.name) } else { Stat::file(&k.name, 0, "") }, k.from)),
             }
         }
         let status = match self.listings.get(&(r.inst, r.path.clone())) {
@@ -739,10 +783,10 @@ impl App {
                 self.walk_served(here, &p, &more, rows);
             }
         }
-        for (k, (name, doc)) in patterns.iter().enumerate() {
+        for (k, pattern) in patterns.iter().enumerate() {
             let pre = branch(offset + entries.len() + k);
-            let mut row = note(pre, &doc.clone());
-            row.cells[0].spans.push(Span::styled(format!("  {name}"), Style::new().fg(colour::DIM).add_modifier(Modifier::ITALIC)));
+            let mut row = note(pre, pattern.doc.lines().next().unwrap_or_default());
+            row.cells[0].spans.push(Span::styled(format!("  {}", pattern.segment), Style::new().fg(colour::DIM).add_modifier(Modifier::ITALIC)));
             rows.push(row);
         }
     }
@@ -774,6 +818,71 @@ impl App {
         self.draw_log(f, log);
         self.draw_command(f, command);
         f.render_widget(Paragraph::new(self.status_line()).style(Style::new().bg(colour::BAR)), status);
+        if self.popup_open() {
+            self.draw_popup(f, command);
+        }
+    }
+
+    /// What can come next, above the command line: the choices, and what
+    /// the chosen one is.
+    fn draw_popup(&self, f: &mut Frame, command: Rect) {
+        let c = &self.completion;
+        let screen = f.area();
+        let width = screen.width.saturating_sub(4).min(110);
+        let x = command.x + 2;
+        if c.items.is_empty() {
+            let text = c.hint.clone().unwrap_or_default();
+            let height = 3;
+            let area = Rect { x, y: command.y.saturating_sub(height), width, height };
+            f.render_widget(Clear, area);
+            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }).block(Block::bordered().border_style(Style::new().fg(colour::DIM))), area);
+            return;
+        }
+        let shown = c.items.len().min(10);
+        // Room for the chosen one's documentation, wrapped to half the width.
+        let doc_lines = c.items.get(self.chosen).map_or(0, |it| {
+            let per = (width as usize / 2).saturating_sub(2).max(1);
+            let wrapped: usize = it.doc.lines().map(|l| l.chars().count().div_ceil(per).max(1)).sum();
+            1 + (wrapped > 0) as usize + wrapped + (!it.source.is_empty()) as usize
+        });
+        let height = (shown.max(doc_lines).min(14) as u16 + 2).min(command.y);
+        let area = Rect { x, y: command.y.saturating_sub(height), width, height };
+        f.render_widget(Clear, area);
+        let block = Block::bordered().border_style(Style::new().fg(colour::DIM)).title_bottom(dim(" tab complete · ↑↓ choose · ⏎ send · esc close "));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let [list, doc] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).spacing(1).areas(inner);
+        let first = self.chosen.saturating_sub(shown - 1);
+        let lines: Vec<Line> = c.items[first..first + shown]
+            .iter()
+            .enumerate()
+            .map(|(n, it)| {
+                let mut label = Style::new().fg(if it.usable { colour::PATH } else { colour::DIM });
+                if it.placeholder {
+                    label = label.add_modifier(Modifier::ITALIC);
+                }
+                let room = (list.width as usize).saturating_sub(it.label.chars().count() + 2);
+                let detail: String = it.detail.chars().take(room).collect();
+                let pad = room.saturating_sub(detail.chars().count());
+                let mut line = Line::from(vec![Span::styled(it.label.clone(), label), Span::raw(" ".repeat(pad + 1)), dim(detail)]);
+                if first + n == self.chosen {
+                    line = line.style(Style::new().bg(colour::SELECTED));
+                }
+                line
+            })
+            .collect();
+        f.render_widget(Paragraph::new(lines), list);
+        if let Some(it) = c.items.get(self.chosen) {
+            let mut text = vec![Line::from(styled(if it.signature.is_empty() { it.label.clone() } else { it.signature.clone() }, colour::PATH))];
+            if !it.doc.is_empty() {
+                text.push(Line::default());
+                text.extend(it.doc.lines().map(|l| Line::from(l.to_string())));
+            }
+            if !it.source.is_empty() {
+                text.push(Line::from(dim(format!("from {}", it.source))));
+            }
+            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), doc);
+        }
     }
 
     fn route_line(&self) -> Line<'static> {
@@ -823,7 +932,7 @@ impl App {
         let left = format!(" {} · pid {} · {open} open request{}    ", self.title, std::process::id(), if open == 1 { "" } else { "s" });
         let keys = match self.focus {
             Focus::Tree => "↑↓ move  →← open/close  ⏎ look from  ⌫ up  esc roots  : command  r refresh  q quit",
-            Focus::Command => "⏎ send  ↑↓ history  esc back to the table  ^C cancel the latest stream",
+            Focus::Command => "tab complete  ⏎ send  ↑↓ choose or history  esc close, then back to the table  ^C cancel the latest stream",
         };
         Line::from(vec![Span::raw(left), dim(keys)])
     }
@@ -998,17 +1107,6 @@ fn note(branch: String, text: &str) -> Row {
     cells.extend((0..7).map(|_| Line::default()));
     cells.push(Line::from(dim(text.to_string())));
     Row { path: None, root: None, target: None, stat: None, mount: None, can_open: false, cells }
-}
-
-/// Where an entry of a served tree is known from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Source {
-    /// A `list` of its directory.
-    Listed,
-    /// An exposure, which the server never hears about.
-    Exposed,
-    /// The server's header.
-    Declared,
 }
 
 fn access(read_only: bool) -> Line<'static> {

@@ -36,6 +36,16 @@ fn type_line(app: &mut App, line: &str) {
     press(app, KeyCode::Enter);
 }
 
+/// Back to the table: Esc closes the choices first, if they're open.
+fn leave_command_line(app: &mut App) {
+    for _ in 0..2 {
+        if app.focus == Focus::Command {
+            press(app, KeyCode::Esc);
+        }
+    }
+    assert_eq!(app.focus, Focus::Tree);
+}
+
 /// Handles the image's events until `done` holds, or ten seconds pass.
 fn until(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -110,7 +120,7 @@ fn it_steps_into_views_and_opens_served_trees() {
 fn the_runtimes_objects_have_no_view_to_look_from() {
     let mut app = app("static/static.test.oth");
     type_line(&mut app, ":look web.pages");
-    press(&mut app, KeyCode::Esc);
+    leave_command_line(&mut app);
     assert!(app.select_path("/files"));
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.session.here, app.session.world.find("web.pages"));
@@ -125,9 +135,8 @@ fn requests_are_typed_on_the_command_line() {
     type_line(&mut app, "read /http/hosts/files.localhost");
     until(&mut app, "the answer", |a| a.log_text().iter().any(|l| l.contains("/www/static")));
     assert!(app.log_text().iter().any(|l| l.contains("web # read /http/hosts/files.localhost")), "{:#?}", app.log_text());
-    // Esc goes back to the table, and keys move in it again.
-    press(&mut app, KeyCode::Esc);
-    assert_eq!(app.focus, Focus::Tree);
+    // Esc goes back to the table, once the choices are closed.
+    leave_command_line(&mut app);
     assert_eq!(app.session.here, Some(Viewpoint::Instance(app.session.world.find("web").unwrap().instance().unwrap())));
 }
 

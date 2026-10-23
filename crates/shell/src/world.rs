@@ -9,7 +9,7 @@
 //! from a root.
 
 use image::program::Kind;
-use protocol::ns::{Namespace, Resolved, Status};
+use protocol::ns::{Namespace, Resolved, Status, Verb};
 use runtime::operator::{How, InstanceInfo, Link, Snapshot};
 use std::collections::VecDeque;
 
@@ -62,6 +62,33 @@ pub struct Hop {
     pub at: Viewpoint,
     pub via: Option<String>,
     pub read_only: bool,
+}
+
+/// Something served under a path, known without listing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Known {
+    pub name: String,
+    pub dir: bool,
+    pub from: Source,
+}
+
+/// Where an entry of a served tree is known from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A `list` of its directory.
+    Listed,
+    /// An exposure, which the server never hears requests for.
+    Exposed,
+    /// The server's header.
+    Declared,
+}
+
+/// A segment its header serves under a path for any name, `{name}`, and
+/// the entry's documentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pattern {
+    pub segment: String,
+    pub doc: String,
 }
 
 pub struct World {
@@ -231,5 +258,84 @@ impl World {
     pub fn resolve(&self, at: Viewpoint, path: &str) -> Result<Resolved, Status> {
         let view = at.instance().unwrap_or(self.snapshot.instances.len());
         self.ns.resolve(view, path)
+    }
+
+    /// Where `verb path` made from `at` would go, or how the runtime would
+    /// refuse it before any server saw it: as it checks every request, an
+    /// object's against its needs, and everyone's against the server's
+    /// interface. A server may still refuse what this lets through.
+    pub fn check(&self, at: Viewpoint, verb: Verb, path: &str) -> Result<Resolved, Status> {
+        let r = self.resolve(at, path)?;
+        if r.read_only && !verb.is_safe() {
+            return Err(Status::ReadOnly);
+        }
+        let operator = self.is_operator(at);
+        if let (Viewpoint::Instance(i), false) = (at, operator) {
+            let (mount, rest) = self.ns.mount_of(i, path).ok_or(Status::NotFound)?;
+            let need = self.instance(i).interface.need(&mount).ok_or(Status::NotFound)?;
+            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
+        }
+        let entry = self.instance(r.inst).interface.serving(&r.path).ok_or(Status::NotFound)?;
+        if !operator && entry.takes_verb(verb, false) == Err(Status::Forbidden) {
+            return Err(Status::Forbidden);
+        }
+        entry.takes_verb(verb, operator)?;
+        Ok(r)
+    }
+
+    /// The segments directly under `dir` in `at`'s view that lead to mount
+    /// points, each with whether it is one itself.
+    pub fn mounts_under(&self, at: Viewpoint, dir: &str) -> Vec<(String, bool)> {
+        let dir: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
+        let mut out: Vec<(String, bool)> = vec![];
+        for l in self.view(at) {
+            let segs: Vec<&str> = l.at.split('/').filter(|s| !s.is_empty()).collect();
+            if segs.len() > dir.len() && segs[..dir.len()] == dir[..] {
+                let (name, mount) = (segs[dir.len()].to_string(), segs.len() == dir.len() + 1);
+                match out.iter_mut().find(|(n, _)| *n == name) {
+                    Some((_, m)) => *m |= mount,
+                    None => out.push((name, mount)),
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// What instance `inst` serves directly under `path` that is known
+    /// without asking it: what it has exposed there, and what its header
+    /// says it serves, the patterns apart.
+    pub fn known_under(&self, inst: usize, path: &str) -> (Vec<Known>, Vec<Pattern>) {
+        let i = self.instance(inst);
+        let mut known: Vec<Known> = vec![];
+        let mut add = |name: &str, dir: bool, from: Source| match known.iter_mut().find(|k| k.name == name) {
+            Some(k) => k.dir |= dir,
+            None => known.push(Known { name: name.to_string(), dir, from }),
+        };
+        let dir = path.trim_end_matches('/');
+        for l in &i.exposed {
+            if let Some((parent, name)) = l.at.rsplit_once('/')
+                && parent == dir
+            {
+                add(name, true, Source::Exposed);
+            }
+        }
+        let mut patterns: Vec<Pattern> = vec![];
+        for e in &i.interface.serves {
+            let Some(rest) = e.path.below(path) else { continue };
+            let mut segs = rest.split('/').filter(|s| !s.is_empty());
+            let Some(first) = segs.next() else { continue };
+            let deeper = segs.next().is_some() || rest.ends_with('/');
+            match first {
+                "**" => {}
+                _ if first.starts_with('{') => {
+                    if !patterns.iter().any(|p| p.segment == first) {
+                        patterns.push(Pattern { segment: first.to_string(), doc: e.doc.clone() });
+                    }
+                }
+                _ => add(first, deeper, Source::Declared),
+            }
+        }
+        (known, patterns)
     }
 }

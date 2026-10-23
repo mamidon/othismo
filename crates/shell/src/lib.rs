@@ -11,6 +11,7 @@
 //! of what it holds; the route back to the root is always shown.
 
 pub mod command;
+pub mod complete;
 pub mod repl;
 pub mod session;
 pub mod show;
