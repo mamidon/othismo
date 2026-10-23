@@ -257,7 +257,7 @@ fn literal(schemas: &Messages, t: &FieldType, text: &str) -> std::result::Result
             _ => return Err(bad()),
         },
         FieldType::F32 | FieldType::F64 => Value::Float(text.parse().map_err(|_| bad())?),
-        FieldType::Named(_) | FieldType::List(_) | FieldType::Map(_) => {
+        FieldType::Named(_) | FieldType::List(_) | FieldType::Map(_) | FieldType::Any => {
             let mut p = Parser::new(text, false).map_err(|e| e.to_string())?;
             let v = p.value().map_err(|e| e.to_string())?;
             if *p.peek() != syntax::image_definition::Tok::Eof {
@@ -328,6 +328,17 @@ fn document(schemas: &Messages, ty: &MessageType, given: &[(Ident, Value)], at: 
     Ok(ordered)
 }
 
+/// The fields `given`, a whole value of message type `name`: they must
+/// leave out none but its optional fields.
+fn whole(schemas: &Messages, name: &str, given: &[(Ident, Value)], at: &str) -> Result<Document, String> {
+    let ty = message_type(schemas, name)?;
+    let doc = document(schemas, ty, given, at)?;
+    if let Some(missing) = ty.fields.iter().find(|f| !f.optional && !doc.contains_key(&f.name)) {
+        return Err(format!("`{at}` is missing field `{}`", missing.name));
+    }
+    Ok(doc)
+}
+
 /// The BSON for `value`, if it fits field type `t`. `at` says where it is.
 fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::result::Result<B, String> {
     Ok(match (t, value) {
@@ -365,14 +376,20 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
                 }
             }
         }
-        (FieldType::Named(n), Value::Object(given)) => {
-            let ty = message_type(schemas, n)?;
-            let doc = document(schemas, ty, given, at)?;
-            if let Some(missing) = ty.fields.iter().find(|f| !f.optional && !doc.contains_key(&f.name)) {
-                return Err(format!("`{at}` is missing field `{}`", missing.name));
-            }
+        (FieldType::Named(n), Value::Object(given)) => B::Document(whole(schemas, n, given, at)?),
+        (FieldType::Named(n), Value::Typed(t, v)) => match &**v {
+            _ if t.name != *n => return Err(format!("`{at}` is a `{n}`, not a `{}`", t.name)),
+            Value::Object(given) => B::Document(whole(schemas, n, given, at)?),
+            v => return Err(format!("`{at}` is a `{n}`, written `{{ <field>: <value>, ... }}`, but was given {v}")),
+        },
+        (FieldType::Any, Value::Typed(t, v)) => {
+            let Value::Object(given) = &**v else { return Err(format!("`{at}`'s {} is written `{} {{ <field>: <value>, ... }}`", t.name, t.name)) };
+            let mut doc = Document::new();
+            doc.insert(wire::TYPE_KEY, t.name.clone());
+            doc.extend(whole(schemas, &t.name, given, at)?);
             B::Document(doc)
         }
+        (FieldType::Any, v) => return Err(format!("`{at}` is any message, written with its type, `Name {{ ... }}`, but was given {v}")),
         (FieldType::List(e), Value::List(items)) => {
             let items = items.iter().enumerate().map(|(i, v)| to_bson(schemas, e, v, &format!("{at}[{i}]")));
             B::Array(items.collect::<std::result::Result<_, _>>()?)
@@ -578,6 +595,26 @@ mod tests {
         let mut all = Bson::schemas(&messages("enum Color { red }"));
         let e = Bson.merge(&mut all, &mut BTreeMap::new(), &Bson::schemas(&messages(COLORS)), "C.oth").unwrap_err().to_string();
         assert!(e.contains("`Color` is declared one way by another file and another by C.oth"), "{e}");
+    }
+
+    #[test]
+    fn fields_may_be_any_message() {
+        let m = messages(&format!("{NESTED} message Crate {{ thing: any, things: [any], maybe?: any, p: Person }}"));
+        let src = r#"{ thing: Person { name: "Al", age: 3 }, things: [Record { owner: { name: "Bo", age: 4 }, note: "n" }], p: Person { name: "Cy", age: 5 } }"#;
+        let bytes = Bson::encode_message(&m, "Crate", &value(src)).unwrap();
+        let msg = Message::decode(&bytes).unwrap();
+        let thing = msg.fields.get_document("thing").unwrap();
+        assert_eq!(thing.keys().collect::<Vec<_>>(), ["$type", "name", "age"], "its type first, as a payload's");
+        let shown = Bson.show(&bytes).unwrap();
+        assert_eq!(shown[1].1, r#"[{"$type": "Record", "owner": {"name": "Bo", "age": 4}, "note": "n"}]"#);
+        assert_eq!(shown[2].1, r#"{"name": "Cy", "age": 5}"#, "a message field may name its type, but doesn't carry it");
+        let err = |src: &str| Bson::encode_message(&m, "Crate", &value(src)).unwrap_err();
+        let p = r#"p: { name: "Cy", age: 5 }"#;
+        assert!(err(&format!(r#"{{ thing: {{ name: "Al" }}, things: [], {p} }}"#)).contains("`Crate.thing` is any message, written with its type, `Name { ... }`"));
+        assert!(err(&format!(r#"{{ thing: Nope {{}}, things: [], {p} }}"#)).contains("no module in the image declares a message type `Nope`"));
+        assert!(err(&format!(r#"{{ thing: Person {{ name: "Al" }}, things: [], {p} }}"#)).contains("`Crate.thing` is missing field `age`"));
+        assert!(err(r#"{ thing: Person { name: "Al", age: 1 }, things: [], p: Record {} }"#).contains("`Crate.p` is a `Person`, not a `Record`"));
+        assert_eq!(value("Person { age: 1 }").to_string(), "Person { age: 1 }");
     }
 
     #[test]

@@ -10,3 +10,11 @@ export object TypesTests : TestSuite {
     /record  write Record, read -> Record
   }
 }
+
+schemas application/bson {
+  ## A message the store has no class for, to hold in an `any` field and
+  ## pass on as it came.
+  message Note {
+    text: string
+  }
+}

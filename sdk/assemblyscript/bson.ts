@@ -201,6 +201,14 @@ export class Writer {
     this.raw(changetype<usize>(v.bytes), 16);
   }
 
+  /**
+   * For `any` fields: `m`, with its type, as a document, as a payload
+   * carries it. An `Unknown` one goes as it came.
+   */
+  message(name: string, m: Message): void {
+    this.element(BSON_DOCUMENT, name, encodeMessage(m));
+  }
+
   /** For message fields: `m`'s fields, as an embedded document. */
   doc(name: string, m: Message): void {
     const sub = new Writer();
@@ -376,6 +384,11 @@ export class Reader {
     const out = new ArrayBuffer(16);
     memory.copy(changetype<usize>(out), f.offset + 5, 16);
     return new Uuid(out);
+  }
+
+  /** An `any` field's message: an `Unknown` one if its type isn't registered. */
+  message(name: string): Message {
+    return decodeMessage(this.embedded(this.field(name, BSON_DOCUMENT)));
   }
 
   /** A message field's fields, for its type's `decode`. */

@@ -28,8 +28,11 @@ export class Record extends Message {
   color: Color
   palette: Array<Color>
   fav: Box<Color> | null
+  /** Any message, which says its own type. */
+  extra: Message
+  extras: Array<Message>
 
-  constructor(name: string, count: i32, born: Date, id: Uuid, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>, env: Map<string, string>, teams: Map<string, Array<Person>>, nick: string | null, rank: Box<i32> | null, boss: Person | null, color: Color, palette: Array<Color>, fav: Box<Color> | null) {
+  constructor(name: string, count: i32, born: Date, id: Uuid, owner: Person, tags: Array<string>, grid: Array<Array<i32>>, team: Array<Person>, env: Map<string, string>, teams: Map<string, Array<Person>>, nick: string | null, rank: Box<i32> | null, boss: Person | null, color: Color, palette: Array<Color>, fav: Box<Color> | null, extra: Message, extras: Array<Message>) {
     super()
     this.name = name
     this.count = count
@@ -47,6 +50,8 @@ export class Record extends Message {
     this.color = color
     this.palette = palette
     this.fav = fav
+    this.extra = extra
+    this.extras = extras
   }
 
   /** The `Record` in `p`, or null if it holds none. */
@@ -74,8 +79,10 @@ export class Record extends Message {
     w.string("color", nameOfColor(this.color))
     w.array("palette", __write_list_Color(this.palette))
     if (this.fav !== null) w.string("fav", nameOfColor(this.fav!.value))
+    w.message("extra", this.extra)
+    w.array("extras", __write_list_Message(this.extras))
   }
-  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), r.time("born"), r.uuid("id"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team")), __read_map_string(r.map("env")), __read_map_list_Person(r.map("teams")), r.has("nick") ? <string | null>r.string("nick") : null, r.has("rank") ? <Box<i32> | null>new Box<i32>(r.i32("rank")) : null, r.has("boss") ? <Person | null>Person.decode(r.doc("boss")) : null, __parse_Color(r.string("color")), __read_list_Color(r.array("palette")), r.has("fav") ? <Box<Color> | null>new Box<Color>(__parse_Color(r.string("fav"))) : null) }
+  static decode(r: Reader): Record { return new Record(r.string("name"), r.i32("count"), r.time("born"), r.uuid("id"), Person.decode(r.doc("owner")), __read_list_string(r.array("tags")), __read_list_list_i32(r.array("grid")), __read_list_Person(r.array("team")), __read_map_string(r.map("env")), __read_map_list_Person(r.map("teams")), r.has("nick") ? <string | null>r.string("nick") : null, r.has("rank") ? <Box<i32> | null>new Box<i32>(r.i32("rank")) : null, r.has("boss") ? <Person | null>Person.decode(r.doc("boss")) : null, __parse_Color(r.string("color")), __read_list_Color(r.array("palette")), r.has("fav") ? <Box<Color> | null>new Box<Color>(__parse_Color(r.string("fav"))) : null, r.message("extra"), __read_list_Message(r.array("extras"))) }
 }
 registerMessage("Record", (r: Reader): Message => Record.decode(r))
 
@@ -139,6 +146,13 @@ function __read_list_Color(r: Reader): Array<Color> {
   return out
 }
 
+function __read_list_Message(r: Reader): Array<Message> {
+  const keys = r.keys()
+  const out = new Array<Message>()
+  for (let i = 0; i < keys.length; i++) out.push(r.message(keys[i]))
+  return out
+}
+
 function __read_list_Person(r: Reader): Array<Person> {
   const keys = r.keys()
   const out = new Array<Person>()
@@ -184,6 +198,12 @@ function __read_map_string(r: Reader): Map<string, string> {
 function __write_list_Color(v: Array<Color>): Writer {
   const w = new Writer()
   for (let i = 0; i < v.length; i++) w.string(i.toString(), nameOfColor(v[i]))
+  return w
+}
+
+function __write_list_Message(v: Array<Message>): Writer {
+  const w = new Writer()
+  for (let i = 0; i < v.length; i++) w.message(i.toString(), v[i])
   return w
 }
 

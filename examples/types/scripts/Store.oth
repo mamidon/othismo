@@ -32,6 +32,9 @@ export schemas application/bson {
     color: Color
     palette: [Color]
     fav?: Color
+    ## Any message, which says its own type.
+    extra: any
+    extras: [any]
   }
 
   ## A color, carried as its name.

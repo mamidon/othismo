@@ -27,4 +27,6 @@ write /store/record Record {
   rank: 2,
   color: "green",
   palette: ["blue", "red"],
+  extra: Note { text: "hi" },
+  extras: [Person { name: "Zed", age: 9 }],
 }

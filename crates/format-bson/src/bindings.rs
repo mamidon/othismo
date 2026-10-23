@@ -172,6 +172,7 @@ impl Gen<'_> {
             FieldType::Bytes => format!("w.bytes({key}, {value})"),
             FieldType::Time => format!("w.time({key}, {value})"),
             FieldType::Uuid => format!("w.uuid({key}, {value})"),
+            FieldType::Any => format!("w.message({key}, {value})"),
             FieldType::I32 => format!("w.i32({key}, {value})"),
             FieldType::I8 | FieldType::I16 | FieldType::U8 | FieldType::U16 => format!("w.i32({key}, <i32>{value})"),
             FieldType::I64 => format!("w.i64({key}, {value})"),
@@ -217,6 +218,7 @@ impl Gen<'_> {
             FieldType::Bytes => format!("r.bytes({key})"),
             FieldType::Time => format!("r.time({key})"),
             FieldType::Uuid => format!("r.uuid({key})"),
+            FieldType::Any => format!("r.message({key})"),
             FieldType::I32 => format!("r.i32({key})"),
             FieldType::I64 => format!("r.i64({key})"),
             FieldType::F64 => format!("r.f64({key})"),
@@ -295,6 +297,7 @@ fn scalar(t: &FieldType) -> &'static str {
         FieldType::Bytes => "ArrayBuffer",
         FieldType::Time => "Date",
         FieldType::Uuid => "Uuid",
+        FieldType::Any => "Message",
         FieldType::String => "string",
         FieldType::Bool => "bool",
         FieldType::I8 => "i8",
@@ -348,6 +351,7 @@ mod tests {
             ## A color.
             enum Color { red, green }
             message Paint { color: Color, fav?: Color, palette: [Color] }
+            message Envelope { inside: any, more: [any], maybe?: any }
         "#;
         let schemas = Bson::parse_messages(src, &mut |_| unreachable!()).unwrap();
         let Bindings { imports, code: out } = assemblyscript(&schemas, &schemas.declared, "othismo");
@@ -416,6 +420,9 @@ registerMessage("Greeting", (r: Reader): Message => Greeting.decode(r))
         assert!(out.contains("  color: Color\n  fav: Box<Color> | null\n  palette: Array<Color>\n"), "{out}");
         assert!(out.contains("w.string(\"color\", nameOfColor(this.color))") && out.contains("if (this.fav !== null) w.string(\"fav\", nameOfColor(this.fav!.value))"), "{out}");
         assert!(out.contains("new Paint(__parse_Color(r.string(\"color\")), r.has(\"fav\") ? <Box<Color> | null>new Box<Color>(__parse_Color(r.string(\"fav\"))) : null, __read_list_Color(r.array(\"palette\")))"), "{out}");
+        assert!(out.contains("  inside: Message\n  more: Array<Message>\n  maybe: Message | null\n"), "{out}");
+        assert!(out.contains("w.message(\"inside\", this.inside)") && out.contains("w.message(i.toString(), v[i])"), "{out}");
+        assert!(out.contains("new Envelope(r.message(\"inside\"), __read_list_Message(r.array(\"more\")), r.has(\"maybe\") ? <Message | null>r.message(\"maybe\") : null)"), "{out}");
         let alone = Bson::parse_messages("enum Color { red } message M {}", &mut |_| unreachable!()).unwrap();
         assert!(assemblyscript(&alone, &[], "othismo").code.contains("export enum Color"), "a file's enums are bound even if no message names them");
         let only = assemblyscript(&schemas, &["Nested".into()], "othismo").code;

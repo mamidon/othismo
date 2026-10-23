@@ -29,6 +29,9 @@ pub enum FieldType {
     /// without a `$type`: the field's type says what it is. Or an enum, by
     /// name, carried as the name of its value.
     Named(String),
+    /// `any`, any message: an embedded document with its `$type`, as a
+    /// payload's. `Message` in AssemblyScript.
+    Any,
     /// `[T]`, a list of `T`: an array. `Array<T>` in AssemblyScript.
     List(Box<FieldType>),
     /// `{T}`, `T`s by string keys: a document. `Map<string, T>` in
@@ -55,6 +58,7 @@ impl FieldType {
             "bytes" => FieldType::Bytes,
             "time" => FieldType::Time,
             "uuid" => FieldType::Uuid,
+            "any" => FieldType::Any,
             _ => return None,
         })
     }
@@ -105,6 +109,7 @@ impl fmt::Display for FieldType {
             FieldType::Bytes => "bytes",
             FieldType::Time => "time",
             FieldType::Uuid => "uuid",
+            FieldType::Any => "any",
         };
         f.write_str(s)
     }
