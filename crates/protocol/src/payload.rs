@@ -5,6 +5,7 @@
 //! answer with.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// Text, in UTF-8.
 pub const TEXT: &str = "text/plain";
@@ -155,6 +156,25 @@ pub fn fits(want: &str, given: &str) -> bool {
     let (Some(w), Some(g)) = (parse(want), parse(given)) else { return false };
     let ty = w.ty == "*" || (w.ty == g.ty && (w.sub == "*" || w.sub == g.sub));
     ty && w.params.iter().all(|p| g.params.contains(p))
+}
+
+/// `s` as a JSON string.
+pub fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]

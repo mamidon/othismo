@@ -1,7 +1,7 @@
 //! Packed file trees: the files `include` copies into an image when it is
 //! built, and the rules for copying them (see `docs/images.md`).
 
-use crate::check::IncludeDecl;
+use crate::program::IncludeDecl;
 use crate::pack::Hash;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};

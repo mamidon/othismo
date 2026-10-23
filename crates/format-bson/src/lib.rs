@@ -11,6 +11,7 @@ use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
 use format::{Format, Schemas};
 use messages::{FieldType, MessageType};
+use protocol::payload::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -284,23 +285,6 @@ pub fn json_value(v: &B) -> String {
     }
 }
 
-fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
 
 /// The type a BSON literal names with `$type`, and its fields as given,
 /// each checked against the type. Fields left out are fine here.

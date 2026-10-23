@@ -13,6 +13,7 @@ protocol = { path = "crates/protocol" }
 syntax = { path = "crates/syntax" }
 format = { path = "crates/format" }
 format-bson = { path = "crates/format-bson" }
+image = { path = "crates/image" }
 anyhow = "1.0.104"
 bson = { version = "3.1.0", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -30,6 +31,7 @@ protocol.workspace = true
 syntax.workspace = true
 format.workspace = true
 format-bson.workspace = true
+image.workspace = true
 anyhow.workspace = true
 bson.workspace = true
 serde.workspace = true

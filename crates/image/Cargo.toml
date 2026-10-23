@@ -1,0 +1,14 @@
+[package]
+name = "image"
+description = "A built image: object interfaces, the checked program, packed files, slots, and the sealed .rti format"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+protocol.workspace = true
+syntax.workspace = true
+format.workspace = true
+anyhow.workspace = true
+bson.workspace = true
+serde.workspace = true
+sha2.workspace = true

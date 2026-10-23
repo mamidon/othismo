@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 format.workspace = true
+protocol.workspace = true
 syntax.workspace = true
 anyhow.workspace = true
 bson.workspace = true

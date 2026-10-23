@@ -1,7 +1,6 @@
 //! How the console turns a payload into a line of text.
 
-use crate::payload::{Payload, Stat};
-use std::fmt::Write;
+use crate::payload::{Payload, Stat, json_string};
 
 /// Text prints as it is. A stat record prints as its fields, since the
 /// protocol defines it; anything else as its content type and length, since
@@ -16,25 +15,6 @@ pub fn line(p: &Payload) -> String {
     }
     let n = p.bytes.len();
     format!("{} ({n} byte{})", p.ty, if n == 1 { "" } else { "s" })
-}
-
-/// `s` as a JSON string.
-pub fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]
