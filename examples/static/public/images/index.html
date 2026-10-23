@@ -247,7 +247,7 @@ its needs are always filled by its parent, with real objects passed down or
 with in-memory ones.</p>
 <h2 id="startup-requests">Startup requests</h2>
 <pre><code class="language-text">write /http/hosts/* &quot;/www&quot;
-write /greeter/greeting application/bson { $type: &quot;Greeting&quot;, prefix: &quot;Hello, &quot;, excited: true }
+write /greeter/greeting Greeting { prefix: &quot;Hello, &quot;, excited: true }
 write /net/tcp listen
 </code></pre>
 <p><code>&lt;verb&gt; &lt;path&gt; [payload]</code> is a request the image makes at startup, resolved
@@ -261,24 +261,29 @@ except that an error is printed to stderr as a warning.</p>
 <li><code>&quot;text&quot;</code>: a <code>text/plain</code> payload. Another text type can be named first:
 <code>text/html &quot;&lt;p&gt;hi&lt;/p&gt;&quot;</code>.</li>
 <li><code>&lt;type&gt; from &quot;./file&quot;</code>: the file&#39;s bytes, read when the image is built.</li>
-<li><code>&lt;type&gt; { ... }</code>: a structured literal, handed to the format for that
-content type to encode. Its syntax is one for every format: strings,
-numbers, <code>true</code> and <code>false</code>, and nested <code>{ name: value }</code> and <code>[ ... ]</code>.
-The format checks the literal against the schemas of the image&#39;s modules
-when the image is built; for BSON, <code>$type</code> names the message type, and a
-type none of them declares is an error.</li>
+<li><code>&lt;message type&gt; { ... }</code>: a message, <code>Greeting { prefix: &quot;Hi&quot; }</code>. The
+type is one the file declares in a schemas block or imports, as headers
+name them (see <a href="objects.md#messages">Objects</a>), and the format of the
+block that declares it encodes the literal. The literal&#39;s syntax is one
+for every format: strings, numbers, <code>true</code> and <code>false</code>, and nested
+<code>{ name: value }</code> and <code>[ ... ]</code>. The format checks it against the type
+when the image is built, and the server must take that type there.
+Writing the content type instead, <code>application/bson { ... }</code>, is an
+error.</li>
 <li>the name of a slot (see below).</li>
 </ul>
 <h2 id="slots-values-from-outside">Slots: values from outside</h2>
 <p>An image can require values from whoever instantiates it:</p>
 <pre><code class="language-text">require listen : text/plain = &quot;127.0.0.1:8080&quot;     # a default
 require admin  : text/plain                        # none: it must be given
-require greeting : application/bson = { $type: &quot;Greeting&quot;, prefix: &quot;Hello, &quot;, excited: false }
+require greeting : Greeting = { prefix: &quot;Hello, &quot;, excited: false }
 </code></pre>
 <ul>
-<li><code>require &lt;name&gt; : &lt;type&gt; [= &lt;payload&gt;]</code> declares a slot of a content type,
-optionally with a default. For a structured type, the default may give
-some fields and leave the rest to be given.</li>
+<li><code>require &lt;name&gt; : &lt;type&gt; [= &lt;payload&gt;]</code> declares a slot of a message type,
+or of a content type with no schemas, such as <code>text/plain</code>, optionally
+with a default. A message slot&#39;s default is written <code>{ ... }</code>, or
+<code>Greeting { ... }</code>, and may give some fields and leave the rest to be
+given.</li>
 <li>A slot&#39;s name can stand wherever a payload can: as a startup request&#39;s
 payload, including an environment object&#39;s configuration. It can&#39;t change
 mounts or instance types, so a built image&#39;s views are fixed when it is
@@ -295,7 +300,7 @@ built and <code>--check</code> stays a true upper bound.</li>
 be given. Only the root&#39;s slots are left to whoever runs it.</p>
 <h3 id="giving-the-root-39-s-slots">Giving the root&#39;s slots</h3>
 <p>The host gives values in layers, and a later layer wins, field by field for
-a structured slot:</p>
+a message slot:</p>
 <ol>
 <li>the image&#39;s defaults,</li>
 <li>value files, in the order given (<code>--with prod.vals</code>),</li>
@@ -309,7 +314,7 @@ greeting = { prefix: &quot;Hi, &quot; }
 text for a text slot or a string field, and a literal for anything else
 (<code>--set listen=0.0.0.0:80</code>, <code>--set greeting.excited=true</code>).</p>
 <p>The image refuses to start unless every slot has a value, and every field
-of every structured one. It lists everything missing, e.g. <code>admin: required, not provided</code>. A slot or field that the image doesn&#39;t declare is an error,
+of every message one. It lists everything missing, e.g. <code>admin: required, not provided</code>. A slot or field that the image doesn&#39;t declare is an error,
 and so is a value the slot&#39;s format rejects. <code>--check</code> prints each slot&#39;s
 final value and where it came from:</p>
 <pre><code class="language-text">$ othismo --check static.rti --set listen=0.0.0.0:80

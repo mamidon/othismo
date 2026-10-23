@@ -173,7 +173,7 @@ web.http    sees /net/tcp → /net/tcp, /dev/cons → /dev/cons, /www → web.pa
             can reach at most: /net/tcp rw, /dev/cons rw, web.pages rw, web.files ro (via web.pages)
 web.pages   sees /files → web.files ro
             can reach at most: web.files ro
-web.files   serves 12 built-in files, 150.0 KB
+web.files   serves 12 built-in files, 152.5 KB
 ```
 
 That is a promise about the code without reading the code: `StaticSite`

@@ -200,9 +200,10 @@ way can't: StaticSite never sees the bytes it serves.
 On every request it checks the path and verb against the sender's `needs`
 and the receiver's `serves` (see [Objects](objects.md#enforcement)), the
 read-only rule and the operator rule, and that only a stream gets more than
-one answer. It never checks a payload. The checker compares content types
-between needs and what is mounted when an image is built, and servers
-answer `unsupported_type` for anything they don't take.
+one answer. It never checks a payload. The checker compares content types,
+and message types where headers name them, between needs and what is
+mounted when an image is built, and servers answer `unsupported_type` for
+anything they don't take.
 
 ## Layer 2: payload formats
 
@@ -244,15 +245,20 @@ Text needs no format: `text/*` payloads are their bytes, in UTF-8.
 
 `application/bson` is the first format, and the one the AssemblyScript
 library supports. A payload is one BSON document whose first key, `$type`,
-names its message type; the remaining keys are its fields:
+names its message type; the remaining keys are its fields. `$type` is the
+wire's: images, value files and `--set` name the type before the braces,
+`Greeting { ... }`, and the format writes it. Its schemas declare message
+types:
 
 ```text
-## Configures a Greeter; sent once at startup by the image.
-message Greeting {
-  ## Put before each name.
-  prefix: string
-  ## End with `!` rather than `.`.
-  excited: bool
+export schemas application/bson {
+  ## Configures a Greeter; sent once at startup by the image.
+  message Greeting {
+    ## Put before each name.
+    prefix: string
+    ## End with `!` rather than `.`.
+    excited: bool
+  }
 }
 ```
 
@@ -275,24 +281,31 @@ built.
 
 ### Where schemas live
 
-A module's schemas are in a file next to its header, in the format's own
-language: `scripts/Greeter.messages` for BSON. A schema file can import
-types from another one, or from another module's `.wasm`:
+A module's schemas are in its header, in a `schemas <content type> { ... }`
+block, one per content type. The block's body is in the format's own
+language, and Othismo reads only as far as its closing brace, so a format
+can write whatever it needs there. A format lists the types a block
+declares, and those names are what headers, images and slots use:
 
 ```text
-import { Greeting } from "../greeter/scripts/Greeter.messages"
+/greeting  write Greeting                           # a header
+write /greeter/greeting Greeting { prefix: "Hi" }   # an image
+require greeting : Greeting                         # a slot
+```
+
+A name stands for its content type, `application/bson`, which is all the
+runtime ever sees, and for its type, which the checker and codegen use. A
+content type with schemas can't be written bare in its place. Types are
+imported like any other name, from a file whose block is exported:
+
+```text
+import { Greeting } from "../greeter/scripts/Greeter.oth"
 ```
 
 The schemas are embedded in the compiled module beside its header, one
 custom section per format, so a module describes its payloads as well as
 its paths. Another module's build can generate bindings for both from the
 `.wasm` alone.
-
-The `.oth` language never names a message type. A header says
-`/greeting  write application/bson`, and its `##` comment says that the
-payload is a `Greeting`. An image writes a BSON payload as a literal of the
-format (see [Building images](images.md#startup-requests)), with the type
-named inside it, as the format requires.
 
 ## The host ABI
 
@@ -335,8 +348,7 @@ them:
 | `"othismo"` | `Server`, `Request`, `Response`, `Call`, `Verb`, `Errno`, `Payload`, `Stat`, `ns` for requests and the view, and continuations such as `OnPayload` and `OnText` | the library |
 | `"othismo/bson"` | `Message`, `Writer`, `Reader`, `registerMessage`, `bson.payload(msg)` and `bson.decode(payload)` | the library |
 | `"othismo/env"` | clients and server bases for the runtime's traits: `ConsoleClient`, `ListenerClient`, `TestSuiteServer`, ... | generated from `env` |
-| `./Greeter.oth` | `GreeterServer`, and a client for each of its needs | generated from `Greeter.oth` |
-| `./Greeter.messages` | `Greeting`, registered with `"othismo/bson"` | generated from `Greeter.messages` by BSON's generator |
+| `./Greeter.oth` | `GreeterServer`, a client for each of its needs, and `Greeting`, registered with `"othismo/bson"` | generated from `Greeter.oth`, the classes by each type's format |
 
 The SDK is in `sdk/`: the library in `sdk/assemblyscript/`, the runtime's
 header in `sdk/env/`, and reusable objects in `sdk/objects/`, such as
@@ -358,25 +370,26 @@ mount point gets one made already, named for the mount point's last segment:
 gets only the class, to make with whichever mount point the module is told
 to use. Where an entry
 names one text type, such as `text/plain`, the methods take and give a
-`string`; otherwise a `Payload`.
+`string`; where it names a message type, that message, decoded for a
+server and encoded for a client; otherwise a `Payload`. A verb that takes
+several message types has a method for each, and anything else is answered
+`invalid`.
 
 **Generated from the schemas**, each message type is a class with its
-fields, encoders and decoders. What a payload holds is a question for its
-format: `bson.decode(payload)` gives a `Message`, told apart with
-`instanceof`, or an `Unknown` message for a type the module has no class
-for.
+fields, encoders and decoders, generated by its format, for the types the
+file declares and those its objects take or answer. Every format's classes
+have `static fromPayload(p): T | null` and `toPayload()`, which the server
+bases and clients use. For BSON, `bson.decode(payload)` gives a `Message`,
+or an `Unknown` message for a type the module has no class for.
 
 So a module that uses another gets, from that module's `.wasm`, the paths
-and verbs it can call, as methods its compiler checks, and the classes for
-the payloads it sends, without reading anyone's guide to find out what
-`/greeting` takes. Only which message goes in which payload is left to the
-documentation and to the format's decoder.
+and verbs it can call, and the messages each one takes, as methods and
+classes its compiler checks, without reading anyone's guide to find out
+what `/greeting` takes.
 
 ```ts
-import { Payload, Request, Errno, OnText, run } from "othismo"
-import { bson } from "othismo/bson"
-import { GreeterServer, cons, shouter } from "./Greeter.oth"
-import { Greeting } from "./Greeter.messages"
+import { Request, OnText, run } from "othismo"
+import { Greeting, GreeterServer, cons, shouter } from "./Greeter.oth"
 
 class Greeter extends GreeterServer {
   prefix: string = "Hi, "
@@ -386,10 +399,7 @@ class Greeter extends GreeterServer {
     cons.watch(new OnName())                    // watch / -> text/plain*
   }
 
-  writeGreeting(req: Request, body: Payload): void {   // write /greeting application/bson
-    const msg = bson.decode(body)
-    if (!(msg instanceof Greeting)) { req.fail(Errno.Invalid, "expected a Greeting"); return }
-    const g = msg as Greeting
+  writeGreeting(req: Request, g: Greeting): void {    // write /greeting Greeting
     this.prefix = g.prefix
     this.excited = g.excited
     req.end()
