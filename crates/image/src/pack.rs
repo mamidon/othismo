@@ -203,7 +203,7 @@ fn describe_slot(slot: &program::Slot, formats: &Formats) -> String {
         return format!("slot {} : {ty} {{ {} }}", slot.name, shown.join(", "));
     }
     let text = value.text().unwrap_or_default();
-    format!("slot {} : {ty} = {} ({})", slot.name, protocol::payload::json_string(&text), origin(""))
+    format!("slot {} : {ty} = {} ({})", slot.name, format::json_string(&text), origin(""))
 }
 
 fn human_size(bytes: u64) -> String {

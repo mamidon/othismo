@@ -4,7 +4,8 @@
 
 use format::Formats;
 use protocol::status::Status;
-use protocol::payload::{Payload, Stat, json_string};
+use protocol::payload::{Payload, Stat};
+use format::json_string;
 use runtime::Answered;
 
 /// One answer, as lines to print.

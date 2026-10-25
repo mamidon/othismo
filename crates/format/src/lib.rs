@@ -1,7 +1,7 @@
 //! Payload formats: everything Othismo does with the bytes of payloads of
 //! one content type. It does all of it when a module or an image is built,
 //! and when a built image's slots are given values; the runtime uses none
-//! of it (see `docs/protocol.md`).
+//! of it, beyond [`json_string`] as it prints (see `docs/protocol.md`).
 //!
 //! A format is a [`Format`]. Each is found by its content type in a
 //! [`Formats`] registry, which whoever builds images fills: this crate
@@ -11,6 +11,7 @@ use anyhow::Result;
 use protocol::payload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::sync::Arc;
 use syntax::image_definition::Value;
 
@@ -133,6 +134,25 @@ impl Formats {
         };
         f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), ty, value)
     }
+}
+
+/// `text` as a JSON string.
+pub fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn list(names: &[&str]) -> String {

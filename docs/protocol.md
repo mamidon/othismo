@@ -180,7 +180,9 @@ name[s] kind[1] length[8] type[s] version[8]
 - `name`: the last segment of its path.
 - `kind`: 0 for something read whole, 1 for a directory.
 - `length`: in bytes, or 0 for a directory or if it isn't known.
-- `type`: the content type a `read` would answer with, or empty.
+- `type`: the content type a `read` of the entry would answer with, or
+  empty. It isn't the record's own content type, which is always the stat
+  record's: it is how a `list` says what each entry holds without reading it.
 - `version`: changes whenever what a `read` would answer changes, or 0 if
   the server doesn't keep track. It is what an HTTP ETag would be made from.
 

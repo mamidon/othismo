@@ -1,6 +1,7 @@
 //! How the console turns a payload into a line of text.
 
-use protocol::payload::{Payload, Stat, json_string};
+use protocol::payload::{Payload, Stat};
+use format::json_string;
 
 /// Text prints as it is. A stat record prints as its fields, since the
 /// protocol defines it; anything else as its content type and length, since

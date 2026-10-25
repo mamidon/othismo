@@ -5,7 +5,6 @@
 //! answer with.
 
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
 
 /// Text, in UTF-8.
 pub const TEXT: &str = "text/plain";
@@ -49,7 +48,9 @@ pub struct Stat {
     pub is_directory: bool,
     /// In bytes, or 0 for a directory or if it isn't known.
     pub length: u64,
-    /// The content type a `read` would answer with, or empty.
+    /// The content type a `read` of the entry would answer with, or empty.
+    /// Not the record's own, which is always [`STAT`]: this is how a
+    /// listing says what each entry holds without reading it.
     pub content_type: String,
     /// Changes whenever what a `read` would answer changes, or 0.
     pub version: u64,
@@ -68,12 +69,18 @@ impl Stat {
     /// `[s]` is a string with a 2-byte length first.
     pub fn encode(&self) -> Payload {
         let mut bytes = vec![];
-        put_string(&mut bytes, &self.name);
+        Stat::put_string(&mut bytes, &self.name);
         bytes.push(self.is_directory as u8);
         bytes.extend_from_slice(&self.length.to_le_bytes());
-        put_string(&mut bytes, &self.content_type);
+        Stat::put_string(&mut bytes, &self.content_type);
         bytes.extend_from_slice(&self.version.to_le_bytes());
         Payload::new(STAT, bytes)
+    }
+
+    fn put_string(bytes: &mut Vec<u8>, string: &str) {
+        let length = u16::try_from(string.len()).expect("a stat record's strings are short");
+        bytes.extend_from_slice(&length.to_le_bytes());
+        bytes.extend_from_slice(string.as_bytes());
     }
 
     /// The stat record in `payload`, if it is a well-formed one.
@@ -81,39 +88,42 @@ impl Stat {
         if payload.content_type != STAT {
             return None;
         }
-        let mut bytes = &payload.bytes[..];
-        let name = take_string(&mut bytes)?;
-        let is_directory = match take(&mut bytes, 1)? {
+        let mut reader = Reader(&payload.bytes);
+        let name = reader.take_string()?;
+        let is_directory = match reader.take(1)? {
             [0] => false,
             [1] => true,
             _ => return None,
         };
-        let length = u64::from_le_bytes(take(&mut bytes, 8)?.try_into().ok()?);
-        let content_type = take_string(&mut bytes)?;
-        let version = u64::from_le_bytes(take(&mut bytes, 8)?.try_into().ok()?);
-        bytes.is_empty().then_some(Stat { name, is_directory, length, content_type, version })
+        let length = reader.take_u64()?;
+        let content_type = reader.take_string()?;
+        let version = reader.take_u64()?;
+        reader.0.is_empty().then_some(Stat { name, is_directory, length, content_type, version })
     }
 }
 
-fn put_string(bytes: &mut Vec<u8>, string: &str) {
-    let length = u16::try_from(string.len()).expect("a stat record's strings are short");
-    bytes.extend_from_slice(&length.to_le_bytes());
-    bytes.extend_from_slice(string.as_bytes());
-}
+/// What is left of a stat record being decoded.
+struct Reader<'a>(&'a [u8]);
 
-/// The first `count` of `bytes`, which are then left out of it.
-fn take<'a>(bytes: &mut &'a [u8], count: usize) -> Option<&'a [u8]> {
-    if bytes.len() < count {
-        return None;
+impl<'a> Reader<'a> {
+    /// The next `count` bytes.
+    fn take(&mut self, count: usize) -> Option<&'a [u8]> {
+        if self.0.len() < count {
+            return None;
+        }
+        let (head, rest) = self.0.split_at(count);
+        self.0 = rest;
+        Some(head)
     }
-    let (head, rest) = bytes.split_at(count);
-    *bytes = rest;
-    Some(head)
-}
 
-fn take_string(bytes: &mut &[u8]) -> Option<String> {
-    let length = u16::from_le_bytes(take(bytes, 2)?.try_into().ok()?);
-    String::from_utf8(take(bytes, length as usize)?.to_vec()).ok()
+    fn take_u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+
+    fn take_string(&mut self) -> Option<String> {
+        let length = u16::from_le_bytes(self.take(2)?.try_into().ok()?);
+        String::from_utf8(self.take(length as usize)?.to_vec()).ok()
+    }
 }
 
 /// A content type taken apart: its type and subtype, lowercase, and its
@@ -162,25 +172,6 @@ pub fn fits(want: &str, given: &str) -> bool {
     let types_fit = want.type_name == "*"
         || (want.type_name == given.type_name && (want.subtype == "*" || want.subtype == given.subtype));
     types_fit && want.parameters.iter().all(|parameter| given.parameters.contains(parameter))
-}
-
-/// `text` as a JSON string.
-pub fn json_string(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

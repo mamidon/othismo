@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
 use format::{Bindings, FieldDoc, Format, MessageDoc, Schemas};
 use messages::{EnumType, FieldType, MessageType};
-use protocol::payload::json_string;
+use format::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;

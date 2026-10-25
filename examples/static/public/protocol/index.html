@@ -371,7 +371,9 @@ are, little-endian:</p>
 <li><code>name</code>: the last segment of its path.</li>
 <li><code>kind</code>: 0 for something read whole, 1 for a directory.</li>
 <li><code>length</code>: in bytes, or 0 for a directory or if it isn&#39;t known.</li>
-<li><code>type</code>: the content type a <code>read</code> would answer with, or empty.</li>
+<li><code>type</code>: the content type a <code>read</code> of the entry would answer with, or
+empty. It isn&#39;t the record&#39;s own content type, which is always the stat
+record&#39;s: it is how a <code>list</code> says what each entry holds without reading it.</li>
 <li><code>version</code>: changes whenever what a <code>read</code> would answer changes, or 0 if
 the server doesn&#39;t keep track. It is what an HTTP ETag would be made from.</li>
 </ul>
