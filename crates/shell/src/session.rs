@@ -10,7 +10,7 @@ use crate::world::{Hop, Viewpoint, World};
 use anyhow::{Result, anyhow, bail};
 use format::Formats;
 use image::pack::Pack;
-use protocol::verb::Verb;
+use protocol::{path::PathName, verb::Verb};
 use protocol::payload::Payload;
 use runtime::operator::{self, Command, Notice, Operator};
 use runtime::{Answered, Io, Options, Runtime};
@@ -316,7 +316,7 @@ impl Session {
                 runtime::operator::How::Bind => "bind",
                 runtime::operator::How::Runtime => "+ run time",
             };
-            let path = if l.target.path == "/" { String::new() } else { format!(":{}", l.target.path) };
+            let path = if l.target.path == PathName::root() { String::new() } else { format!(":{}", l.target.path) };
             let ro = if l.target.read_only { " ro" } else { "" };
             lines.push(format!("  {:<14} {how:<10} → {}{path}  {} · {}{ro}", l.at, w.instance(t).name, w.instance(t).type_name, w.class(t).name()));
         }

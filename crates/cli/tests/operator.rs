@@ -126,7 +126,7 @@ fn a_snapshot_shows_every_view_and_how_each_link_was_made() {
     let s = op.snapshot();
     let names: Vec<&str> = s.instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["/dev/cons", "greeter", "shouter"]);
-    let link = |links: &[operator::Link], at: &str| links.iter().find(|l| l.at == at).cloned().unwrap();
+    let link = |links: &[operator::Link], at: &str| links.iter().find(|l| l.at.as_str() == at).cloned().unwrap();
     assert_eq!(link(&s.root, "/greeter").how, How::Mount);
     assert_eq!(link(&s.root, "/greeter").target.instance, 1);
     let greeter = &s.instances[1];
@@ -142,7 +142,7 @@ fn a_snapshot_shows_what_changed_at_run_time() {
     let op = Operated::start("static/static.test.oth");
     let s = op.snapshot();
     let pages = s.instances.iter().find(|i| i.name == "web.pages").unwrap();
-    let statics = pages.exposed.iter().find(|l| l.at == "/static").expect("StaticSite exposes /static when it starts");
+    let statics = pages.exposed.iter().find(|l| l.at.as_str() == "/static").expect("StaticSite exposes /static when it starts");
     assert_eq!(statics.how, How::Runtime);
     assert!(statics.target.read_only);
     let web = s.instances.iter().find(|i| i.name == "web").unwrap();

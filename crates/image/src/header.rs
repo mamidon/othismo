@@ -4,6 +4,7 @@
 //! built image; the compiler resolves them from `.oth` files.
 
 use protocol::{status::Status, verb::Verb};
+use protocol::path::{MountPoint, PathName};
 use protocol::pattern::{self, Pattern};
 use protocol::payload::{self, ANY, STAT, STAT_NAME};
 use serde::{Deserialize, Serialize};
@@ -150,8 +151,8 @@ impl Trait {
 }
 
 impl Object {
-    /// The entry serving `path`, a clean path in the object's served tree.
-    pub fn serving(&self, path: &str) -> Option<&Entry> {
+    /// The entry serving `path`, a path in the object's served tree.
+    pub fn serving(&self, path: &PathName) -> Option<&Entry> {
         pattern::best(&self.serves, |e| &e.path, path)
     }
 
@@ -161,13 +162,13 @@ impl Object {
     }
 
     /// The `needs` block for the mount point `at`.
-    pub fn need(&self, at: &str) -> Option<&Need> {
-        pattern::best(&self.needs, |n| &n.at, at)
+    pub fn need(&self, at: &MountPoint) -> Option<&Need> {
+        pattern::best(&self.needs, |n| &n.at, at.path())
     }
 }
 
 impl Need {
-    pub fn entry(&self, path: &str) -> Option<&Entry> {
+    pub fn entry(&self, path: &PathName) -> Option<&Entry> {
         pattern::best(&self.entries, |e| &e.path, path)
     }
 }

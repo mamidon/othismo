@@ -1,7 +1,7 @@
 //! `Listener`, run as a TCP listener and the connections it accepts.
 
 use super::{Event, Incoming, Reply, What};
-use protocol::{status::Status, verb::Verb};
+use protocol::{path::PathName, status::Status, verb::Verb};
 use protocol::payload::{OCTETS, Payload};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -90,8 +90,8 @@ impl Tcp {
         }
     }
 
-    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>) -> Vec<Reply> {
-        let (conn, c) = match (at(path), verb) {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &PathName, body: Option<&Payload>) -> Vec<Reply> {
+        let (conn, c) = match (at(path.as_str()), verb) {
             (At::Address, Verb::Read) => return vec![Reply::ok(req, Payload::text(&self.address))],
             (At::Accept, Verb::Watch) => {
                 self.accept_watchers.push(req);
@@ -104,7 +104,7 @@ impl Tcp {
                 None => return vec![Reply::fail(req, Status::NOT_FOUND)],
             },
         };
-        match (at(path), verb) {
+        match (at(path.as_str()), verb) {
             (At::Remote(_), Verb::Read) => vec![Reply::ok(req, Payload::text(&c.peer))],
             (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::EXISTS)],
             (At::Data(_), Verb::Watch) => {
@@ -215,8 +215,8 @@ fn accepted(conn: u32) -> Payload {
 }
 
 impl MemoryListener {
-    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>) -> Vec<Reply> {
-        let (conn, c) = match (at(path), verb) {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &PathName, body: Option<&Payload>) -> Vec<Reply> {
+        let (conn, c) = match (at(path.as_str()), verb) {
             (At::Address, Verb::Read) => return vec![Reply::ok(req, Payload::text("memory"))],
             (At::Accept, Verb::Watch) => {
                 self.accept_watchers.push(req);
@@ -239,7 +239,7 @@ impl MemoryListener {
                 None => return vec![Reply::fail(req, Status::NOT_FOUND)],
             },
         };
-        match (at(path), verb) {
+        match (at(path.as_str()), verb) {
             (At::Remote(_), Verb::Read) => vec![Reply::ok(req, Payload::text("memory"))],
             (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::EXISTS)],
             (At::Data(_), Verb::Watch) => {
@@ -321,6 +321,10 @@ fn read_loop(mut stream: TcpStream, to: usize, conn: u32, events: Sender<Incomin
 mod tests {
     use super::*;
 
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
+
     fn bytes(s: &str) -> Payload {
         data(s.as_bytes().to_vec())
     }
@@ -329,20 +333,20 @@ mod tests {
     fn a_dial_is_a_connection_the_server_answers() {
         let mut l = MemoryListener::default();
         // Dialed before anyone watches: announced to the first watcher.
-        assert!(l.serve(1, Verb::Create, "/dial", Some(&bytes("GET /"))).is_empty());
-        assert_eq!(l.serve(2, Verb::Watch, "/accept", None), [Reply::more(2, accepted(1))]);
-        assert_eq!(l.serve(3, Verb::Watch, "/1/data", None), [Reply::more(3, bytes("GET /"))]);
-        assert_eq!(l.serve(4, Verb::Write, "/1/data", Some(&bytes("200"))), [Reply::more(1, bytes("200")), Reply::end(4)]);
-        assert_eq!(l.serve(5, Verb::Read, "/1/remote", None), [Reply::ok(5, Payload::text("memory"))]);
-        assert_eq!(l.serve(6, Verb::Remove, "/1", None), [Reply::end(1), Reply::end(3), Reply::end(6)]);
-        assert_eq!(l.serve(7, Verb::Watch, "/1/data", None)[0].status, Status::NOT_FOUND);
+        assert!(l.serve(1, Verb::Create, &path("/dial"), Some(&bytes("GET /"))).is_empty());
+        assert_eq!(l.serve(2, Verb::Watch, &path("/accept"), None), [Reply::more(2, accepted(1))]);
+        assert_eq!(l.serve(3, Verb::Watch, &path("/1/data"), None), [Reply::more(3, bytes("GET /"))]);
+        assert_eq!(l.serve(4, Verb::Write, &path("/1/data"), Some(&bytes("200"))), [Reply::more(1, bytes("200")), Reply::end(4)]);
+        assert_eq!(l.serve(5, Verb::Read, &path("/1/remote"), None), [Reply::ok(5, Payload::text("memory"))]);
+        assert_eq!(l.serve(6, Verb::Remove, &path("/1"), None), [Reply::end(1), Reply::end(3), Reply::end(6)]);
+        assert_eq!(l.serve(7, Verb::Watch, &path("/1/data"), None)[0].status, Status::NOT_FOUND);
 
         // Dialed while watched: announced at once.
-        assert_eq!(l.serve(8, Verb::Create, "/dial", Some(&bytes("x"))), [Reply::more(2, accepted(2))]);
-        assert_eq!(l.serve(9, Verb::Watch, "/2/data", None), [Reply::more(9, bytes("x"))]);
+        assert_eq!(l.serve(8, Verb::Create, &path("/dial"), Some(&bytes("x"))), [Reply::more(2, accepted(2))]);
+        assert_eq!(l.serve(9, Verb::Watch, &path("/2/data"), None), [Reply::more(9, bytes("x"))]);
         assert_eq!(l.cancel(8), [Reply::end(9)], "the dialer hung up");
-        assert_eq!(l.serve(10, Verb::Create, "/dial", None)[0].status, Status::INVALID);
-        assert_eq!(l.serve(11, Verb::Read, "/address", None)[0].body, Some(Payload::text("memory")));
-        assert_eq!(l.serve(12, Verb::Read, "/2/nothing", None)[0].status, Status::NOT_FOUND);
+        assert_eq!(l.serve(10, Verb::Create, &path("/dial"), None)[0].status, Status::INVALID);
+        assert_eq!(l.serve(11, Verb::Read, &path("/address"), None)[0].body, Some(Payload::text("memory")));
+        assert_eq!(l.serve(12, Verb::Read, &path("/2/nothing"), None)[0].status, Status::NOT_FOUND);
     }
 }

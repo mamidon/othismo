@@ -604,7 +604,7 @@ impl App {
         if open {
             place.open.insert(path);
             if let Some(t) = target {
-                self.list(t.instance, &t.path);
+                self.list(t.instance, t.path.as_str());
             }
         } else {
             place.open.remove(&path);
@@ -635,7 +635,7 @@ impl App {
         let open: Vec<String> = self.place().open.iter().cloned().collect();
         for path in open {
             if let Ok(r) = self.session.world.resolve(here, &path) {
-                self.list(r.instance, &r.path);
+                self.list(r.instance, r.path.as_str());
             }
         }
         self.rebuild();
@@ -809,7 +809,7 @@ impl App {
                 self.walk_view(here, kid, &p, &more, rows);
                 continue;
             }
-            let link = w.view(here).iter().find(|l| l.at == p).expect("a mount point of the view");
+            let link = w.view(here).iter().find(|l| l.at.as_str() == p).expect("a mount point of the view");
             let t = link.target.instance;
             let is_open = open.is_some_and(|o| o.contains(&p));
             let how = match link.how {
@@ -852,7 +852,7 @@ impl App {
         // What a listing says is there, then what is known without one: what
         // it has exposed, which its server never sees requests for, and what
         // its header says it serves.
-        let mut entries: Vec<(Stat, Source)> = match self.listings.get(&(r.instance, r.path.clone())) {
+        let mut entries: Vec<(Stat, Source)> = match self.listings.get(&(r.instance, r.path.to_string())) {
             Some(Listing::Got(stats)) => stats.iter().map(|s| (s.clone(), Source::Listed)).collect(),
             _ => vec![],
         };
@@ -863,7 +863,7 @@ impl App {
                 None => entries.push((if k.dir { Stat::directory(&k.name) } else { Stat::file(&k.name, 0, "") }, k.from)),
             }
         }
-        let status = match self.listings.get(&(r.instance, r.path.clone())) {
+        let status = match self.listings.get(&(r.instance, r.path.to_string())) {
             None | Some(Listing::Waiting) => Some("listing…".to_string()),
             Some(Listing::Failed(s)) => Some(format!("not listed: {}", s.code)),
             Some(Listing::Got(_)) if entries.is_empty() && patterns.is_empty() => Some("empty".to_string()),

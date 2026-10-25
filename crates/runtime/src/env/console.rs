@@ -1,7 +1,7 @@
 //! `Console`, run on the host's stdin and stdout.
 
 use super::{Event, Incoming, Reply, What};
-use protocol::{status::Status, verb::Verb};
+use protocol::{path::PathName, status::Status, verb::Verb};
 use protocol::payload::Payload;
 use crate::render;
 use anyhow::{Context, Result};
@@ -21,8 +21,8 @@ impl Console {
         !self.watchers.is_empty()
     }
 
-    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
-        if path != "/" {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &PathName, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
+        if *path != PathName::root() {
             return Ok(vec![Reply::fail(req, Status::NOT_FOUND)]);
         }
         Ok(match (verb, body) {
@@ -68,8 +68,8 @@ pub struct MemoryConsole {
 }
 
 impl MemoryConsole {
-    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>) -> Vec<Reply> {
-        match (path, verb, body) {
+    pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &PathName, body: Option<&Payload>) -> Vec<Reply> {
+        match (path.as_str(), verb, body) {
             ("/", Verb::Watch, _) => {
                 self.watchers.push(req);
                 vec![]
@@ -131,6 +131,10 @@ mod tests {
     use super::*;
     use crate::env::EnvObject;
 
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
+
     fn status(replies: Vec<Reply>) -> Vec<Status> {
         replies.into_iter().map(|r| r.status).collect()
     }
@@ -139,32 +143,32 @@ mod tests {
     fn console_streams_lines_to_watchers_until_eof() {
         let mut c = EnvObject::Console(Console::default());
         let mut out = Vec::new();
-        assert!(c.serve(1, Verb::Watch, "/", None, &mut out).unwrap().is_empty());
-        assert!(c.serve(2, Verb::Watch, "/", None, &mut out).unwrap().is_empty());
+        assert!(c.serve(1, Verb::Watch, &path("/"), None, &mut out).unwrap().is_empty());
+        assert!(c.serve(2, Verb::Watch, &path("/"), None, &mut out).unwrap().is_empty());
         assert_eq!(c.cancel(2), [Reply::end(2)]);
         let r = c.on_event(What::Line("hi".into()));
         assert_eq!(r, [Reply::more(1, Payload::text("hi"))]);
         assert_eq!(c.on_event(What::Eof), [Reply::end(1)]);
-        assert_eq!(c.serve(3, Verb::Watch, "/", None, &mut out).unwrap(), [Reply::end(3)]);
+        assert_eq!(c.serve(3, Verb::Watch, &path("/"), None, &mut out).unwrap(), [Reply::end(3)]);
 
-        let w = c.serve(4, Verb::Write, "/", Some(&Payload::text("out")), &mut out).unwrap();
+        let w = c.serve(4, Verb::Write, &path("/"), Some(&Payload::text("out")), &mut out).unwrap();
         assert_eq!(w, [Reply::end(4)]);
         assert_eq!(out, b"out\n");
-        assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out).unwrap()), [Status::NOT_FOUND]);
+        assert_eq!(status(c.serve(5, Verb::Write, &path("/x"), None, &mut out).unwrap()), [Status::NOT_FOUND]);
     }
 
     #[test]
     fn a_memory_console_is_typed_into_and_printed_from() {
         let mut c = MemoryConsole::default();
-        assert!(c.serve(1, Verb::Watch, "/", None).is_empty());
-        assert!(c.serve(2, Verb::Watch, "/printed", None).is_empty());
+        assert!(c.serve(1, Verb::Watch, &path("/"), None).is_empty());
+        assert!(c.serve(2, Verb::Watch, &path("/printed"), None).is_empty());
         let line = Payload::text("hi");
-        assert_eq!(c.serve(3, Verb::Write, "/typed", Some(&line)), [Reply::more(1, line.clone()), Reply::end(3)]);
+        assert_eq!(c.serve(3, Verb::Write, &path("/typed"), Some(&line)), [Reply::more(1, line.clone()), Reply::end(3)]);
         let out = Payload::text("out");
-        assert_eq!(c.serve(4, Verb::Write, "/", Some(&out)), [Reply::more(2, out), Reply::end(4)]);
+        assert_eq!(c.serve(4, Verb::Write, &path("/"), Some(&out)), [Reply::more(2, out), Reply::end(4)]);
         c.cancel(2);
-        assert_eq!(c.serve(5, Verb::Write, "/", Some(&line)), [Reply::end(5)]);
-        assert_eq!(status(c.serve(6, Verb::Read, "/printed", None)), [Status::NOT_SUPPORTED]);
-        assert_eq!(status(c.serve(7, Verb::Read, "/x", None)), [Status::NOT_FOUND]);
+        assert_eq!(c.serve(5, Verb::Write, &path("/"), Some(&line)), [Reply::end(5)]);
+        assert_eq!(status(c.serve(6, Verb::Read, &path("/printed"), None)), [Status::NOT_SUPPORTED]);
+        assert_eq!(status(c.serve(7, Verb::Read, &path("/x"), None)), [Status::NOT_FOUND]);
     }
 }

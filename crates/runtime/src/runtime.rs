@@ -19,12 +19,12 @@
 //! and the `othismo` functions in [`ALLOWED_IMPORTS`]; anything else a
 //! module asks for is refused before it is instantiated.
 
-use image::program::{Kind, MountDecl, Program};
+use image::program::{Kind, Program};
 use image::pack::Pack;
 use crate::env::{self, EnvObject, Incoming, Reply};
 use crate::operator::{Command, How, InstanceInfo, Link, Notice, Snapshot};
 use image::header as iface;
-use protocol::{namespace::{Namespace, Resolved}, path, status::Status, verb::{self, Verb}};
+use protocol::{namespace::{Namespace, Resolved}, path::{MountPoint, PathName}, status::Status, verb::{self, Verb}};
 use protocol::payload::Payload;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
@@ -123,7 +123,7 @@ struct Promise {
 }
 
 enum Delivery {
-    Serve { to: usize, req: u32, verb: Verb, operator: bool, path: String, body: Option<Payload> },
+    Serve { to: usize, req: u32, verb: Verb, operator: bool, path: PathName, body: Option<Payload> },
     Answer { to: usize, ticket: u32, status: Status, body: Option<Payload>, detail: String, done: bool },
     Cancel { to: usize, req: u32 },
 }
@@ -156,13 +156,14 @@ impl Shared {
     /// nowhere if a read-only mount is in the way of an unsafe verb, or if
     /// the request isn't one of `inst`'s needs.
     fn resolve(&self, inst: usize, path: &str, verb: Verb) -> Result<Resolved, Status> {
-        let r = self.ns.resolve(inst, path)?;
+        let path = PathName::parse(path)?;
+        let r = self.ns.resolve(inst, &path)?;
         if r.read_only && !verb.is_safe() {
             return Err(Status::READ_ONLY);
         }
         if self.checks {
-            let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NOT_FOUND)?;
-            let need = self.interfaces[inst].need(&at).ok_or(Status::NOT_FOUND)?;
+            let (at, rest) = self.ns.mount_of(inst, &path).ok_or(Status::NOT_FOUND)?;
+            let need = self.interfaces[inst].need(at).ok_or(Status::NOT_FOUND)?;
             need.entry(&rest).ok_or(Status::NOT_FOUND)?.takes_verb(verb, false)?;
         }
         Ok(r)
@@ -349,19 +350,18 @@ impl<'p> Runtime<'p> {
         // One view per instance, and the root image's own after them. An
         // instance of an image serves only what it exports.
         let mut ns = Namespace::new(n + 1);
-        let resolved = |m: &MountDecl| Resolved { instance: m.target, path: m.path.clone(), read_only: m.read_only };
         for (i, inst) in program.instances.iter().enumerate() {
             for m in &inst.mounts {
-                ns.mount_resolved(i, &m.at, resolved(m));
+                ns.mount_resolved(i, &m.at, m.resolved());
             }
             if let Kind::Image { exports } = &inst.kind {
                 for e in exports {
-                    ns.expose_resolved(i, &e.at, resolved(e));
+                    ns.expose_resolved(i, &e.at, e.resolved());
                 }
             }
         }
         for m in &program.view {
-            ns.mount_resolved(n, &m.at, resolved(m));
+            ns.mount_resolved(n, &m.at, m.resolved());
         }
         let interfaces = program
             .instances
@@ -445,7 +445,7 @@ impl<'p> Runtime<'p> {
     /// delivers everything that follows from it, and returns the replies it
     /// has had: none at all if nothing answered.
     pub fn ask(&mut self, inst: usize, verb: Verb, path: &str, body: Option<Payload>) -> Result<Vec<Answered>> {
-        let to = Ok(Resolved { instance: inst, path: path.to_string(), read_only: false });
+        let to = PathName::parse(path).map(|path| Resolved { instance: inst, path, read_only: false });
         self.shared.borrow_mut().request(Requester::Asked, to, verb, body);
         self.drain()?;
         Ok(std::mem::take(&mut self.shared.borrow_mut().asked))
@@ -466,13 +466,13 @@ impl<'p> Runtime<'p> {
     pub fn snapshot(&self) -> Snapshot {
         let shared = self.shared.borrow();
         let p = self.program;
-        let link = |decls: &[image::program::MountDecl], (at, target): (&str, &Resolved)| {
-            let how = match decls.iter().find(|d| d.at == at && d.resolved() == *target) {
+        let link = |decls: &[image::program::MountDecl], (at, target): (&MountPoint, &Resolved)| {
+            let how = match decls.iter().find(|d| d.at == *at && d.resolved() == *target) {
                 Some(d) if d.bound => How::Bind,
                 Some(_) => How::Mount,
                 None => How::Runtime,
             };
-            Link { at: at.to_string(), target: target.clone(), how }
+            Link { at: at.clone(), target: target.clone(), how }
         };
         let instances = p
             .instances
@@ -561,7 +561,7 @@ impl<'p> Runtime<'p> {
                 };
                 let mut shared = self.shared.borrow_mut();
                 let to = match (image, from) {
-                    (Some(view), _) => shared.ns.resolve(view, &path).and_then(|r| {
+                    (Some(view), _) => PathName::parse(&path).and_then(|path| shared.ns.resolve(view, &path)).and_then(|r| {
                         if r.read_only && !verb.is_safe() { Err(Status::READ_ONLY) } else { Ok(r) }
                     }),
                     (None, Some(i)) if i < n => shared.resolve(i, &path, verb),
@@ -570,7 +570,7 @@ impl<'p> Runtime<'p> {
                 shared.request(Requester::Operator { id, operator: image.is_some() }, to, verb, body);
             }
             Command::Look { id, inst, verb, path } => {
-                let to = match path::clean(&path) {
+                let to = match PathName::parse(&path) {
                     _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::INVALID),
                     Ok(path) => Ok(Resolved { instance: inst, path, read_only: false }),
                     Err(status) => Err(status),
@@ -617,11 +617,11 @@ impl<'p> Runtime<'p> {
                     }
                     Object::Wasm(obj) => {
                         let (ty, body) = body.map(|b| (b.content_type, b.bytes)).unwrap_or_default();
-                        let mut bytes = path.as_bytes().to_vec();
+                        let mut bytes = path.as_str().as_bytes().to_vec();
                         bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
                         let flags = if operator { verb::OPERATOR } else { 0 };
-                        let args = (req as i32, verb as i32, flags, path.len() as i32, ty.len() as i32, body.len() as i32);
+                        let args = (req as i32, verb as i32, flags, path.as_str().len() as i32, ty.len() as i32, body.len() as i32);
                         let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.serve.call(&mut obj.store, args)?));
                         res.map_err(|e| self.failed(to, &doing, e))?;
                     }
@@ -828,17 +828,15 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let me = caller.data().me;
             let (src, at) = (read_path(&mut caller, src, src_len)?, read_path(&mut caller, at, at_len)?);
             let mut shared = caller.data().shared.borrow_mut();
-            Ok(errno(match (src, at) {
-                (Some(src), Some(at)) => shared.ns.bind(me, &src, &at, flags & verb::READ_ONLY != 0),
-                _ => Err(Status::INVALID),
-            }))
+            let (src, at) = (src.ok_or(Status::INVALID), at.ok_or(Status::INVALID));
+            Ok(errno((|| shared.ns.bind(me, &PathName::parse(&src?)?, &MountPoint::parse(&at?)?, flags & verb::READ_ONLY != 0))()))
         },
     )?;
     linker.func_wrap("othismo", "unmount", |mut caller: Caller<'_, HostState>, at: i32, at_len: i32| -> HostResult<i32> {
         let me = caller.data().me;
         let at = read_path(&mut caller, at, at_len)?;
         let mut shared = caller.data().shared.borrow_mut();
-        Ok(errno(at.ok_or(Status::INVALID).and_then(|at| shared.ns.unmount(me, &at))))
+        Ok(errno(at.ok_or(Status::INVALID).and_then(|at| shared.ns.unmount(me, &MountPoint::parse(&at)?))))
     })?;
     linker.func_wrap(
         "othismo",
@@ -847,10 +845,8 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let me = caller.data().me;
             let (at, src) = (read_path(&mut caller, at, at_len)?, read_path(&mut caller, src, src_len)?);
             let mut shared = caller.data().shared.borrow_mut();
-            Ok(errno(match (at, src) {
-                (Some(at), Some(src)) => shared.ns.expose(me, &at, &src, flags & verb::READ_ONLY != 0),
-                _ => Err(Status::INVALID),
-            }))
+            let (at, src) = (at.ok_or(Status::INVALID), src.ok_or(Status::INVALID));
+            Ok(errno((|| shared.ns.expose(me, &MountPoint::parse(&at?)?, &PathName::parse(&src?)?, flags & verb::READ_ONLY != 0))()))
         },
     )?;
     linker.func_wrap(

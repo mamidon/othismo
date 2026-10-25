@@ -19,7 +19,7 @@ use crate::runtime::Answered;
 use format::AllSchemas;
 use image::header::Object;
 use image::program::Kind;
-use protocol::{namespace::Resolved, verb::Verb};
+use protocol::{namespace::Resolved, path::MountPoint, verb::Verb};
 use protocol::payload::Payload;
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -111,7 +111,7 @@ pub struct InstanceInfo {
 /// A mount point in a view, or an exposure in a served tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link {
-    pub at: String,
+    pub at: MountPoint,
     pub target: Resolved,
     pub how: How,
 }

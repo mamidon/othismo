@@ -1,7 +1,7 @@
 //! `Files`, run as read-only access to one directory on the host.
 
 use super::Reply;
-use protocol::{status::Status, verb::Verb};
+use protocol::{path::PathName, status::Status, verb::Verb};
 use protocol::payload::{Payload, Stat};
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
@@ -21,11 +21,11 @@ impl Files {
         Ok(Files { root })
     }
 
-    pub(super) fn serve(&self, req: u32, verb: Verb, path: &str) -> Vec<Reply> {
+    pub(super) fn serve(&self, req: u32, verb: Verb, path: &PathName) -> Vec<Reply> {
         if !verb.is_safe() {
             return vec![Reply::fail(req, Status::READ_ONLY)];
         }
-        let real = match self.locate(path) {
+        let real = match self.locate(path.as_str()) {
             Ok(p) => p,
             Err(status) => return vec![Reply::fail(req, status)],
         };
@@ -36,7 +36,7 @@ impl Files {
                 Ok(data) => vec![Reply::ok(req, Payload::new(mime(&real), data))],
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
-            Verb::Stat => match stat(&real, &name(path)) {
+            Verb::Stat => match stat(&real, &name(path.as_str())) {
                 Ok(s) => vec![Reply::ok(req, s.encode())],
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
@@ -120,6 +120,10 @@ pub(super) fn mime(path: &Path) -> &'static str {
 mod tests {
     use super::*;
 
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
+
     fn status(replies: Vec<Reply>) -> Vec<Status> {
         replies.into_iter().map(|r| r.status).collect()
     }
@@ -136,23 +140,22 @@ mod tests {
         std::os::unix::fs::symlink(base.join("secret.txt"), base.join("root/link.txt")).unwrap();
 
         let f = Files { root: base.join("root").canonicalize().unwrap() };
-        let read = |p: &str| f.serve(1, Verb::Read, p);
+        let read = |text: &str| f.serve(1, Verb::Read, &path(text));
         let a = read("/a.txt").remove(0).body.unwrap();
         assert_eq!(a, Payload::new("text/plain; charset=utf-8", "A"));
-        assert_eq!(status(read("sub/./b.css")), [Status::OK]);
+        assert_eq!(status(read("/sub/./b.css")), [Status::OK]);
         assert_eq!(status(read("/sub")), [Status::IS_DIRECTORY]);
         assert_eq!(status(read("/missing")), [Status::NOT_FOUND]);
-        assert_eq!(status(read("/../secret.txt")), [Status::INVALID]);
-        assert_eq!(status(read("sub\\..\\a.txt")), [Status::INVALID]);
+        assert_eq!(status(read("/sub\\..\\a.txt")), [Status::INVALID]);
         #[cfg(unix)]
         assert_eq!(status(read("/link.txt")), [Status::NOT_FOUND], "symlinks out of the root don't exist");
-        assert_eq!(status(f.serve(1, Verb::Write, "/a.txt")), [Status::READ_ONLY]);
+        assert_eq!(status(f.serve(1, Verb::Write, &path("/a.txt"))), [Status::READ_ONLY]);
 
-        let info = Stat::decode(&f.serve(1, Verb::Stat, "/sub/b.css").remove(0).body.unwrap()).unwrap();
+        let info = Stat::decode(&f.serve(1, Verb::Stat, &path("/sub/b.css")).remove(0).body.unwrap()).unwrap();
         assert_eq!(info, Stat::file("b.css", 1, "text/css; charset=utf-8"));
-        assert!(Stat::decode(&f.serve(1, Verb::Stat, "/sub/").remove(0).body.unwrap()).unwrap().is_directory);
+        assert!(Stat::decode(&f.serve(1, Verb::Stat, &path("/sub/")).remove(0).body.unwrap()).unwrap().is_directory);
         let list: Vec<(String, bool)> = f
-            .serve(1, Verb::List, "/")
+            .serve(1, Verb::List, &path("/"))
             .into_iter()
             .map(|r| (r.body.map(|b| Stat::decode(&b).unwrap().name).unwrap_or_default(), r.done))
             .collect();
@@ -161,7 +164,7 @@ mod tests {
             want.remove(1);
         }
         assert_eq!(list, want);
-        assert_eq!(status(f.serve(1, Verb::List, "/a.txt")), [Status::NOT_DIRECTORY]);
+        assert_eq!(status(f.serve(1, Verb::List, &path("/a.txt"))), [Status::NOT_DIRECTORY]);
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

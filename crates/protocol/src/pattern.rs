@@ -6,6 +6,7 @@
 //! does everywhere else. Where several patterns match, the most specific
 //! wins: see [`Pattern::specificity`].
 
+use crate::path::{MountPoint, PathName};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
@@ -65,9 +66,8 @@ impl Pattern {
         self.segments.iter().all(|segment| matches!(segment, Segment::Literal(_)))
     }
 
-    /// Whether the clean path `path` matches.
-    pub fn matches(&self, path: &str) -> bool {
-        let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
+    pub fn matches(&self, path: &PathName) -> bool {
+        let path: Vec<&str> = path.as_str()[1..].split('/').collect();
         fn matches(pattern: &[Segment], path: &[&str]) -> bool {
             match (pattern.first(), path.first()) {
                 (Some(Segment::Rest), _) => true,
@@ -117,12 +117,12 @@ impl Pattern {
         covers(&self.segments, &other.segments)
     }
 
-    /// What this pattern matches below the clean path `path`, relative to
+    /// What this pattern matches below `path`, relative to
     /// it: `/{name}` for `/hosts/{name}` below `/hosts`, `""` for the path
     /// itself, and `/**` wherever a `**` takes over. `None` if it matches
     /// nothing below `path`.
-    pub fn below(&self, path: &str) -> Option<String> {
-        let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').filter(|segment| !segment.is_empty()).collect();
+    pub fn below(&self, path: &PathName) -> Option<String> {
+        let path: Vec<&str> = path.as_str()[1..].split('/').filter(|segment| !segment.is_empty()).collect();
         if path.is_empty() && self.text == "/" {
             return Some(String::new());
         }
@@ -143,11 +143,11 @@ impl Pattern {
 
     /// `relative`, a pattern [`below`](Pattern::below) another path, put
     /// under the mount point `at` instead.
-    pub fn under(at: &str, relative: &str) -> Pattern {
-        let text = match (at, relative) {
+    pub fn under(at: &MountPoint, relative: &str) -> Pattern {
+        let text = match (at.as_str(), relative) {
             ("/", "") => "/".to_string(),
             ("/", relative) => relative.to_string(),
-            (at, relative) => format!("{}{relative}", at.trim_end_matches('/')),
+            (at, relative) => format!("{at}{relative}"),
         };
         Pattern::parse(&text).expect("a pattern under a mount point is a pattern")
     }
@@ -171,7 +171,7 @@ impl Pattern {
 }
 
 /// The most specific of `items` whose pattern matches `path`.
-pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &Pattern, path: &str) -> Option<&'a T> {
+pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &Pattern, path: &PathName) -> Option<&'a T> {
     items.iter().filter(|item| pattern(item).matches(path)).max_by(|a, b| pattern(a).specificity(pattern(b)))
 }
 
@@ -198,9 +198,17 @@ impl From<Pattern> for String {
 mod tests {
     use super::*;
 
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
+
+    fn at(text: &str) -> MountPoint {
+        MountPoint::parse(text).unwrap()
+    }
+
     #[test]
     fn patterns_move_below_one_path_and_under_another() {
-        let below = |pattern: &str, path: &str| Pattern::parse(pattern).unwrap().below(path);
+        let below = |pattern: &str, path: &str| Pattern::parse(pattern).unwrap().below(&self::path(path));
         assert_eq!(below("/hosts/{name}", "/hosts").as_deref(), Some("/{name}"));
         assert_eq!(below("/hosts", "/hosts").as_deref(), Some(""));
         assert_eq!(below("/hosts/", "/hosts").as_deref(), Some("/"));
@@ -209,11 +217,11 @@ mod tests {
         assert_eq!(below("/x", "/"), Some("/x".into()));
         assert_eq!(below("/", "/").as_deref(), Some(""));
         assert_eq!(below("/hits", "/hosts"), None);
-        assert_eq!(Pattern::under("/web", "/{name}").as_str(), "/web/{name}");
-        assert_eq!(Pattern::under("/web", "").as_str(), "/web");
-        assert_eq!(Pattern::under("/web/", "/").as_str(), "/web/");
-        assert_eq!(Pattern::under("/", "").as_str(), "/");
-        assert_eq!(Pattern::under("/", "/x").as_str(), "/x");
+        assert_eq!(Pattern::under(&at("/web"), "/{name}").as_str(), "/web/{name}");
+        assert_eq!(Pattern::under(&at("/web"), "").as_str(), "/web");
+        assert_eq!(Pattern::under(&at("/web/"), "/").as_str(), "/web/");
+        assert_eq!(Pattern::under(&at("/"), "").as_str(), "/");
+        assert_eq!(Pattern::under(&at("/"), "/x").as_str(), "/x");
     }
 
     fn pattern(text: &str) -> Pattern {
@@ -222,19 +230,19 @@ mod tests {
 
     #[test]
     fn matches_literals_names_and_rest() {
-        assert!(pattern("/hits").matches("/hits"));
-        assert!(!pattern("/hits").matches("/hits/"), "a trailing `/` counts");
-        assert!(pattern("/").matches("/"));
-        assert!(!pattern("/").matches("/a"));
-        assert!(pattern("/hosts/{name}").matches("/hosts/a"));
-        assert!(!pattern("/hosts/{name}").matches("/hosts/"), "`{{name}}` is never empty");
-        assert!(!pattern("/hosts/{name}").matches("/hosts/a/b"));
-        assert!(pattern("/www/**").matches("/www"), "`**` matches zero segments");
-        assert!(pattern("/www/**").matches("/www/"));
-        assert!(pattern("/www/**").matches("/www/a/b/"));
-        assert!(!pattern("/www/**").matches("/wwwx"));
-        assert!(pattern("/**").matches("/"));
-        assert!(pattern("/{a}/x/**").matches("/q/x"));
+        assert!(pattern("/hits").matches(&path("/hits")));
+        assert!(!pattern("/hits").matches(&path("/hits/")), "a trailing `/` counts");
+        assert!(pattern("/").matches(&path("/")));
+        assert!(!pattern("/").matches(&path("/a")));
+        assert!(pattern("/hosts/{name}").matches(&path("/hosts/a")));
+        assert!(!pattern("/hosts/{name}").matches(&path("/hosts/")), "`{{name}}` is never empty");
+        assert!(!pattern("/hosts/{name}").matches(&path("/hosts/a/b")));
+        assert!(pattern("/www/**").matches(&path("/www")), "`**` matches zero segments");
+        assert!(pattern("/www/**").matches(&path("/www/")));
+        assert!(pattern("/www/**").matches(&path("/www/a/b/")));
+        assert!(!pattern("/www/**").matches(&path("/wwwx")));
+        assert!(pattern("/**").matches(&path("/")));
+        assert!(pattern("/{a}/x/**").matches(&path("/q/x")));
     }
 
     #[test]
@@ -261,7 +269,7 @@ mod tests {
         assert_eq!(order("/a/b/**", "/a/**"), Ordering::Greater);
         assert_eq!(order("/{x}", "/{y}"), Ordering::Equal);
         let items = [pattern("/**"), pattern("/hits"), pattern("/{x}")];
-        let best = |path| best(&items, |item| item, path).map(Pattern::as_str);
+        let best = |path| best(&items, |item| item, &self::path(path)).map(Pattern::as_str);
         assert_eq!(best("/hits"), Some("/hits"));
         assert_eq!(best("/other"), Some("/{x}"));
         assert_eq!(best("/a/b"), Some("/**"));

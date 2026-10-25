@@ -1075,11 +1075,13 @@ mod tests {
         )
         .unwrap();
         let o = &h.objects[0];
-        assert_eq!(o.serving("/hits").unwrap().path.as_str(), "/hits");
-        assert_eq!(o.serving("/").unwrap().path.as_str(), "/**");
-        assert_eq!(o.need("/net/tcp").unwrap().at.as_str(), "/net/tcp");
-        assert_eq!(o.need("/www").unwrap().at.as_str(), "/**");
-        assert!(o.need("/net/tcp").unwrap().entry("/").is_none(), "`{{conn}}` is never empty");
+        let path = |text| protocol::path::PathName::parse(text).unwrap();
+        let at = |text| protocol::path::MountPoint::parse(text).unwrap();
+        assert_eq!(o.serving(&path("/hits")).unwrap().path.as_str(), "/hits");
+        assert_eq!(o.serving(&path("/")).unwrap().path.as_str(), "/**");
+        assert_eq!(o.need(&at("/net/tcp")).unwrap().at.as_str(), "/net/tcp");
+        assert_eq!(o.need(&at("/www")).unwrap().at.as_str(), "/**");
+        assert!(o.need(&at("/net/tcp")).unwrap().entry(&path("/")).is_none(), "`{{conn}}` is never empty");
     }
 
     #[test]

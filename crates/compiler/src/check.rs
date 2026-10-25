@@ -5,7 +5,7 @@
 
 use crate::iface::{self, Header, Loader, Object, Trait};
 use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos, Value};
-use protocol::{namespace::Namespace, path, status::Status, verb::Verb};
+use protocol::{namespace::Namespace, path::{MountPoint, PathName}, status::Status, verb::Verb};
 use protocol::pattern::Pattern;
 use protocol::payload::{self, Payload};
 pub use image::program::*;
@@ -76,10 +76,10 @@ struct Pending {
     /// is from.
     node: usize,
     export: bool,
-    at: String,
+    at: MountPoint,
     /// A path in `from`'s view: the instance of an image, or `None` for the root.
     from: Option<usize>,
-    path: String,
+    path: PathName,
     read_only: bool,
     pos: Pos,
 }
@@ -294,7 +294,7 @@ impl Builder<'_> {
             }
             for b in &inst.binds {
                 let at = clean_mount_point(&b.at)?;
-                let path = path::clean(&b.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", b.path.pos, b.path.path))?;
+                let path = clean_path(&b.path)?;
                 self.pending.push(Pending { node, export: false, at, from: image, path, read_only: b.read_only, pos: b.at.pos });
             }
             if let TypeRef::Builtin(b) = &self.nodes[node].ty
@@ -331,7 +331,7 @@ impl Builder<'_> {
         }
         if let Some(i) = image {
             for e in &img.exports {
-                let path = path::clean(&e.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", e.path.pos, e.path.path))?;
+                let path = clean_path(&e.path)?;
                 let at = clean_mount_point(e.at.as_ref().unwrap_or(&e.path))?;
                 self.pending.push(Pending { node: i, export: true, at, from: Some(i), path, read_only: e.read_only, pos: e.path.pos });
             }
@@ -364,10 +364,10 @@ impl Builder<'_> {
                 bail!(err_at(&id, format!("`{}` isn't the runtime's {name}; import it from env", id.name)));
             }
             let at = clean_mount_point(&n.at)?;
-            let decl = MountDecl { at: at.clone(), target: self.nodes.len(), path: "/".into(), read_only: false, bound: false };
+            let decl = MountDecl { at: at.clone(), target: self.nodes.len(), path: PathName::root(), read_only: false, bound: false };
             push_mount(&mut self.view, decl, n.at.pos, "the image's view")?;
             let ty = TypeRef::Builtin(name);
-            self.nodes.push(Node { name: at, unit, ty, decl: None, mounts: vec![], written: vec![], exports: vec![], config: None });
+            self.nodes.push(Node { name: at.into(), unit, ty, decl: None, mounts: vec![], written: vec![], exports: vec![], config: None });
         }
         Ok(())
     }
@@ -576,8 +576,8 @@ impl Builder<'_> {
         for (i, node) in self.nodes.iter().enumerate() {
             let TypeRef::Image(u) = node.ty else { continue };
             for need in self.units[u].scope.needs.iter().filter(|n| n.at.is_literal()) {
-                let filled = node.mounts.iter().any(|m| need.at.matches(&m.at))
-                    || self.pending.iter().any(|p| p.node == i && !p.export && need.at.matches(&p.at));
+                let filled = node.mounts.iter().any(|m| need.at.matches(m.at.path()))
+                    || self.pending.iter().any(|p| p.node == i && !p.export && need.at.matches(p.at.path()));
                 if !filled {
                     let pos = node.decl.as_ref().map(|d| d.name.pos).unwrap_or(Pos { line: 0, col: 0 });
                     bail!("{pos}: `{}` needs something mounted at `{}`", node.name, need.at);
@@ -679,7 +679,7 @@ impl Builder<'_> {
         let mut configs: Vec<Vec<(Pos, Arg)>> = vec![vec![]; n];
         for r in std::mem::take(&mut self.requests) {
             let req = &r.request;
-            let full = path::clean(&req.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", req.path.pos, req.path.path))?;
+            let full = clean_path(&req.path)?;
             let view = r.image.unwrap_or(n);
             let to = ns.resolve(view, &full).map_err(|_| anyhow!("{}: nothing is mounted at `{full}` in the image's view", req.path.pos))?;
             if to.read_only && !req.verb.is_safe() {
@@ -698,7 +698,7 @@ impl Builder<'_> {
                 None => (None, None),
             };
             let configured = matches!(&self.nodes[to.instance].ty, TypeRef::Builtin(b) if CONFIGURED.contains(&b.as_str()));
-            if configured && req.verb == Verb::Write && to.path == "/" {
+            if configured && req.verb == Verb::Write && to.path == PathName::root() {
                 configs[to.instance].push((req.verb_pos, body.ok_or_else(|| anyhow!("{}: a config needs text", req.verb_pos))?));
                 continue;
             }
@@ -753,7 +753,7 @@ impl Builder<'_> {
             let target = &self.nodes[m.target].name;
             let Some(full) = interfaces.get(&type_names[m.target]) else { continue };
             let mut served = full.clone();
-            served.serves = below(full, &m.path, "/");
+            served.serves = below(full, &m.path, &MountPoint::root());
             for e in &need.entries {
                 for r in &e.requests {
                     if m.read_only && !r.verb.is_safe() {
@@ -769,7 +769,7 @@ impl Builder<'_> {
             }
         }
         for need in obj.needs.iter().filter(|n| n.at.is_literal()) {
-            if !mounts.iter().any(|m| need.at.matches(&m.at)) {
+            if !mounts.iter().any(|m| need.at.matches(m.at.path())) {
                 bail!("{pos}: `{name}` needs something mounted at `{}`", need.at);
             }
         }
@@ -786,7 +786,7 @@ fn served(interfaces: &BTreeMap<String, Object>, type_names: &[String], e: &Moun
 }
 
 /// What `obj` serves below `path`, put under the mount point `at`.
-fn below(obj: &Object, path: &str, at: &str) -> Vec<iface::Entry> {
+fn below(obj: &Object, path: &PathName, at: &MountPoint) -> Vec<iface::Entry> {
     obj.serves
         .iter()
         .filter_map(|e| {
@@ -796,12 +796,16 @@ fn below(obj: &Object, path: &str, at: &str) -> Vec<iface::Entry> {
         .collect()
 }
 
-fn clean_mount_point(p: &image_definition::Path) -> Result<String> {
-    path::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
+fn clean_path(p: &image_definition::Path) -> Result<PathName> {
+    PathName::parse(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
+}
+
+fn clean_mount_point(p: &image_definition::Path) -> Result<MountPoint> {
+    MountPoint::parse(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
 }
 
 fn mount_decl(at: &image_definition::Path, target: usize, read_only: bool) -> Result<MountDecl> {
-    Ok(MountDecl { at: clean_mount_point(at)?, target, path: "/".into(), read_only, bound: false })
+    Ok(MountDecl { at: clean_mount_point(at)?, target, path: PathName::root(), read_only, bound: false })
 }
 
 /// Adds `decl` to `mounts`, which `whose` names in errors.
@@ -817,7 +821,7 @@ fn push_mount(mounts: &mut Vec<MountDecl>, decl: MountDecl, pos: Pos, whose: &st
 /// what `obj` serves there.
 fn check_request(
     r: &image_definition::Request,
-    path: &str,
+    path: &PathName,
     name: &str,
     obj: &Object,
     body: Option<&Arg>,
@@ -896,7 +900,7 @@ fn builtin_kind(name: &str, includes: &[image_definition::Include]) -> Result<Ki
             let mut decls = vec![];
             for inc in includes {
                 let at = match &inc.at {
-                    Some(p) => Some(clean_mount_point(p)?),
+                    Some(p) => Some(clean_mount_point(p)?.into()),
                     None => None,
                 };
                 decls.push(IncludeDecl { source: inc.source.clone(), at });
@@ -927,6 +931,14 @@ fn content_type(id: &Ident) -> Result<String> {
 mod tests {
     use super::*;
     use format_bson::{Bson, wire};
+
+    fn at(text: &str) -> MountPoint {
+        MountPoint::parse(text).unwrap()
+    }
+
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
 
 
     fn formats() -> Formats {
@@ -1124,7 +1136,7 @@ mod tests {
     }
 
     fn mount(at: &str, target: usize, read_only: bool) -> MountDecl {
-        MountDecl { at: at.into(), target, path: "/".into(), read_only, bound: false }
+        MountDecl { at: self::at(at), target, path: PathName::root(), read_only, bound: false }
     }
 
     fn bound(at: &str, target: usize, read_only: bool) -> MountDecl {
@@ -1160,7 +1172,7 @@ mod tests {
     #[test]
     fn binds_give_what_a_path_means_in_the_images_view() {
         let p = check_src(&format!("{HEADER} instance b : B  mount /b b  instance a : A {{ bind /x /b/sub readonly  mount /c cons }}")).unwrap();
-        assert_eq!(p.instances[2].mounts, [MountDecl { at: "/x".into(), target: 1, path: "/sub".into(), read_only: true, bound: true }, mount("/c", 0, false)]);
+        assert_eq!(p.instances[2].mounts, [MountDecl { at: at("/x"), target: 1, path: path("/sub"), read_only: true, bound: true }, mount("/c", 0, false)]);
         let d = describe(&p, &|_| None, &|_| false);
         assert!(d.contains("a     sees /x → b/sub ro, /c → cons\n"), "{d}");
     }
@@ -1507,7 +1519,7 @@ mod tests {
         let (web, a) = (1, 3);
         assert_eq!(p.instances[web].mounts, [mount("/out", 0, false), mount("/a", a, false)], "its view: its need, then its own mounts");
         let Kind::Image { exports } = &p.instances[web].kind else { panic!("{:?}", p.instances[web].kind) };
-        assert_eq!(*exports, [MountDecl { at: "/exported".into(), target: a, path: "/x".into(), read_only: false, bound: false }]);
+        assert_eq!(*exports, [MountDecl { at: at("/exported"), target: a, path: path("/x"), read_only: false, bound: false }]);
         assert_eq!(p.instances[a].mounts, [bound("/out", 0, false)], "a bind through the need, to what the parent mounted there");
         let served: Vec<String> = p.interfaces[&p.instances[web].type_name].serves.iter().map(|e| e.to_string()).collect();
         assert_eq!(served, ["/exported write text/plain"], "it serves what it exports, and nothing else");
@@ -1563,7 +1575,7 @@ mod tests {
         .unwrap();
         let c = p.instances.iter().position(|i| i.name == "c").unwrap();
         let a = p.instances.iter().position(|i| i.name == "web.a").unwrap();
-        assert_eq!(p.instances[c].mounts, [MountDecl { at: "/e".into(), target: a, path: "/x".into(), read_only: false, bound: true }]);
+        assert_eq!(p.instances[c].mounts, [MountDecl { at: at("/e"), target: a, path: path("/x"), read_only: false, bound: true }]);
     }
 
     #[test]

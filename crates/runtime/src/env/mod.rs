@@ -19,7 +19,7 @@ pub use packed::Packed;
 pub use tcp::{MemoryListener, Tcp};
 
 use image::program::{Instance, Kind};
-use protocol::{status::Status, verb::Verb};
+use protocol::{path::PathName, status::Status, verb::Verb};
 use image::pack::Pack;
 use protocol::payload::Payload;
 use anyhow::{Context, Result};
@@ -122,11 +122,11 @@ impl EnvObject {
     }
 
     /// Serves request `req`. `out` is for printing.
-    pub fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
+    pub fn serve(&mut self, req: u32, verb: Verb, path: &PathName, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
         // Their config is taken from the image's write of their root before
         // they are made; changing it while they run isn't supported yet.
         let configured = matches!(self, EnvObject::Tcp(_) | EnvObject::Files(_) | EnvObject::MemoryListener(_));
-        if configured && verb == Verb::Write && path == "/" {
+        if configured && verb == Verb::Write && *path == PathName::root() {
             return Ok(vec![Reply::fail(req, Status::NOT_SUPPORTED)]);
         }
         Ok(match self {

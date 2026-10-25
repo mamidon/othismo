@@ -5,7 +5,7 @@
 use crate::header::Object;
 use anyhow::{Context, Result, bail};
 use format::AllSchemas;
-use protocol::{namespace::Resolved, verb::Verb};
+use protocol::{namespace::Resolved, path::{MountPoint, PathName}, verb::Verb};
 use protocol::payload::Payload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -167,22 +167,17 @@ pub struct Instance {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MountDecl {
-    /// Clean, absolute.
-    pub at: String,
+    pub at: MountPoint,
     pub target: usize,
     /// The path in the target's served tree that is put there: `/` for
     /// all of it, or another for a bind.
-    #[serde(default = "root")]
-    pub path: String,
+    #[serde(default = "PathName::root")]
+    pub path: PathName,
     pub read_only: bool,
     /// Made by a `bind`: what something else already holds, passed on.
     /// Otherwise it is a `mount`, and the target is held here.
     #[serde(default)]
     pub bound: bool,
-}
-
-fn root() -> String {
-    "/".into()
 }
 
 impl MountDecl {
@@ -197,8 +192,8 @@ pub struct Startup {
     /// the root image's.
     pub image: Option<usize>,
     pub verb: Verb,
-    /// Clean, in the image's view.
-    pub path: String,
+    /// In the image's view.
+    pub path: PathName,
     pub body: Option<Arg>,
 }
 
@@ -303,7 +298,7 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>, skip: &dyn
     let width = (0..p.instances.len()).filter(|&i| shown(i)).map(|i| p.instances[i].name.len()).max().unwrap_or(0);
     let target = |m: &MountDecl| {
         let name = &p.instances[m.target].name;
-        if m.path == "/" { name.clone() } else { format!("{name}{}", m.path) }
+        if m.path == PathName::root() { name.clone() } else { format!("{name}{}", m.path) }
     };
     let mut out = String::new();
     for (i, inst) in p.instances.iter().enumerate().filter(|(i, _)| shown(*i)) {

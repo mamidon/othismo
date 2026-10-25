@@ -176,9 +176,9 @@ fn paths(w: &World, here: Viewpoint, verb: Verb, partial: &str, listed: &dyn Fn(
     // What is served there.
     let mut wants = None;
     if let Ok(r) = w.resolve(here, dir) {
-        let listing = listed(r.instance, &r.path);
+        let listing = listed(r.instance, r.path.as_str());
         if listing.is_none() {
-            wants = Some((r.instance, r.path.clone()));
+            wants = Some((r.instance, r.path.to_string()));
         }
         let mut names: Vec<(String, bool)> = listing.unwrap_or_default().into_iter().map(|s| (s.name, s.is_directory)).collect();
         let (known, patterns) = w.known_under(r.instance, &r.path);
