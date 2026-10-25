@@ -2,7 +2,7 @@
 //! requests made from a point of view. Needs the AssemblyScript modules
 //! built first: `task test`.
 
-use othismo::ns::Status;
+use othismo::status::Status;
 use othismo::runtime::{Answered, Options};
 use othismo::shell::session::{Event, Outcome, Session};
 use std::io::Write;

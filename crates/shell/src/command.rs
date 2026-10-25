@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use format::{AllSchemas, Formats};
-use protocol::ns::Verb;
+use protocol::verb::Verb;
 use protocol::payload::{self, Payload};
 use syntax::image_definition::{self, Literal};
 

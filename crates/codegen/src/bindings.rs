@@ -6,7 +6,7 @@
 
 use compiler::iface::{self, Entry, Header};
 use format::{Format, Schemas};
-use protocol::ns::Verb;
+use protocol::verb::Verb;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 

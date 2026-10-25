@@ -5,7 +5,7 @@
 
 use crate::iface::{self, Header, Loader, Object, Trait};
 use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos, Value};
-use protocol::ns::{self, Namespace, Status, Verb};
+use protocol::{namespace::Namespace, path, status::Status, verb::Verb};
 use protocol::pattern::Pattern;
 use protocol::payload::{self, Payload};
 pub use image::program::*;
@@ -294,7 +294,7 @@ impl Builder<'_> {
             }
             for b in &inst.binds {
                 let at = clean_mount_point(&b.at)?;
-                let path = ns::clean(&b.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", b.path.pos, b.path.path))?;
+                let path = path::clean(&b.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", b.path.pos, b.path.path))?;
                 self.pending.push(Pending { node, export: false, at, from: image, path, read_only: b.read_only, pos: b.at.pos });
             }
             if let TypeRef::Builtin(b) = &self.nodes[node].ty
@@ -331,7 +331,7 @@ impl Builder<'_> {
         }
         if let Some(i) = image {
             for e in &img.exports {
-                let path = ns::clean(&e.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", e.path.pos, e.path.path))?;
+                let path = path::clean(&e.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", e.path.pos, e.path.path))?;
                 let at = clean_mount_point(e.at.as_ref().unwrap_or(&e.path))?;
                 self.pending.push(Pending { node: i, export: true, at, from: Some(i), path, read_only: e.read_only, pos: e.path.pos });
             }
@@ -679,7 +679,7 @@ impl Builder<'_> {
         let mut configs: Vec<Vec<(Pos, Arg)>> = vec![vec![]; n];
         for r in std::mem::take(&mut self.requests) {
             let req = &r.request;
-            let full = ns::clean(&req.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", req.path.pos, req.path.path))?;
+            let full = path::clean(&req.path.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", req.path.pos, req.path.path))?;
             let view = r.image.unwrap_or(n);
             let to = ns.resolve(view, &full).map_err(|_| anyhow!("{}: nothing is mounted at `{full}` in the image's view", req.path.pos))?;
             if to.read_only && !req.verb.is_safe() {
@@ -797,7 +797,7 @@ fn below(obj: &Object, path: &str, at: &str) -> Vec<iface::Entry> {
 }
 
 fn clean_mount_point(p: &image_definition::Path) -> Result<String> {
-    ns::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
+    path::mount_point(&p.path).map_err(|_| anyhow!("{}: `{}` is not a clean absolute path", p.pos, p.path))
 }
 
 fn mount_decl(at: &image_definition::Path, target: usize, read_only: bool) -> Result<MountDecl> {
@@ -998,7 +998,7 @@ mod tests {
     /// Every request there is, of every verb, with a payload of any type or
     /// none, answered with anything: what a permissive module serves.
     pub(crate) fn anything() -> String {
-        let reqs: Vec<String> = ns::VERBS
+        let reqs: Vec<String> = protocol::verb::VERBS
             .iter()
             .flat_map(|v| match v {
                 Verb::Stat | Verb::List => vec![v.to_string()],

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Fixture, module, run_image};
-use othismo::ns::{Status, Verb};
+use othismo::{status::Status, verb::Verb};
 use othismo::payload::Payload;
 use othismo::runtime::Options;
 
@@ -285,7 +285,7 @@ fn script_wat(s: &Script) -> String {
 /// with anything: what a scripted module serves, and what it needs of
 /// another.
 fn anything(safe_only: bool) -> String {
-    let verbs = othismo::ns::VERBS.iter().filter(|v| !safe_only || v.is_safe());
+    let verbs = othismo::verb::VERBS.iter().filter(|v| !safe_only || v.is_safe());
     let reqs: Vec<String> = verbs
         .flat_map(|v| match v {
             Verb::Stat | Verb::List => vec![v.to_string()],

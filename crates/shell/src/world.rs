@@ -9,7 +9,7 @@
 //! from a root.
 
 use image::program::Kind;
-use protocol::ns::{Namespace, Resolved, Status, Verb};
+use protocol::{namespace::{Namespace, Resolved}, status::Status, verb::Verb};
 use runtime::operator::{How, InstanceInfo, Link, Snapshot};
 use std::collections::VecDeque;
 

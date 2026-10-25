@@ -1,7 +1,7 @@
 //! Instantiates a built [`Pack`] and runs its message loop.
 //!
 //! Every message is a request to a path or a reply to one. A request is
-//! resolved in the sender's view (see `protocol::ns`) when it is made, and
+//! resolved in the sender's view (see `protocol::namespace`) when it is made, and
 //! queued for the instance that serves it. Replies go back to whoever made
 //! the request, tagged with the ticket the caller was given.
 //!
@@ -24,7 +24,7 @@ use image::pack::Pack;
 use crate::env::{self, EnvObject, Incoming, Reply};
 use crate::operator::{Command, How, InstanceInfo, Link, Notice, Snapshot};
 use image::header as iface;
-use protocol::ns::{self, Namespace, Resolved, Status, Verb};
+use protocol::{namespace::{self, Namespace, Resolved}, path, status::Status, verb::{self, Verb}};
 use protocol::payload::Payload;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
@@ -445,7 +445,7 @@ impl<'p> Runtime<'p> {
                 i.mounts.iter().chain(exports).map(|m| m.target).collect()
             })
             .collect();
-        let order = ns::start_order(&mounts);
+        let order = namespace::start_order(&mounts);
         for &i in &order {
             if let Object::Wasm(obj) = &mut self.objects[i] {
                 obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;
@@ -479,7 +479,7 @@ impl<'p> Runtime<'p> {
     pub fn snapshot(&self) -> Snapshot {
         let shared = self.shared.borrow();
         let p = self.program;
-        let link = |decls: &[image::program::MountDecl], m: &ns::Mount| {
+        let link = |decls: &[image::program::MountDecl], m: &namespace::Mount| {
             let how = match decls.iter().find(|d| d.at == m.at && d.resolved() == m.target) {
                 Some(d) if d.bound => How::Bind,
                 Some(_) => How::Mount,
@@ -583,7 +583,7 @@ impl<'p> Runtime<'p> {
                 shared.request(Requester::Operator { id, operator: image.is_some() }, to, verb, body);
             }
             Command::Look { id, inst, verb, path } => {
-                let to = match ns::clean(&path) {
+                let to = match path::clean(&path) {
                     _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::Invalid),
                     Ok(path) => Ok(Resolved { inst, path, read_only: false }),
                     Err(status) => Err(status),
@@ -633,7 +633,7 @@ impl<'p> Runtime<'p> {
                         let mut bytes = path.as_bytes().to_vec();
                         bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
-                        let flags = if operator { ns::OPERATOR } else { 0 };
+                        let flags = if operator { verb::OPERATOR } else { 0 };
                         let args = (req as i32, verb as i32, flags, path.len() as i32, ty.len() as i32, body.len() as i32);
                         let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.serve.call(&mut obj.store, args)?));
                         res.map_err(|e| self.failed(to, &doing, e))?;
@@ -841,7 +841,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let (src, at) = (read_path(&mut caller, src, src_len)?, read_path(&mut caller, at, at_len)?);
             let mut shared = caller.data().shared.borrow_mut();
             Ok(status_code(match (src, at) {
-                (Some(src), Some(at)) => shared.ns.bind(me, &src, &at, flags & ns::READ_ONLY != 0),
+                (Some(src), Some(at)) => shared.ns.bind(me, &src, &at, flags & verb::READ_ONLY != 0),
                 _ => Err(Status::Invalid),
             }))
         },
@@ -860,7 +860,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let (at, src) = (read_path(&mut caller, at, at_len)?, read_path(&mut caller, src, src_len)?);
             let mut shared = caller.data().shared.borrow_mut();
             Ok(status_code(match (at, src) {
-                (Some(at), Some(src)) => shared.ns.expose(me, &at, &src, flags & ns::READ_ONLY != 0),
+                (Some(at), Some(src)) => shared.ns.expose(me, &at, &src, flags & verb::READ_ONLY != 0),
                 _ => Err(Status::Invalid),
             }))
         },

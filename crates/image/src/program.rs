@@ -5,7 +5,7 @@
 use crate::header::Object;
 use anyhow::{Context, Result, bail};
 use format::AllSchemas;
-use protocol::ns::{self, Resolved, Verb};
+use protocol::{namespace::{self, Resolved}, verb::Verb};
 use protocol::payload::Payload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -204,7 +204,7 @@ pub fn describe(p: &Program, about: &dyn Fn(usize) -> Option<String>, skip: &dyn
             edges.iter().map(|m| (m.target, m.read_only)).collect()
         })
         .collect();
-    let reach = ns::reach(&mounts);
+    let reach = namespace::reach(&mounts);
     let shown = |i: usize| !skip(i) && !matches!(p.instances[i].kind, Kind::Image { .. });
     let width = (0..p.instances.len()).filter(|&i| shown(i)).map(|i| p.instances[i].name.len()).max().unwrap_or(0);
     let target = |m: &MountDecl| {

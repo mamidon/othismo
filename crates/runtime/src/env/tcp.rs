@@ -1,7 +1,7 @@
 //! `Listener`, run as a TCP listener and the connections it accepts.
 
 use super::{Event, Incoming, Reply, What};
-use protocol::ns::{Status, Verb};
+use protocol::{status::Status, verb::Verb};
 use protocol::payload::{OCTETS, Payload};
 use anyhow::{Context, Result};
 use std::collections::HashMap;

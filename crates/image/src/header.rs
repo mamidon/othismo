@@ -3,7 +3,7 @@
 //! header stands on its own, so it can travel inside a module and inside a
 //! built image; the compiler resolves them from `.oth` files.
 
-use protocol::ns::{Status, Verb};
+use protocol::{status::Status, verb::Verb};
 use protocol::pattern::{self, Pattern};
 use protocol::payload::{self, ANY, STAT, STAT_NAME};
 use serde::{Deserialize, Serialize};

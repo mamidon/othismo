@@ -19,7 +19,7 @@ use crate::runtime::Answered;
 use format::AllSchemas;
 use image::header::Object;
 use image::program::Kind;
-use protocol::ns::{Resolved, Verb};
+use protocol::{namespace::Resolved, verb::Verb};
 use protocol::payload::Payload;
 use std::sync::mpsc::{self, Receiver, Sender};
 

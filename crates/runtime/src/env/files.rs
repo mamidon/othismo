@@ -1,7 +1,7 @@
 //! `Files`, run as read-only access to one directory on the host.
 
 use super::Reply;
-use protocol::ns::{Status, Verb};
+use protocol::{status::Status, verb::Verb};
 use protocol::payload::{Payload, Stat};
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};

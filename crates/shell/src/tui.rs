@@ -11,7 +11,7 @@ use crate::session::{Event, Outcome, Session};
 use crate::show;
 use crate::world::{Class, Hop, Source, Viewpoint, World};
 use anyhow::Result;
-use protocol::ns::{Resolved, Status, Verb};
+use protocol::{namespace::Resolved, status::Status, verb::Verb};
 use protocol::payload::Stat;
 use ratatui::Frame;
 use ratatui::crossterm::event::{

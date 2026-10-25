@@ -10,7 +10,7 @@ use crate::world::{Hop, Viewpoint, World};
 use anyhow::{Result, anyhow, bail};
 use format::Formats;
 use image::pack::Pack;
-use protocol::ns::Verb;
+use protocol::verb::Verb;
 use protocol::payload::Payload;
 use runtime::operator::{self, Command, Notice, Operator};
 use runtime::{Answered, Io, Options, Runtime};

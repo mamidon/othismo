@@ -788,7 +788,7 @@ impl Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::ns::{Status, Verb};
+    use protocol::{status::Status, verb::Verb};
     use protocol::payload::ANY;
 
     const GREETER: &str = r#"

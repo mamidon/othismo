@@ -6,165 +6,9 @@
 //! (parts of its own view it has spliced into its served tree) until the
 //! request lands on the instance that will serve it.
 
-use serde::{Deserialize, Serialize};
+use crate::path::{clean, mount_point};
+use crate::status::Status;
 use std::collections::BTreeMap;
-use std::fmt;
-
-/// What a request asks for. Safe verbs never change anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Verb {
-    Read,
-    Stat,
-    List,
-    Watch,
-    Write,
-    Create,
-    Remove,
-}
-
-pub const VERBS: [Verb; 7] = [
-    Verb::Read,
-    Verb::Stat,
-    Verb::List,
-    Verb::Watch,
-    Verb::Write,
-    Verb::Create,
-    Verb::Remove,
-];
-
-impl Verb {
-    pub fn from_i32(v: i32) -> Option<Verb> {
-        VERBS.get(usize::try_from(v).ok()?).copied()
-    }
-
-    pub fn is_safe(self) -> bool {
-        matches!(self, Verb::Read | Verb::Stat | Verb::List | Verb::Watch)
-    }
-
-    /// The verb's name as written in images: `read`, `write`, ...
-    pub fn keyword(self) -> &'static str {
-        match self {
-            Verb::Read => "read",
-            Verb::Stat => "stat",
-            Verb::List => "list",
-            Verb::Watch => "watch",
-            Verb::Write => "write",
-            Verb::Create => "create",
-            Verb::Remove => "remove",
-        }
-    }
-
-    pub fn from_keyword(s: &str) -> Option<Verb> {
-        VERBS.into_iter().find(|v| v.keyword() == s)
-    }
-}
-
-impl fmt::Display for Verb {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.keyword())
-    }
-}
-
-/// The outcome carried by every reply: `Ok`, or an error, whose number is
-/// its errno (see `docs/protocol.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    Ok,
-    NotFound,
-    ReadOnly,
-    NotSupported,
-    IsDirectory,
-    NotDirectory,
-    Exists,
-    Invalid,
-    Io,
-    Forbidden,
-    UnsupportedType,
-}
-
-const STATUSES: [Status; 11] = [
-    Status::Ok,
-    Status::NotFound,
-    Status::ReadOnly,
-    Status::NotSupported,
-    Status::IsDirectory,
-    Status::NotDirectory,
-    Status::Exists,
-    Status::Invalid,
-    Status::Io,
-    Status::Forbidden,
-    Status::UnsupportedType,
-];
-
-impl Status {
-    pub fn from_i32(v: i32) -> Option<Status> {
-        STATUSES.get(usize::try_from(v).ok()?).copied()
-    }
-
-    /// The status's name as written in docs and output: `ok`, `not_found`, ...
-    pub fn name(self) -> &'static str {
-        match self {
-            Status::Ok => "ok",
-            Status::NotFound => "not_found",
-            Status::ReadOnly => "read_only",
-            Status::NotSupported => "not_supported",
-            Status::IsDirectory => "is_directory",
-            Status::NotDirectory => "not_directory",
-            Status::Exists => "exists",
-            Status::Invalid => "invalid",
-            Status::Io => "io",
-            Status::Forbidden => "forbidden",
-            Status::UnsupportedType => "unsupported_type",
-        }
-    }
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// `Flag.ReadOnly` in the SDK: only safe verbs pass.
-pub const READ_ONLY: i32 = 1;
-
-/// A request's flag saying whoever runs the image made it: its startup
-/// requests, and those an image makes of what it instantiates. No object
-/// can set it.
-pub const OPERATOR: i32 = 1;
-
-/// Normalizes an absolute path: collapses `//` and `.` segments and keeps a
-/// trailing `/`. Relative paths, `..` segments and NUL bytes are `Invalid`.
-pub fn clean(path: &str) -> Result<String, Status> {
-    if !path.starts_with('/') || path.contains('\0') {
-        return Err(Status::Invalid);
-    }
-    let mut out = String::with_capacity(path.len());
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => return Err(Status::Invalid),
-            seg => {
-                out.push('/');
-                out.push_str(seg);
-            }
-        }
-    }
-    if out.is_empty() || path.ends_with('/') || path.ends_with("/.") {
-        out.push('/');
-    }
-    Ok(out)
-}
-
-/// A clean path to mount something at. Unlike a request path, a trailing
-/// `/` means nothing here: `/www/` and `/www` are the same mount point.
-pub fn mount_point(at: &str) -> Result<String, Status> {
-    let mut at = clean(at)?;
-    if at.len() > 1 && at.ends_with('/') {
-        at.pop();
-    }
-    Ok(at)
-}
 
 /// The rest of `path` below `prefix` (`""` for an exact match), if `prefix`
 /// is a prefix on a segment boundary.
@@ -384,23 +228,6 @@ pub fn start_order(mounts: &[Vec<usize>]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn cleaning_paths() {
-        assert_eq!(clean("/").unwrap(), "/");
-        assert_eq!(clean("//a//b/./c").unwrap(), "/a/b/c");
-        assert_eq!(clean("/a/b/").unwrap(), "/a/b/");
-        assert_eq!(clean("/a/.").unwrap(), "/a/");
-        assert_eq!(clean("/."), Ok("/".into()));
-        assert_eq!(clean("a/b"), Err(Status::Invalid));
-        assert_eq!(clean(""), Err(Status::Invalid));
-        assert_eq!(clean("/a/../b"), Err(Status::Invalid));
-        assert_eq!(clean("/a/.."), Err(Status::Invalid));
-        assert_eq!(clean("/a\0"), Err(Status::Invalid));
-        assert_eq!(clean("/a/..b/c.").unwrap(), "/a/..b/c.", "only whole `..` segments are refused");
-        assert_eq!(mount_point("/a/b/").unwrap(), "/a/b");
-        assert_eq!(mount_point("/").unwrap(), "/");
-    }
-
     fn r(inst: usize, path: &str, read_only: bool) -> Result<Resolved, Status> {
         Ok(Resolved { inst, path: path.into(), read_only })
     }
@@ -517,16 +344,5 @@ mod tests {
         assert_eq!(start_order(&[vec![], vec![], vec![]]), vec![0, 1, 2]);
         // 0 and 1 mount each other; 0 comes first in the image, so starts last.
         assert_eq!(start_order(&[vec![1], vec![0]]), vec![1, 0]);
-    }
-
-    #[test]
-    fn verbs_and_statuses_round_trip() {
-        for (i, v) in VERBS.iter().enumerate() {
-            assert_eq!(Verb::from_i32(i as i32), Some(*v));
-            assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
-        }
-        assert_eq!(Verb::from_i32(7), None);
-        assert_eq!(Status::from_i32(-1), None);
-        assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Create.is_safe());
     }
 }

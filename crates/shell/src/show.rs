@@ -3,7 +3,7 @@
 //! length; an error by its code, errno and description.
 
 use format::Formats;
-use protocol::ns::Status;
+use protocol::status::Status;
 use protocol::payload::{Payload, Stat, json_string};
 use runtime::Answered;
 

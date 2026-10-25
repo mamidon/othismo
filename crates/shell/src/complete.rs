@@ -11,7 +11,7 @@ use crate::command::HELP;
 use crate::session::Session;
 use crate::world::{Viewpoint, World};
 use format::{AllSchemas, Formats, MessageDoc};
-use protocol::ns::{Status, VERBS, Verb};
+use protocol::{status::Status, verb::{VERBS, Verb}};
 use protocol::payload::Stat;
 
 #[derive(Debug, Clone, Default, PartialEq)]

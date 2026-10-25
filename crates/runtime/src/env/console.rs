@@ -1,7 +1,7 @@
 //! `Console`, run on the host's stdin and stdout.
 
 use super::{Event, Incoming, Reply, What};
-use protocol::ns::{Status, Verb};
+use protocol::{status::Status, verb::Verb};
 use protocol::payload::Payload;
 use crate::render;
 use anyhow::{Context, Result};

@@ -3,7 +3,7 @@
 //! Needs the AssemblyScript modules built first: `task test`.
 
 use othismo::operator::{self, Command, How, Notice, Operator, Snapshot};
-use othismo::ns::{Status, Verb};
+use othismo::{status::Status, verb::Verb};
 use othismo::payload::Payload;
 use othismo::runtime::{Answered, Io, Options, Runtime};
 use std::io::Write;

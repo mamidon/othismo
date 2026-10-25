@@ -3,7 +3,7 @@
 
 use super::Reply;
 use super::files::{mime, name};
-use protocol::ns::{self, Status, Verb};
+use protocol::{path, status::Status, verb::Verb};
 use image::pack::Hash;
 use protocol::payload::{Payload, Stat};
 use image::tree::{Node, Tree};
@@ -27,7 +27,7 @@ impl Packed {
             return vec![Reply::fail(req, Status::ReadOnly)];
         }
         let as_dir = path.len() > 1 && path.ends_with('/');
-        let Ok(path) = ns::mount_point(path) else { return vec![Reply::fail(req, Status::Invalid)] };
+        let Ok(path) = path::mount_point(path) else { return vec![Reply::fail(req, Status::Invalid)] };
         // As on disk, `file/` names nothing.
         let node = self.tree.get(&path).filter(|n| !as_dir || **n == Node::Dir);
         let Some(node) = node else { return vec![Reply::fail(req, Status::NotFound)] };
