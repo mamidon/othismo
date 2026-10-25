@@ -4,7 +4,7 @@
 //! segment, and `**` (last only) matches the rest of the path, zero or more
 //! segments. A trailing `/` is an empty last segment, so it counts, as it
 //! does everywhere else. Where several patterns match, the most specific
-//! wins: see [`Pattern::specificity`].
+//! wins: see [`PathPattern::specificity`].
 
 use crate::path::{MountPoint, PathName};
 use serde::{Deserialize, Serialize};
@@ -20,13 +20,13 @@ enum Segment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct Pattern {
+pub struct PathPattern {
     text: String,
     segments: Vec<Segment>,
 }
 
-impl Pattern {
-    pub fn parse(text: &str) -> Result<Pattern, String> {
+impl PathPattern {
+    pub fn parse(text: &str) -> Result<PathPattern, String> {
         let Some(rest) = text.strip_prefix('/') else {
             return Err(format!("`{text}` is not a path pattern; it must start with `/`"));
         };
@@ -54,7 +54,7 @@ impl Pattern {
             };
             segments.push(segment);
         }
-        Ok(Pattern { text: text.to_string(), segments })
+        Ok(PathPattern { text: text.to_string(), segments })
     }
 
     pub fn as_str(&self) -> &str {
@@ -83,7 +83,7 @@ impl Pattern {
     /// Which of two patterns wins where both match: a literal over
     /// `{name}`, `{name}` over `**`, and longer over shorter, so `/www`
     /// wins over `/www/**`. `Equal` only for patterns of the same shape.
-    pub fn specificity(&self, other: &Pattern) -> Ordering {
+    pub fn specificity(&self, other: &PathPattern) -> Ordering {
         // Running out where the other has `**` is the more specific of the two.
         fn rank(segment: Option<&Segment>) -> u8 {
             match segment {
@@ -103,7 +103,7 @@ impl Pattern {
     }
 
     /// Whether every path `other` matches, this one matches too.
-    pub fn covers(&self, other: &Pattern) -> bool {
+    pub fn covers(&self, other: &PathPattern) -> bool {
         fn covers(pattern: &[Segment], other: &[Segment]) -> bool {
             match (pattern.first(), other.first()) {
                 (Some(Segment::Rest), _) => true,
@@ -141,19 +141,24 @@ impl Pattern {
         Some(if rest.is_empty() { String::new() } else { format!("/{}", rest.join("/")) })
     }
 
-    /// `relative`, a pattern [`below`](Pattern::below) another path, put
+    /// `relative`, a pattern [`below`](PathPattern::below) another path, put
     /// under the mount point `at` instead.
-    pub fn under(at: &MountPoint, relative: &str) -> Pattern {
+    pub fn under(at: &MountPoint, relative: &str) -> PathPattern {
         let text = match (at.as_str(), relative) {
             ("/", "") => "/".to_string(),
             ("/", relative) => relative.to_string(),
             (at, relative) => format!("{at}{relative}"),
         };
-        Pattern::parse(&text).expect("a pattern under a mount point is a pattern")
+        PathPattern::parse(&text).expect("a pattern under a mount point is a pattern")
+    }
+
+    /// The most specific of `items` whose pattern matches `path`.
+    pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &PathPattern, path: &PathName) -> Option<&'a T> {
+        items.iter().filter(|item| pattern(item).matches(path)).max_by(|a, b| pattern(a).specificity(pattern(b)))
     }
 
     /// Whether some path matches both.
-    pub fn overlaps(&self, other: &Pattern) -> bool {
+    pub fn overlaps(&self, other: &PathPattern) -> bool {
         fn overlaps(pattern: &[Segment], other: &[Segment]) -> bool {
             match (pattern.first(), other.first()) {
                 (Some(Segment::Rest), _) | (_, Some(Segment::Rest)) => true,
@@ -170,26 +175,21 @@ impl Pattern {
     }
 }
 
-/// The most specific of `items` whose pattern matches `path`.
-pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &Pattern, path: &PathName) -> Option<&'a T> {
-    items.iter().filter(|item| pattern(item).matches(path)).max_by(|a, b| pattern(a).specificity(pattern(b)))
-}
-
-impl fmt::Display for Pattern {
+impl fmt::Display for PathPattern {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.text)
     }
 }
 
-impl TryFrom<String> for Pattern {
+impl TryFrom<String> for PathPattern {
     type Error = String;
-    fn try_from(text: String) -> Result<Pattern, String> {
-        Pattern::parse(&text)
+    fn try_from(text: String) -> Result<PathPattern, String> {
+        PathPattern::parse(&text)
     }
 }
 
-impl From<Pattern> for String {
-    fn from(pattern: Pattern) -> String {
+impl From<PathPattern> for String {
+    fn from(pattern: PathPattern) -> String {
         pattern.text
     }
 }
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn patterns_move_below_one_path_and_under_another() {
-        let below = |pattern: &str, path: &str| Pattern::parse(pattern).unwrap().below(&self::path(path));
+        let below = |pattern: &str, path: &str| PathPattern::parse(pattern).unwrap().below(&self::path(path));
         assert_eq!(below("/hosts/{name}", "/hosts").as_deref(), Some("/{name}"));
         assert_eq!(below("/hosts", "/hosts").as_deref(), Some(""));
         assert_eq!(below("/hosts/", "/hosts").as_deref(), Some("/"));
@@ -217,15 +217,15 @@ mod tests {
         assert_eq!(below("/x", "/"), Some("/x".into()));
         assert_eq!(below("/", "/").as_deref(), Some(""));
         assert_eq!(below("/hits", "/hosts"), None);
-        assert_eq!(Pattern::under(&at("/web"), "/{name}").as_str(), "/web/{name}");
-        assert_eq!(Pattern::under(&at("/web"), "").as_str(), "/web");
-        assert_eq!(Pattern::under(&at("/web/"), "/").as_str(), "/web/");
-        assert_eq!(Pattern::under(&at("/"), "").as_str(), "/");
-        assert_eq!(Pattern::under(&at("/"), "/x").as_str(), "/x");
+        assert_eq!(PathPattern::under(&at("/web"), "/{name}").as_str(), "/web/{name}");
+        assert_eq!(PathPattern::under(&at("/web"), "").as_str(), "/web");
+        assert_eq!(PathPattern::under(&at("/web/"), "/").as_str(), "/web/");
+        assert_eq!(PathPattern::under(&at("/"), "").as_str(), "/");
+        assert_eq!(PathPattern::under(&at("/"), "/x").as_str(), "/x");
     }
 
-    fn pattern(text: &str) -> Pattern {
-        Pattern::parse(text).unwrap()
+    fn pattern(text: &str) -> PathPattern {
+        PathPattern::parse(text).unwrap()
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn rejects_malformed_patterns() {
         for bad in ["hits", "/a/**/b", "/a//b", "/a/../b", "/{}", "/{a-b}", "/a{b}", "/a**"] {
-            assert!(Pattern::parse(bad).is_err(), "{bad}");
+            assert!(PathPattern::parse(bad).is_err(), "{bad}");
         }
     }
 
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(order("/a/b/**", "/a/**"), Ordering::Greater);
         assert_eq!(order("/{x}", "/{y}"), Ordering::Equal);
         let items = [pattern("/**"), pattern("/hits"), pattern("/{x}")];
-        let best = |path| best(&items, |item| item, &self::path(path)).map(Pattern::as_str);
+        let best = |path| PathPattern::best(&items, |item| item, &self::path(path)).map(PathPattern::as_str);
         assert_eq!(best("/hits"), Some("/hits"));
         assert_eq!(best("/other"), Some("/{x}"));
         assert_eq!(best("/a/b"), Some("/**"));

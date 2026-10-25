@@ -6,7 +6,7 @@
 use crate::iface::{self, Header, Loader, Object, Trait};
 use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos, Value};
 use protocol::{namespace::Namespace, path::{MountPoint, PathName}, status::Status, verb::Verb};
-use protocol::pattern::Pattern;
+use protocol::pattern::PathPattern;
 use protocol::payload::{self, Payload};
 pub use image::program::*;
 use anyhow::{Context, Result, anyhow, bail};
@@ -791,7 +791,7 @@ fn below(obj: &Object, path: &PathName, at: &MountPoint) -> Vec<iface::Entry> {
         .iter()
         .filter_map(|e| {
             let rel = e.path.below(path)?;
-            Some(iface::Entry { path: Pattern::under(at, &rel), doc: e.doc.clone(), requests: e.requests.clone() })
+            Some(iface::Entry { path: PathPattern::under(at, &rel), doc: e.doc.clone(), requests: e.requests.clone() })
         })
         .collect()
 }
@@ -855,7 +855,7 @@ fn serves_need(served: &Object, need: &iface::Need, want: &iface::Entry, r: &ifa
     let covering = served.serves.iter().filter(|e| e.path.covers(&want.path) && takes(e));
     let Some(cover) = covering.max_by(|a, b| a.path.specificity(&b.path)) else { return false };
     // Paths a more specific entry of the need's own block covers are that entry's concern.
-    let narrower = |p: &Pattern| {
+    let narrower = |p: &PathPattern| {
         need.entries.iter().any(|n| n.path.specificity(&want.path) == Ordering::Greater && n.path.covers(p))
     };
     served

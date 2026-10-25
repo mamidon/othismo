@@ -5,7 +5,7 @@
 
 use protocol::{status::Status, verb::Verb};
 use protocol::path::{MountPoint, PathName};
-use protocol::pattern::{self, Pattern};
+use protocol::pattern::PathPattern;
 use protocol::payload::{self, ANY, STAT, STAT_NAME};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -77,7 +77,7 @@ pub struct Object {
 /// `needs <mount point pattern> { entries }`, or `needs <mount point> <Trait>`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Need {
-    pub at: Pattern,
+    pub at: PathPattern,
     pub doc: String,
     pub entries: Vec<Entry>,
     /// The trait it names, if it is a trait's whole tree.
@@ -88,7 +88,7 @@ pub struct Need {
 /// A path pattern and the requests it takes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
-    pub path: Pattern,
+    pub path: PathPattern,
     pub doc: String,
     pub requests: Vec<Request>,
 }
@@ -153,7 +153,7 @@ impl Trait {
 impl Object {
     /// The entry serving `path`, a path in the object's served tree.
     pub fn serving(&self, path: &PathName) -> Option<&Entry> {
-        pattern::best(&self.serves, |e| &e.path, path)
+        PathPattern::best(&self.serves, |e| &e.path, path)
     }
 
     /// Whether `other` has the same shape: what it serves, needs and declares.
@@ -163,13 +163,13 @@ impl Object {
 
     /// The `needs` block for the mount point `at`.
     pub fn need(&self, at: &MountPoint) -> Option<&Need> {
-        pattern::best(&self.needs, |n| &n.at, at.path())
+        PathPattern::best(&self.needs, |n| &n.at, at.path())
     }
 }
 
 impl Need {
     pub fn entry(&self, path: &PathName) -> Option<&Entry> {
-        pattern::best(&self.entries, |e| &e.path, path)
+        PathPattern::best(&self.entries, |e| &e.path, path)
     }
 }
 

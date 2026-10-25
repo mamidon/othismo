@@ -13,7 +13,7 @@ use syntax::image_definition::{self, Ident, ImageDefinition, Pos, Source};
 pub use image::header::*;
 pub use syntax::decl::*;
 use format::{Format, Formats, Schemas};
-use protocol::pattern::Pattern;
+use protocol::pattern::PathPattern;
 use protocol::payload::{self, STAT, STAT_NAME};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -526,7 +526,7 @@ impl Shapes<'_> {
 
     /// The entries `decls` stand for, with each trait's tree put at its path.
     fn entries(&mut self, decls: &[EntryDecl]) -> Result<Vec<Entry>> {
-        let mut written: Vec<Pattern> = vec![];
+        let mut written: Vec<PathPattern> = vec![];
         let mut out: Vec<Entry> = vec![];
         for e in decls {
             let path = pattern(&e.path)?;
@@ -573,7 +573,7 @@ fn merge(entries: &mut Vec<Entry>, entry: Entry, pos: Pos) -> Result<()> {
 
 /// `inner`, a pattern in a trait's tree, as a pattern under `at`, where the
 /// trait is put.
-fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
+fn rebase(at: &PathPattern, inner: &PathPattern, pos: Pos) -> Result<PathPattern> {
     if at.as_str().ends_with("**") {
         bail!("{pos}: a trait can't be put under `{at}`; `**` only comes last");
     }
@@ -582,7 +582,7 @@ fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
         ("/", inner) => inner.to_string(),
         (at, inner) => format!("{}{inner}", at.trim_end_matches('/')),
     };
-    Pattern::parse(&text).map_err(|e| anyhow::anyhow!("{pos}: {e}"))
+    PathPattern::parse(&text).map_err(|e| anyhow::anyhow!("{pos}: {e}"))
 }
 
 fn reserve(name: &Ident) -> Result<()> {
@@ -608,12 +608,12 @@ fn content_type(id: &Ident) -> Result<String> {
     Ok(id.name.clone())
 }
 
-fn pattern(p: &image_definition::Path) -> Result<Pattern> {
-    Pattern::parse(&p.path).map_err(|e| anyhow::anyhow!("{}: {e}", p.pos))
+fn pattern(p: &image_definition::Path) -> Result<PathPattern> {
+    PathPattern::parse(&p.path).map_err(|e| anyhow::anyhow!("{}: {e}", p.pos))
 }
 
 /// Two patterns that match exactly the same paths.
-fn same(a: &Pattern, b: &Pattern) -> bool {
+fn same(a: &PathPattern, b: &PathPattern) -> bool {
     a.specificity(b) == Ordering::Equal && a.covers(b) && b.covers(a)
 }
 
