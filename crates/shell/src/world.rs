@@ -181,7 +181,7 @@ impl World {
         let mut out = vec![];
         let all = std::iter::once(Viewpoint::Root).chain((0..self.snapshot.instances.len()).map(Viewpoint::Instance));
         for at in all {
-            for l in self.holds(at).filter(|l| l.target.inst == i) {
+            for l in self.holds(at).filter(|l| l.target.instance == i) {
                 out.push((at, l.at.as_str()));
             }
         }
@@ -202,9 +202,9 @@ impl World {
         let (mut seen, mut queue) = (vec![], VecDeque::from([root]));
         while let Some(at) = queue.pop_front() {
             for l in self.holds(at) {
-                if !seen.contains(&l.target.inst) {
-                    seen.push(l.target.inst);
-                    queue.push_back(Viewpoint::Instance(l.target.inst));
+                if !seen.contains(&l.target.instance) {
+                    seen.push(l.target.instance);
+                    queue.push_back(Viewpoint::Instance(l.target.instance));
                 }
             }
         }
@@ -220,7 +220,7 @@ impl World {
                 break;
             }
             for l in self.holds(at) {
-                let next = Viewpoint::Instance(l.target.inst);
+                let next = Viewpoint::Instance(l.target.instance);
                 if !prev.iter().any(|(v, _)| *v == next) {
                     prev.push((next, Some((at, l))));
                     queue.push_back(next);
@@ -275,7 +275,7 @@ impl World {
             let need = self.instance(i).interface.need(&mount).ok_or(Status::NotFound)?;
             need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
         }
-        let entry = self.instance(r.inst).interface.serving(&r.path).ok_or(Status::NotFound)?;
+        let entry = self.instance(r.instance).interface.serving(&r.path).ok_or(Status::NotFound)?;
         if !operator && entry.takes_verb(verb, false) == Err(Status::Forbidden) {
             return Err(Status::Forbidden);
         }

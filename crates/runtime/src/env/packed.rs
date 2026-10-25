@@ -53,7 +53,7 @@ impl Packed {
 /// so it changes exactly when they do.
 fn stat(name: &str, node: &Node) -> Stat {
     match node {
-        Node::Dir => Stat::dir(name),
+        Node::Dir => Stat::directory(name),
         Node::File { hash, size } => {
             let version = hash.get(..16).and_then(|h| u64::from_str_radix(h, 16).ok()).unwrap_or(0);
             Stat { version, ..Stat::file(name, *size, mime(Path::new(name))) }
@@ -85,6 +85,6 @@ mod tests {
         assert_eq!(status(p.serve(1, Verb::Watch, "/")), [Status::NotSupported]);
         assert_eq!(status(p.serve(1, Verb::Create, "/b")), [Status::ReadOnly]);
         let stat = Stat::decode(&p.serve(1, Verb::Stat, "/a.txt").remove(0).body.unwrap()).unwrap();
-        assert_eq!((stat.name.as_str(), stat.length, stat.ty.as_str()), ("a.txt", 1, "text/plain; charset=utf-8"));
+        assert_eq!((stat.name.as_str(), stat.length, stat.content_type.as_str()), ("a.txt", 1, "text/plain; charset=utf-8"));
     }
 }

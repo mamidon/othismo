@@ -80,7 +80,7 @@ fn root() -> String {
 
 impl MountDecl {
     pub fn resolved(&self) -> Resolved {
-        Resolved { inst: self.target, path: self.path.clone(), read_only: self.read_only }
+        Resolved { instance: self.target, path: self.path.clone(), read_only: self.read_only }
     }
 }
 
@@ -116,7 +116,7 @@ impl Arg {
     pub fn text(&self) -> Result<String> {
         let p = self.payload()?;
         if !p.is_text() {
-            bail!("expected text, and it is {}", p.ty);
+            bail!("expected text, and it is {}", p.content_type);
         }
         String::from_utf8(p.bytes).context("its text isn't UTF-8")
     }

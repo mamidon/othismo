@@ -176,12 +176,12 @@ fn paths(w: &World, here: Viewpoint, verb: Verb, partial: &str, listed: &dyn Fn(
     // What is served there.
     let mut wants = None;
     if let Ok(r) = w.resolve(here, dir) {
-        let listing = listed(r.inst, &r.path);
+        let listing = listed(r.instance, &r.path);
         if listing.is_none() {
-            wants = Some((r.inst, r.path.clone()));
+            wants = Some((r.instance, r.path.clone()));
         }
-        let mut names: Vec<(String, bool)> = listing.unwrap_or_default().into_iter().map(|s| (s.name, s.dir)).collect();
-        let (known, patterns) = w.known_under(r.inst, &r.path);
+        let mut names: Vec<(String, bool)> = listing.unwrap_or_default().into_iter().map(|s| (s.name, s.is_directory)).collect();
+        let (known, patterns) = w.known_under(r.instance, &r.path);
         for k in known {
             match names.iter_mut().find(|(n, _)| *n == k.name) {
                 Some((_, d)) => *d |= k.dir,
@@ -195,7 +195,7 @@ fn paths(w: &World, here: Viewpoint, verb: Verb, partial: &str, listed: &dyn Fn(
         }
         for pat in patterns {
             let usable = w.check(here, verb, &format!("{dir}_")).is_ok();
-            let mut item = Item::new(pat.segment.clone(), "").doc(format!("{dir}{}", pat.segment), pat.doc, source(w, r.inst));
+            let mut item = Item::new(pat.segment.clone(), "").doc(format!("{dir}{}", pat.segment), pat.doc, source(w, r.instance));
             item.detail = if usable { "type a name".into() } else { why(w, here, verb, &format!("{dir}_")) };
             item.usable = usable;
             item.placeholder = true;
@@ -213,13 +213,13 @@ fn paths(w: &World, here: Viewpoint, verb: Verb, partial: &str, listed: &dyn Fn(
 fn path_item(w: &World, here: Viewpoint, verb: Verb, path: &str, is_dir: bool, name: &str) -> Item {
     let checked = w.check(here, verb, path);
     let r = w.resolve(here, path).ok();
-    let owner = r.as_ref().map(|r| w.instance(r.inst).name.clone()).unwrap_or_default();
-    let entry = r.as_ref().and_then(|r| w.instance(r.inst).interface.serving(&r.path).cloned());
+    let owner = r.as_ref().map(|r| w.instance(r.instance).name.clone()).unwrap_or_default();
+    let entry = r.as_ref().and_then(|r| w.instance(r.instance).interface.serving(&r.path).cloned());
     let (signature, doc) = match &entry {
         Some(e) => (e.to_string(), e.doc.clone()),
-        None => (path.to_string(), r.as_ref().map(|r| w.instance(r.inst).interface.doc.clone()).unwrap_or_default()),
+        None => (path.to_string(), r.as_ref().map(|r| w.instance(r.instance).interface.doc.clone()).unwrap_or_default()),
     };
-    let src = r.as_ref().map(|r| source(w, r.inst)).unwrap_or_default();
+    let src = r.as_ref().map(|r| source(w, r.instance)).unwrap_or_default();
     let item = match (&checked, is_dir) {
         (Ok(_), _) => Item::new(name, &format!("{path} ")).detail(owner),
         (Err(_), true) => {
@@ -263,7 +263,7 @@ fn payload(s: &Session, here: Viewpoint, verb: Verb, path: &str, rest: &str, end
         Ok(r) => r,
         Err(_) => return hint(&format!("The runtime would refuse it: {}.", why(w, here, verb, path))),
     };
-    let entry = w.instance(r.inst).interface.serving(&r.path).cloned();
+    let entry = w.instance(r.instance).interface.serving(&r.path).cloned();
     let requests: Vec<_> = entry.iter().flat_map(|e| e.requests.iter().filter(|q| q.verb == verb).cloned()).collect();
     if requests.iter().all(|q| q.body.is_none()) {
         let answers: Vec<String> = requests.iter().filter_map(|q| q.answer.as_ref().map(|a| format!("{}{}", a.message.clone().unwrap_or(a.ty.clone()), if a.stream { "*" } else { "" }))).collect();
@@ -271,7 +271,7 @@ fn payload(s: &Session, here: Viewpoint, verb: Verb, path: &str, rest: &str, end
         return hint(&format!("⏎ to send: {} takes no payload.{answers}", verb.keyword()));
     }
     let messages = &w.snapshot.messages;
-    let src = source(w, r.inst);
+    let src = source(w, r.instance);
     let rest_trimmed = rest.trim_start();
     let at = end - rest_trimmed.len();
     // The type

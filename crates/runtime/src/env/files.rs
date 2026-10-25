@@ -89,7 +89,7 @@ fn resolve(root: &Path, path: &str) -> std::result::Result<PathBuf, Status> {
 /// What `stat` says of `path` on disk, which a listing calls `name`.
 fn stat(path: &Path, name: &str) -> std::io::Result<Stat> {
     let md = std::fs::metadata(path)?;
-    Ok(if md.is_dir() { Stat::dir(name) } else { Stat::file(name, md.len(), mime(path)) })
+    Ok(if md.is_dir() { Stat::directory(name) } else { Stat::file(name, md.len(), mime(path)) })
 }
 
 /// The last segment of a path in the served tree; empty for the root.
@@ -150,7 +150,7 @@ mod tests {
 
         let info = Stat::decode(&f.serve(1, Verb::Stat, "/sub/b.css").remove(0).body.unwrap()).unwrap();
         assert_eq!(info, Stat::file("b.css", 1, "text/css; charset=utf-8"));
-        assert!(Stat::decode(&f.serve(1, Verb::Stat, "/sub/").remove(0).body.unwrap()).unwrap().dir);
+        assert!(Stat::decode(&f.serve(1, Verb::Stat, "/sub/").remove(0).body.unwrap()).unwrap().is_directory);
         let list: Vec<(String, bool)> = f
             .serve(1, Verb::List, "/")
             .into_iter()

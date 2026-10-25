@@ -604,7 +604,7 @@ impl App {
         if open {
             place.open.insert(path);
             if let Some(t) = target {
-                self.list(t.inst, &t.path);
+                self.list(t.instance, &t.path);
             }
         } else {
             place.open.remove(&path);
@@ -635,7 +635,7 @@ impl App {
         let open: Vec<String> = self.place().open.iter().cloned().collect();
         for path in open {
             if let Ok(r) = self.session.world.resolve(here, &path) {
-                self.list(r.inst, &r.path);
+                self.list(r.instance, &r.path);
             }
         }
         self.rebuild();
@@ -645,7 +645,7 @@ impl App {
         let Some(row) = self.selected() else { return };
         let at = match (row.root, &row.target) {
             (Some(root), _) => root,
-            (None, Some(t)) => Viewpoint::Instance(t.inst),
+            (None, Some(t)) => Viewpoint::Instance(t.instance),
             _ => return,
         };
         let via = row.path.clone();
@@ -810,7 +810,7 @@ impl App {
                 continue;
             }
             let link = w.view(here).iter().find(|l| l.at == p).expect("a mount point of the view");
-            let t = link.target.inst;
+            let t = link.target.instance;
             let is_open = open.is_some_and(|o| o.contains(&p));
             let how = match link.how {
                 How::Mount => Span::raw("mount"),
@@ -852,18 +852,18 @@ impl App {
         // What a listing says is there, then what is known without one: what
         // it has exposed, which its server never sees requests for, and what
         // its header says it serves.
-        let mut entries: Vec<(Stat, Source)> = match self.listings.get(&(r.inst, r.path.clone())) {
+        let mut entries: Vec<(Stat, Source)> = match self.listings.get(&(r.instance, r.path.clone())) {
             Some(Listing::Got(stats)) => stats.iter().map(|s| (s.clone(), Source::Listed)).collect(),
             _ => vec![],
         };
-        let (known, patterns) = w.known_under(r.inst, &r.path);
+        let (known, patterns) = w.known_under(r.instance, &r.path);
         for k in known {
             match entries.iter_mut().find(|(s, _)| s.name == k.name) {
-                Some((s, _)) => s.dir |= k.dir,
-                None => entries.push((if k.dir { Stat::dir(&k.name) } else { Stat::file(&k.name, 0, "") }, k.from)),
+                Some((s, _)) => s.is_directory |= k.dir,
+                None => entries.push((if k.dir { Stat::directory(&k.name) } else { Stat::file(&k.name, 0, "") }, k.from)),
             }
         }
-        let status = match self.listings.get(&(r.inst, r.path.clone())) {
+        let status = match self.listings.get(&(r.instance, r.path.clone())) {
             None | Some(Listing::Waiting) => Some("listing…".to_string()),
             Some(Listing::Failed(s)) => Some(format!("not listed: {}", s.name())),
             Some(Listing::Got(_)) if entries.is_empty() && patterns.is_empty() => Some("empty".to_string()),
@@ -881,11 +881,11 @@ impl App {
             let (pre, more) = (format!("{guide}{}", if last { "└── " } else { "├── " }), format!("{guide}{}", if last { "    " } else { "│   " }));
             let p = if path.ends_with('/') { format!("{path}{}", s.name) } else { format!("{path}/{}", s.name) };
             let target = w.resolve(here, &p).ok();
-            let exposed = target.as_ref().is_some_and(|t| t.inst != r.inst);
-            let is_open = s.dir && open.is_some_and(|o| o.contains(&p));
-            let owner = target.as_ref().map_or(r.inst, |t| t.inst);
-            let name = if s.dir { format!("{}/", s.name) } else { s.name.clone() };
-            let marker = if s.dir { if is_open { "▾ " } else { "▸ " } } else { "  " };
+            let exposed = target.as_ref().is_some_and(|t| t.instance != r.instance);
+            let is_open = s.is_directory && open.is_some_and(|o| o.contains(&p));
+            let owner = target.as_ref().map_or(r.instance, |t| t.instance);
+            let name = if s.is_directory { format!("{}/", s.name) } else { s.name.clone() };
+            let marker = if s.is_directory { if is_open { "▾ " } else { "▸ " } } else { "  " };
             let object = if exposed { styled(w.instance(owner).name.clone(), class_colour(w.class(owner))) } else { dim(w.instance(owner).name.clone()) };
             let info = match source {
                 Source::Listed => Line::default(),
@@ -898,15 +898,15 @@ impl App {
                 target: target.clone(),
                 stat: (*source == Source::Listed).then(|| s.clone()),
                 mount: None,
-                can_open: s.dir,
+                can_open: s.is_directory,
                 cells: vec![
                     Line::from(vec![dim(pre), dim(marker), Span::raw(name)]),
                     Line::from(object),
-                    Line::from(dim(if s.dir { "dir" } else { "file" })),
+                    Line::from(dim(if s.is_directory { "dir" } else { "file" })),
                     Line::from(if exposed { Span::raw("expose") } else { Span::raw("") }),
                     access(target.as_ref().is_some_and(|t| t.read_only)),
-                    Line::from(Span::raw(s.ty.clone())),
-                    Line::from(Span::raw(if s.dir || s.length == 0 { String::new() } else { size(s.length) })).right_aligned(),
+                    Line::from(Span::raw(s.content_type.clone())),
+                    Line::from(Span::raw(if s.is_directory || s.length == 0 { String::new() } else { size(s.length) })).right_aligned(),
                     Line::from(dim(version(s.version))).right_aligned(),
                     info,
                 ],
@@ -1134,24 +1134,24 @@ impl App {
                 lines.push(Line::from(styled(path, colour::PATH).add_modifier(Modifier::BOLD)));
                 if let Some(t) = &row.target {
                     let ro = if t.read_only { styled(" ro", colour::RO) } else { Span::raw("") };
-                    lines.push(Line::from(vec![dim("answered by "), styled(w.instance(t.inst).name.clone(), class_colour(w.class(t.inst))), dim(format!(" at {}", t.path)), ro]));
+                    lines.push(Line::from(vec![dim("answered by "), styled(w.instance(t.instance).name.clone(), class_colour(w.class(t.instance))), dim(format!(" at {}", t.path)), ro]));
                 }
                 if let Some(s) = &row.stat {
                     lines.push(Line::default());
                     lines.push(heading("STAT"));
                     lines.push(kv("name", Span::raw(s.name.clone())));
-                    lines.push(kv("kind", Span::raw(if s.dir { "dir" } else { "file" })));
+                    lines.push(kv("kind", Span::raw(if s.is_directory { "dir" } else { "file" })));
                     lines.push(kv("length", Span::raw(s.length.to_string())));
-                    lines.push(kv("type", if s.ty.is_empty() { dim("—") } else { Span::raw(s.ty.clone()) }));
+                    lines.push(kv("type", if s.content_type.is_empty() { dim("—") } else { Span::raw(s.content_type.clone()) }));
                     lines.push(kv("version", if s.version == 0 { dim("—") } else { Span::raw(s.version.to_string()) }));
                 }
                 if let Some(t) = &row.target {
                     lines.push(Line::default());
                     if row.mount.is_some() {
                         lines.push(heading("OBJECT"));
-                        lines.extend(object_lines(w, t.inst));
+                        lines.extend(object_lines(w, t.instance));
                     } else {
-                        let iface = &w.instance(t.inst).interface;
+                        let iface = &w.instance(t.instance).interface;
                         lines.push(heading("INTERFACE"));
                         match iface.serving(&t.path) {
                             Some(e) => {
@@ -1163,9 +1163,9 @@ impl App {
                             None => lines.push(Line::from(dim("Its header says nothing about this path."))),
                         }
                     }
-                    if w.has_view(Viewpoint::Instance(t.inst)) {
+                    if w.has_view(Viewpoint::Instance(t.instance)) {
                         lines.push(Line::default());
-                        lines.push(Line::from(dim(format!("⏎ to look from {}", w.instance(t.inst).name))));
+                        lines.push(Line::from(dim(format!("⏎ to look from {}", w.instance(t.instance).name))));
                     }
                 }
             }

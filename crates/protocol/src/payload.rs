@@ -20,24 +20,24 @@ pub const ANY: &str = "*/*";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payload {
-    /// Its content type, e.g. `text/plain`.
-    pub ty: String,
+    /// e.g. `text/plain`.
+    pub content_type: String,
     pub bytes: Vec<u8>,
 }
 
 impl Payload {
-    pub fn new(ty: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Payload {
-        Payload { ty: ty.into(), bytes: bytes.into() }
+    pub fn new(content_type: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Payload {
+        Payload { content_type: content_type.into(), bytes: bytes.into() }
     }
 
     /// `text/plain`.
-    pub fn text(s: &str) -> Payload {
-        Payload::new(TEXT, s.as_bytes())
+    pub fn text(text: &str) -> Payload {
+        Payload::new(TEXT, text.as_bytes())
     }
 
     /// Whether it is text of any kind, `text/*`.
     pub fn is_text(&self) -> bool {
-        fits("text/*", &self.ty)
+        fits("text/*", &self.content_type)
     }
 }
 
@@ -46,106 +46,111 @@ impl Payload {
 pub struct Stat {
     /// The last segment of its path.
     pub name: String,
-    pub dir: bool,
+    pub is_directory: bool,
     /// In bytes, or 0 for a directory or if it isn't known.
     pub length: u64,
     /// The content type a `read` would answer with, or empty.
-    pub ty: String,
+    pub content_type: String,
     /// Changes whenever what a `read` would answer changes, or 0.
     pub version: u64,
 }
 
 impl Stat {
-    pub fn file(name: &str, length: u64, ty: &str) -> Stat {
-        Stat { name: name.into(), dir: false, length, ty: ty.into(), version: 0 }
+    pub fn file(name: &str, length: u64, content_type: &str) -> Stat {
+        Stat { name: name.into(), is_directory: false, length, content_type: content_type.into(), version: 0 }
     }
 
-    pub fn dir(name: &str) -> Stat {
-        Stat { name: name.into(), dir: true, length: 0, ty: String::new(), version: 0 }
+    pub fn directory(name: &str) -> Stat {
+        Stat { name: name.into(), is_directory: true, length: 0, content_type: String::new(), version: 0 }
     }
 
     /// `name[s] kind[1] length[8] type[s] version[8]`, little-endian, where
     /// `[s]` is a string with a 2-byte length first.
     pub fn encode(&self) -> Payload {
-        let mut out = vec![];
-        string(&mut out, &self.name);
-        out.push(self.dir as u8);
-        out.extend_from_slice(&self.length.to_le_bytes());
-        string(&mut out, &self.ty);
-        out.extend_from_slice(&self.version.to_le_bytes());
-        Payload::new(STAT, out)
+        let mut bytes = vec![];
+        put_string(&mut bytes, &self.name);
+        bytes.push(self.is_directory as u8);
+        bytes.extend_from_slice(&self.length.to_le_bytes());
+        put_string(&mut bytes, &self.content_type);
+        bytes.extend_from_slice(&self.version.to_le_bytes());
+        Payload::new(STAT, bytes)
     }
 
-    /// The stat record in `p`, if it is a well-formed one.
-    pub fn decode(p: &Payload) -> Option<Stat> {
-        if p.ty != STAT {
+    /// The stat record in `payload`, if it is a well-formed one.
+    pub fn decode(payload: &Payload) -> Option<Stat> {
+        if payload.content_type != STAT {
             return None;
         }
-        let mut b = &p.bytes[..];
-        let name = take_string(&mut b)?;
-        let dir = match take(&mut b, 1)? {
+        let mut bytes = &payload.bytes[..];
+        let name = take_string(&mut bytes)?;
+        let is_directory = match take(&mut bytes, 1)? {
             [0] => false,
             [1] => true,
             _ => return None,
         };
-        let length = u64::from_le_bytes(take(&mut b, 8)?.try_into().ok()?);
-        let ty = take_string(&mut b)?;
-        let version = u64::from_le_bytes(take(&mut b, 8)?.try_into().ok()?);
-        b.is_empty().then_some(Stat { name, dir, length, ty, version })
+        let length = u64::from_le_bytes(take(&mut bytes, 8)?.try_into().ok()?);
+        let content_type = take_string(&mut bytes)?;
+        let version = u64::from_le_bytes(take(&mut bytes, 8)?.try_into().ok()?);
+        bytes.is_empty().then_some(Stat { name, is_directory, length, content_type, version })
     }
 }
 
-fn string(out: &mut Vec<u8>, s: &str) {
-    let len = u16::try_from(s.len()).expect("a stat record's strings are short");
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(s.as_bytes());
+fn put_string(bytes: &mut Vec<u8>, string: &str) {
+    let length = u16::try_from(string.len()).expect("a stat record's strings are short");
+    bytes.extend_from_slice(&length.to_le_bytes());
+    bytes.extend_from_slice(string.as_bytes());
 }
 
-fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
-    if b.len() < n {
+/// The first `count` of `bytes`, which are then left out of it.
+fn take<'a>(bytes: &mut &'a [u8], count: usize) -> Option<&'a [u8]> {
+    if bytes.len() < count {
         return None;
     }
-    let (head, rest) = b.split_at(n);
-    *b = rest;
+    let (head, rest) = bytes.split_at(count);
+    *bytes = rest;
     Some(head)
 }
 
-fn take_string(b: &mut &[u8]) -> Option<String> {
-    let len = u16::from_le_bytes(take(b, 2)?.try_into().ok()?);
-    String::from_utf8(take(b, len as usize)?.to_vec()).ok()
+fn take_string(bytes: &mut &[u8]) -> Option<String> {
+    let length = u16::from_le_bytes(take(bytes, 2)?.try_into().ok()?);
+    String::from_utf8(take(bytes, length as usize)?.to_vec()).ok()
 }
 
 /// A content type taken apart: its type and subtype, lowercase, and its
 /// parameters, with lowercase names.
-struct Parsed {
-    ty: String,
-    sub: String,
-    params: Vec<(String, String)>,
+struct ParsedContentType {
+    type_name: String,
+    subtype: String,
+    parameters: Vec<(String, String)>,
 }
 
-fn parse(ct: &str) -> Option<Parsed> {
-    let mut parts = ct.split(';');
-    let (ty, sub) = parts.next()?.trim().split_once('/')?;
+fn parse(content_type: &str) -> Option<ParsedContentType> {
+    let mut parts = content_type.split(';');
+    let (type_name, subtype) = parts.next()?.trim().split_once('/')?;
     let token = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "!#$&^_.+-".contains(c));
-    let ok = (ty == "*" && sub == "*") || (token(ty) && (sub == "*" || token(sub)));
-    if !ok {
+    let well_formed = (type_name == "*" && subtype == "*") || (token(type_name) && (subtype == "*" || token(subtype)));
+    if !well_formed {
         return None;
     }
-    let mut params = vec![];
-    for p in parts {
-        let (name, value) = p.trim().split_once('=')?;
+    let mut parameters = vec![];
+    for parameter in parts {
+        let (name, value) = parameter.trim().split_once('=')?;
         if !token(name.trim()) || value.trim().is_empty() {
             return None;
         }
-        params.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+        parameters.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
     }
-    Some(Parsed { ty: ty.to_ascii_lowercase(), sub: sub.to_ascii_lowercase(), params })
+    Some(ParsedContentType {
+        type_name: type_name.to_ascii_lowercase(),
+        subtype: subtype.to_ascii_lowercase(),
+        parameters,
+    })
 }
 
-/// Whether `ct` is a well-formed content type: `type/subtype`, `type/*` or
+/// Whether `content_type` is well-formed: `type/subtype`, `type/*` or
 /// `*/*`, optionally followed by `; name=value` parameters.
-pub fn valid(ct: &str) -> bool {
-    parse(ct).is_some()
+pub fn valid(content_type: &str) -> bool {
+    parse(content_type).is_some()
 }
 
 /// Whether a payload of content type `given` fits where `want` is written.
@@ -153,16 +158,17 @@ pub fn valid(ct: &str) -> bool {
 /// must be in `given` with the same value. A wildcard fits only an equal or
 /// wider wildcard: something that may be any text doesn't fit `text/plain`.
 pub fn fits(want: &str, given: &str) -> bool {
-    let (Some(w), Some(g)) = (parse(want), parse(given)) else { return false };
-    let ty = w.ty == "*" || (w.ty == g.ty && (w.sub == "*" || w.sub == g.sub));
-    ty && w.params.iter().all(|p| g.params.contains(p))
+    let (Some(want), Some(given)) = (parse(want), parse(given)) else { return false };
+    let types_fit = want.type_name == "*"
+        || (want.type_name == given.type_name && (want.subtype == "*" || want.subtype == given.subtype));
+    types_fit && want.parameters.iter().all(|parameter| given.parameters.contains(parameter))
 }
 
-/// `s` as a JSON string.
-pub fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+/// `text` as a JSON string.
+pub fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
-    for c in s.chars() {
+    for c in text.chars() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
@@ -207,15 +213,15 @@ mod tests {
 
     #[test]
     fn stat_records_round_trip() {
-        let s = Stat { name: "a.txt".into(), dir: false, length: 12, ty: "text/plain".into(), version: 7 };
-        let p = s.encode();
-        assert_eq!(p.ty, STAT);
-        assert_eq!(p.bytes.len(), 2 + 5 + 1 + 8 + 2 + 10 + 8);
-        assert_eq!(Stat::decode(&p), Some(s));
-        assert_eq!(Stat::decode(&Stat::dir("sub").encode()).unwrap().dir, true);
+        let stat = Stat { name: "a.txt".into(), is_directory: false, length: 12, content_type: "text/plain".into(), version: 7 };
+        let payload = stat.encode();
+        assert_eq!(payload.content_type, STAT);
+        assert_eq!(payload.bytes.len(), 2 + 5 + 1 + 8 + 2 + 10 + 8);
+        assert_eq!(Stat::decode(&payload), Some(stat));
+        assert_eq!(Stat::decode(&Stat::directory("sub").encode()).unwrap().is_directory, true);
         assert_eq!(Stat::decode(&Payload::new(STAT, vec![1])), None);
         assert_eq!(Stat::decode(&Payload::text("hi")), None);
-        let mut long = Stat::dir("x").encode();
+        let mut long = Stat::directory("x").encode();
         long.bytes.push(0);
         assert_eq!(Stat::decode(&long), None, "nothing may follow");
     }

@@ -26,8 +26,8 @@ pub const VERBS: [Verb; 7] = [
 ];
 
 impl Verb {
-    pub fn from_i32(v: i32) -> Option<Verb> {
-        VERBS.get(usize::try_from(v).ok()?).copied()
+    pub fn from_i32(number: i32) -> Option<Verb> {
+        VERBS.get(usize::try_from(number).ok()?).copied()
     }
 
     pub fn is_safe(self) -> bool {
@@ -47,8 +47,8 @@ impl Verb {
         }
     }
 
-    pub fn from_keyword(s: &str) -> Option<Verb> {
-        VERBS.into_iter().find(|v| v.keyword() == s)
+    pub fn from_keyword(keyword: &str) -> Option<Verb> {
+        VERBS.into_iter().find(|verb| verb.keyword() == keyword)
     }
 }
 
@@ -72,9 +72,9 @@ mod tests {
 
     #[test]
     fn verbs_round_trip() {
-        for (i, v) in VERBS.iter().enumerate() {
-            assert_eq!(Verb::from_i32(i as i32), Some(*v));
-            assert_eq!(Verb::from_keyword(v.keyword()), Some(*v));
+        for (number, verb) in VERBS.iter().enumerate() {
+            assert_eq!(Verb::from_i32(number as i32), Some(*verb));
+            assert_eq!(Verb::from_keyword(verb.keyword()), Some(*verb));
         }
         assert_eq!(Verb::from_i32(7), None);
         assert!(Verb::Watch.is_safe() && !Verb::Remove.is_safe() && !Verb::Create.is_safe());

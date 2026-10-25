@@ -10,11 +10,11 @@ pub fn line(p: &Payload) -> String {
         return String::from_utf8_lossy(&p.bytes).into_owned();
     }
     if let Some(s) = Stat::decode(p) {
-        let kind = if s.dir { "dir" } else { "file" };
-        return format!("stat {} {kind} {} {} {}", json_string(&s.name), s.length, json_string(&s.ty), s.version);
+        let kind = if s.is_directory { "dir" } else { "file" };
+        return format!("stat {} {kind} {} {} {}", json_string(&s.name), s.length, json_string(&s.content_type), s.version);
     }
     let n = p.bytes.len();
-    format!("{} ({n} byte{})", p.ty, if n == 1 { "" } else { "s" })
+    format!("{} ({n} byte{})", p.content_type, if n == 1 { "" } else { "s" })
 }
 
 #[cfg(test)]

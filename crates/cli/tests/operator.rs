@@ -128,7 +128,7 @@ fn a_snapshot_shows_every_view_and_how_each_link_was_made() {
     assert_eq!(names, ["/dev/cons", "greeter", "shouter"]);
     let link = |links: &[operator::Link], at: &str| links.iter().find(|l| l.at == at).cloned().unwrap();
     assert_eq!(link(&s.root, "/greeter").how, How::Mount);
-    assert_eq!(link(&s.root, "/greeter").target.inst, 1);
+    assert_eq!(link(&s.root, "/greeter").target.instance, 1);
     let greeter = &s.instances[1];
     assert_eq!(greeter.interface.name, "Greeter");
     assert_eq!(link(&greeter.view, "/dev/cons").how, How::Bind, "passed down from the root's need");

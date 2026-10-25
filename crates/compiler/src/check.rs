@@ -591,9 +591,9 @@ impl Builder<'_> {
             let mut left = vec![];
             for p in pending {
                 match ns.resolve(p.from.unwrap_or(n), &p.path) {
-                    Ok(mut r) if !self.is_image(r.inst) => {
+                    Ok(mut r) if !self.is_image(r.instance) => {
                         r.read_only |= p.read_only;
-                        let decl = MountDecl { at: p.at.clone(), target: r.inst, path: r.path.clone(), read_only: r.read_only, bound: !p.export };
+                        let decl = MountDecl { at: p.at.clone(), target: r.instance, path: r.path.clone(), read_only: r.read_only, bound: !p.export };
                         if p.export {
                             ns.expose_resolved(p.node, &p.at, r);
                             push_mount(&mut self.nodes[p.node].exports, decl, p.pos, "what the image exports")?;
@@ -697,13 +697,13 @@ impl Builder<'_> {
                 }
                 None => (None, None),
             };
-            let configured = matches!(&self.nodes[to.inst].ty, TypeRef::Builtin(b) if CONFIGURED.contains(&b.as_str()));
+            let configured = matches!(&self.nodes[to.instance].ty, TypeRef::Builtin(b) if CONFIGURED.contains(&b.as_str()));
             if configured && req.verb == Verb::Write && to.path == "/" {
-                configs[to.inst].push((req.verb_pos, body.ok_or_else(|| anyhow!("{}: a config needs text", req.verb_pos))?));
+                configs[to.instance].push((req.verb_pos, body.ok_or_else(|| anyhow!("{}: a config needs text", req.verb_pos))?));
                 continue;
             }
-            let name = self.nodes[to.inst].name.clone();
-            check_request(req, &to.path, &name, &interfaces[&type_names[to.inst]], body.as_ref(), message.as_deref(), &self.slots)?;
+            let name = self.nodes[to.instance].name.clone();
+            check_request(req, &to.path, &name, &interfaces[&type_names[to.instance]], body.as_ref(), message.as_deref(), &self.slots)?;
             startup.push(Startup { image: r.image, verb: req.verb, path: full, body });
         }
         for (i, node) in self.nodes.iter_mut().enumerate() {
@@ -910,7 +910,7 @@ fn builtin_kind(name: &str, includes: &[image_definition::Include]) -> Result<Ki
 /// The content type of what `arg` carries.
 fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
     match arg {
-        Arg::Payload(p) => &p.ty,
+        Arg::Payload(p) => &p.content_type,
         Arg::Slot(i) => &slots[*i].ty,
     }
 }

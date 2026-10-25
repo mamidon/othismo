@@ -126,7 +126,7 @@ impl Wat {
     /// arguments that pass one: all 0 for none.
     fn body(&mut self, body: &Option<Payload>) -> [String; 4] {
         let Some(p) = body else { return [k(0), k(0), k(0), k(0)] };
-        let (t, tl) = self.put(p.ty.as_bytes());
+        let (t, tl) = self.put(p.content_type.as_bytes());
         let (b, bl) = self.put(&p.bytes);
         [k(t), k(tl), k(b), k(bl)]
     }

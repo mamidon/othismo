@@ -33,7 +33,7 @@ fn join(base: &str, rest: &str) -> String {
 /// any mount or exposure on the way was read-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
-    pub inst: usize,
+    pub instance: usize,
     pub path: String,
     pub read_only: bool,
 }
@@ -60,56 +60,56 @@ impl Namespace {
         Namespace { views: vec![vec![]; n], exposed: vec![vec![]; n] }
     }
 
-    /// Mounts all of `target`'s served tree at `at` in `inst`'s view.
+    /// Mounts all of `target`'s served tree at `at` in `instance`'s view.
     /// Used to build views from the image, so `at` must already be a [`mount_point`].
-    pub fn mount(&mut self, inst: usize, at: &str, target: usize, read_only: bool) {
-        let target = Resolved { inst: target, path: "/".into(), read_only };
-        put(&mut self.views[inst], at.into(), target);
+    pub fn mount(&mut self, instance: usize, at: &str, target: usize, read_only: bool) {
+        let target = Resolved { instance: target, path: "/".into(), read_only };
+        put(&mut self.views[instance], at.into(), target);
     }
 
-    /// Puts what `target` names at `at` in `inst`'s view: part of another's
+    /// Puts what `target` names at `at` in `instance`'s view: part of another's
     /// served tree, already resolved. `at` must already be a [`mount_point`].
-    pub fn mount_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
-        put(&mut self.views[inst], at.into(), target);
+    pub fn mount_resolved(&mut self, instance: usize, at: &str, target: Resolved) {
+        put(&mut self.views[instance], at.into(), target);
     }
 
-    /// Splices what `target` names into `inst`'s served tree at `at`, which
+    /// Splices what `target` names into `instance`'s served tree at `at`, which
     /// must already be a [`mount_point`].
-    pub fn expose_resolved(&mut self, inst: usize, at: &str, target: Resolved) {
-        put(&mut self.exposed[inst], at.into(), target);
+    pub fn expose_resolved(&mut self, instance: usize, at: &str, target: Resolved) {
+        put(&mut self.exposed[instance], at.into(), target);
     }
 
-    /// `inst`'s view as it is now, mount point by mount point.
-    pub fn view(&self, inst: usize) -> &[Mount] {
-        &self.views[inst]
+    /// `instance`'s view as it is now, mount point by mount point.
+    pub fn view(&self, instance: usize) -> &[Mount] {
+        &self.views[instance]
     }
 
-    /// What `inst` has spliced into its served tree as it is now.
-    pub fn exposed(&self, inst: usize) -> &[Mount] {
-        &self.exposed[inst]
+    /// What `instance` has spliced into its served tree as it is now.
+    pub fn exposed(&self, instance: usize) -> &[Mount] {
+        &self.exposed[instance]
     }
 
-    /// Resolves `path` in `inst`'s view.
-    pub fn resolve(&self, inst: usize, path: &str) -> Result<Resolved, Status> {
+    /// Resolves `path` in `instance`'s view.
+    pub fn resolve(&self, instance: usize, path: &str) -> Result<Resolved, Status> {
         let path = clean(path)?;
-        let (m, rest) = longest(&self.views[inst], &path).ok_or(Status::NotFound)?;
+        let (m, rest) = longest(&self.views[instance], &path).ok_or(Status::NotFound)?;
         self.follow(Resolved { path: join(&m.target.path, rest), ..m.target.clone() })
     }
 
-    /// The mount point in `inst`'s view that `path` goes through, and the
+    /// The mount point in `instance`'s view that `path` goes through, and the
     /// rest of the path below it: `/` for the mount point itself.
-    pub fn mount_of(&self, inst: usize, path: &str) -> Option<(String, String)> {
+    pub fn mount_of(&self, instance: usize, path: &str) -> Option<(String, String)> {
         let path = clean(path).ok()?;
-        let (m, rest) = longest(&self.views[inst], &path)?;
+        let (m, rest) = longest(&self.views[instance], &path)?;
         Some((m.at.clone(), if rest.is_empty() { "/".to_string() } else { rest.to_string() }))
     }
 
     /// Follows exposures from where a request has landed to who serves it.
     fn follow(&self, mut r: Resolved) -> Result<Resolved, Status> {
         for _ in 0..MAX_HOPS {
-            let Some((m, rest)) = longest(&self.exposed[r.inst], &r.path) else { return Ok(r) };
+            let Some((m, rest)) = longest(&self.exposed[r.instance], &r.path) else { return Ok(r) };
             r = Resolved {
-                inst: m.target.inst,
+                instance: m.target.instance,
                 path: join(&m.target.path, rest),
                 read_only: r.read_only || m.target.read_only,
             };
@@ -117,29 +117,29 @@ impl Namespace {
         Err(Status::Invalid)
     }
 
-    /// Makes what `source` names in `inst`'s view also appear at `at`,
+    /// Makes what `source` names in `instance`'s view also appear at `at`,
     /// replacing any mount already there.
-    pub fn bind(&mut self, inst: usize, source: &str, at: &str, read_only: bool) -> Result<(), Status> {
-        let mut target = self.resolve(inst, source)?;
+    pub fn bind(&mut self, instance: usize, source: &str, at: &str, read_only: bool) -> Result<(), Status> {
+        let mut target = self.resolve(instance, source)?;
         target.read_only |= read_only;
-        put(&mut self.views[inst], mount_point(at)?, target);
+        put(&mut self.views[instance], mount_point(at)?, target);
         Ok(())
     }
 
-    pub fn unmount(&mut self, inst: usize, at: &str) -> Result<(), Status> {
+    pub fn unmount(&mut self, instance: usize, at: &str) -> Result<(), Status> {
         let at = mount_point(at)?;
-        let view = &mut self.views[inst];
+        let view = &mut self.views[instance];
         let before = view.len();
         view.retain(|m| m.at != at);
         if view.len() == before { Err(Status::NotFound) } else { Ok(()) }
     }
 
-    /// Splices what `source` names in `inst`'s view into `inst`'s served
+    /// Splices what `source` names in `instance`'s view into `instance`'s served
     /// tree at `at`. Requests there go straight to `source`.
-    pub fn expose(&mut self, inst: usize, at: &str, source: &str, read_only: bool) -> Result<(), Status> {
-        let mut target = self.resolve(inst, source)?;
+    pub fn expose(&mut self, instance: usize, at: &str, source: &str, read_only: bool) -> Result<(), Status> {
+        let mut target = self.resolve(instance, source)?;
         target.read_only |= read_only;
-        put(&mut self.exposed[inst], mount_point(at)?, target);
+        put(&mut self.exposed[instance], mount_point(at)?, target);
         Ok(())
     }
 }
@@ -228,8 +228,8 @@ pub fn start_order(mounts: &[Vec<usize>]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    fn r(inst: usize, path: &str, read_only: bool) -> Result<Resolved, Status> {
-        Ok(Resolved { inst, path: path.into(), read_only })
+    fn r(instance: usize, path: &str, read_only: bool) -> Result<Resolved, Status> {
+        Ok(Resolved { instance, path: path.into(), read_only })
     }
 
     #[test]

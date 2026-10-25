@@ -8,21 +8,21 @@ pub fn clean(path: &str) -> Result<String, Status> {
     if !path.starts_with('/') || path.contains('\0') {
         return Err(Status::Invalid);
     }
-    let mut out = String::with_capacity(path.len());
-    for seg in path.split('/') {
-        match seg {
+    let mut cleaned = String::with_capacity(path.len());
+    for segment in path.split('/') {
+        match segment {
             "" | "." => {}
             ".." => return Err(Status::Invalid),
-            seg => {
-                out.push('/');
-                out.push_str(seg);
+            segment => {
+                cleaned.push('/');
+                cleaned.push_str(segment);
             }
         }
     }
-    if out.is_empty() || path.ends_with('/') || path.ends_with("/.") {
-        out.push('/');
+    if cleaned.is_empty() || path.ends_with('/') || path.ends_with("/.") {
+        cleaned.push('/');
     }
-    Ok(out)
+    Ok(cleaned)
 }
 
 /// A clean path to mount something at. Unlike a request path, a trailing

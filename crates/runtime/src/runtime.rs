@@ -176,7 +176,7 @@ impl Shared {
             Err(status) => return self.answer(&caller, status, None, String::new(), true),
         };
         let operator = caller.is_operator();
-        let entry = self.interfaces[r.inst].serving(&r.path);
+        let entry = self.interfaces[r.instance].serving(&r.path);
         // Like a read-only mount, the operator's requests are off limits to
         // objects whether or not checks are on.
         if !operator && entry.is_some_and(|e| e.takes_verb(verb, false) == Err(Status::Forbidden)) {
@@ -190,19 +190,19 @@ impl Shared {
         } else {
             None
         };
-        self.next_req[r.inst] += 1;
-        let req = self.next_req[r.inst];
+        self.next_req[r.instance] += 1;
+        let req = self.next_req[r.instance];
         match caller {
             Requester::Wasm { inst, ticket } if ticket != 0 => {
-                self.calls.insert((inst, ticket), (r.inst, req));
+                self.calls.insert((inst, ticket), (r.instance, req));
             }
             Requester::Operator { id, .. } => {
-                self.operated.insert(id, (r.inst, req));
+                self.operated.insert(id, (r.instance, req));
             }
             _ => {}
         }
-        self.requests.insert((r.inst, req), Pending { caller, verb, body: body.clone(), cancelled: false, promise });
-        self.queue.push_back(Delivery::Serve { to: r.inst, req, verb, operator, path: r.path, body });
+        self.requests.insert((r.instance, req), Pending { caller, verb, body: body.clone(), cancelled: false, promise });
+        self.queue.push_back(Delivery::Serve { to: r.instance, req, verb, operator, path: r.path, body });
     }
 
     fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, detail: String, done: bool) {
@@ -349,7 +349,7 @@ impl<'p> Runtime<'p> {
         // One view per instance, and the root image's own after them. An
         // instance of an image serves only what it exports.
         let mut ns = Namespace::new(n + 1);
-        let resolved = |m: &MountDecl| Resolved { inst: m.target, path: m.path.clone(), read_only: m.read_only };
+        let resolved = |m: &MountDecl| Resolved { instance: m.target, path: m.path.clone(), read_only: m.read_only };
         for (i, inst) in program.instances.iter().enumerate() {
             for m in &inst.mounts {
                 ns.mount_resolved(i, &m.at, resolved(m));
@@ -458,7 +458,7 @@ impl<'p> Runtime<'p> {
     /// delivers everything that follows from it, and returns the replies it
     /// has had: none at all if nothing answered.
     pub fn ask(&mut self, inst: usize, verb: Verb, path: &str, body: Option<Payload>) -> Result<Vec<Answered>> {
-        let to = Ok(Resolved { inst, path: path.to_string(), read_only: false });
+        let to = Ok(Resolved { instance: inst, path: path.to_string(), read_only: false });
         self.shared.borrow_mut().request(Requester::Asked, to, verb, body);
         self.drain()?;
         Ok(std::mem::take(&mut self.shared.borrow_mut().asked))
@@ -585,7 +585,7 @@ impl<'p> Runtime<'p> {
             Command::Look { id, inst, verb, path } => {
                 let to = match path::clean(&path) {
                     _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::Invalid),
-                    Ok(path) => Ok(Resolved { inst, path, read_only: false }),
+                    Ok(path) => Ok(Resolved { instance: inst, path, read_only: false }),
                     Err(status) => Err(status),
                 };
                 self.shared.borrow_mut().request(Requester::Operator { id, operator: true }, to, verb, None);
@@ -629,7 +629,7 @@ impl<'p> Runtime<'p> {
                         self.shared.borrow_mut().reply(to, req, Status::NotFound, None, String::new(), true)?;
                     }
                     Object::Wasm(obj) => {
-                        let (ty, body) = body.map(|b| (b.ty, b.bytes)).unwrap_or_default();
+                        let (ty, body) = body.map(|b| (b.content_type, b.bytes)).unwrap_or_default();
                         let mut bytes = path.as_bytes().to_vec();
                         bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
@@ -644,7 +644,7 @@ impl<'p> Runtime<'p> {
                 let Object::Wasm(obj) = &mut self.objects[to] else { unreachable!("only Wasm objects make calls") };
                 // An error's description takes the place of a payload.
                 let (ty, body) = match body {
-                    Some(b) => (b.ty, b.bytes),
+                    Some(b) => (b.content_type, b.bytes),
                     None => (String::new(), detail.into_bytes()),
                 };
                 let mut bytes = ty.as_bytes().to_vec();

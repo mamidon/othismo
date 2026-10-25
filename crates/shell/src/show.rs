@@ -18,7 +18,7 @@ pub fn answer(a: &Answered, formats: &Formats) -> Vec<String> {
         None => vec![end.to_string()],
         Some(p) if Stat::decode(p).is_some() => vec![format!("{end} · {}", payload(p, formats).join(""))],
         Some(p) => {
-            let mut lines = vec![format!("{end} · {}", p.ty)];
+            let mut lines = vec![format!("{end} · {}", p.content_type)];
             lines.extend(payload(p, formats));
             lines
         }
@@ -33,7 +33,7 @@ pub fn payload(p: &Payload, formats: &Formats) -> Vec<String> {
     if let Some(s) = Stat::decode(p) {
         return vec![stat(&s)];
     }
-    if let Some(fields) = formats.for_type(&p.ty).and_then(|f| f.show(&p.bytes)) {
+    if let Some(fields) = formats.for_type(&p.content_type).and_then(|f| f.show(&p.bytes)) {
         return fields.into_iter().map(|(k, v)| format!("{k}: {v}")).collect();
     }
     let n = p.bytes.len();
@@ -42,8 +42,8 @@ pub fn payload(p: &Payload, formats: &Formats) -> Vec<String> {
 
 /// A stat record on one line: `stat "name" kind length "type" version`.
 pub fn stat(s: &Stat) -> String {
-    let kind = if s.dir { "dir" } else { "file" };
-    format!("stat {} {kind} {} {} version {}", json_string(&s.name), s.length, json_string(&s.ty), s.version)
+    let kind = if s.is_directory { "dir" } else { "file" };
+    format!("stat {} {kind} {} {} version {}", json_string(&s.name), s.length, json_string(&s.content_type), s.version)
 }
 
 #[cfg(test)]

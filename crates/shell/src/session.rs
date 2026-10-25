@@ -252,7 +252,7 @@ impl Session {
                 let at = match (target.starts_with('/') && target != "/", self.here) {
                     (true, Some(here)) => {
                         let r = self.world.resolve(here, &target).map_err(|s| anyhow!("{target}: {}", s.name()))?;
-                        Viewpoint::Instance(r.inst)
+                        Viewpoint::Instance(r.instance)
                     }
                     (true, None) => bail!("look from a root first; paths resolve in a view"),
                     (false, _) => self.world.find(&target).ok_or_else(|| anyhow!("there's no instance called {target}"))?,
@@ -310,7 +310,7 @@ impl Session {
         let w = &self.world;
         let mut lines = vec![format!("{}'s view:", w.name(here))];
         for l in w.view(here) {
-            let t = l.target.inst;
+            let t = l.target.instance;
             let how = match l.how {
                 runtime::operator::How::Mount => "mount",
                 runtime::operator::How::Bind => "bind",

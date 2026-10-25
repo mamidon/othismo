@@ -145,9 +145,9 @@ mod tests {
         let Line::Request { body: Some(p), .. } = parse(r#"write /x "hi""#).unwrap() else { panic!() };
         assert_eq!(p, Payload::text("hi"));
         let Line::Request { body: Some(p), .. } = parse(r#"write /x text/html "<p>""#).unwrap() else { panic!() };
-        assert_eq!(p.ty, "text/html");
+        assert_eq!(p.content_type, "text/html");
         let Line::Request { body: Some(p), .. } = parse(r#"write /g Greeting { prefix: "Hi", excited: true }"#).unwrap() else { panic!() };
-        assert_eq!(p.ty, "application/bson");
+        assert_eq!(p.content_type, "application/bson");
     }
 
     #[test]
