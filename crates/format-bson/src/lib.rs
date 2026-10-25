@@ -11,9 +11,8 @@ pub mod wire;
 
 use anyhow::{Result, bail};
 use bson::{Bson as B, Document};
-use format::{Bindings, FieldDoc, Format, MessageDoc, Schemas};
+use format::{Bindings, FieldDoc, Format, MessageDoc, Schemas, json_string};
 use messages::{EnumType, FieldType, MessageType};
-use format::json_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -453,6 +452,7 @@ fn to_bson(schemas: &Messages, t: &FieldType, value: &Value, at: &str) -> std::r
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::content_type::ContentType;
 
     fn messages(src: &str) -> Messages {
         Bson::parse_messages(src, &mut |p| bail!("no {p} here")).unwrap()
@@ -713,8 +713,8 @@ mod tests {
         assert!(err("Greeting", r#""text""#).contains("a message is written `Greeting { <field>: <value>, ... }`"));
         let formats = format::Formats::new(vec![Box::new(Bson)]);
         let all = format::AllSchemas::from([(BSON.to_string(), Bson::schemas(&m))]);
-        assert!(formats.encode("text/plain", "Odd", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
-        assert!(formats.encode("application/bson", "Odd", &all, &value(r#"{ a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
+        assert!(formats.encode(&ContentType::from("text/plain"), "Odd", &all, &value("{}")).unwrap_err().contains("no format writes `text/plain`"));
+        assert!(formats.encode(&ContentType::from("application/bson"), "Odd", &all, &value(r#"{ a: 1, b: 1, c: 1, d: "x" }"#)).is_ok());
         let schemas = Bson::schemas(&m);
         assert_eq!(Bson.fields(&schemas, "Odd").unwrap().iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["a", "b", "c", "d"]);
         assert_eq!(Bson.literal(&schemas, "Odd", "a", "7"), Ok(Value::Int(7)));

@@ -6,6 +6,7 @@ use crate::header::Object;
 use anyhow::{Context, Result, bail};
 use format::AllSchemas;
 use protocol::{namespace::Resolved, path::{MountPoint, PathName}, verb::Verb};
+use protocol::content_type::ContentType;
 use protocol::payload::Payload;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -229,7 +230,7 @@ impl Arg {
 pub struct Slot {
     pub name: String,
     /// The content type of what it stands for.
-    pub ty: String,
+    pub ty: ContentType,
     /// Its message type, for a structured slot, whose value is given field
     /// by field.
     #[serde(default)]

@@ -8,7 +8,7 @@
 //! knows of no format itself.
 
 use anyhow::Result;
-use protocol::payload;
+use protocol::content_type::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -116,8 +116,8 @@ impl Formats {
     }
 
     /// The format whose payloads are of content type `ty`.
-    pub fn for_type(&self, ty: &str) -> Option<&dyn Format> {
-        self.0.iter().map(|f| f.as_ref()).find(|f| payload::fits(f.content_type(), ty))
+    pub fn for_type(&self, ty: &ContentType) -> Option<&dyn Format> {
+        self.0.iter().map(|f| f.as_ref()).find(|f| ty.fits(&ContentType::from_static(f.content_type())))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &dyn Format> {
@@ -127,7 +127,7 @@ impl Formats {
     /// Encodes `value`, of message type `ty`, as a payload of content type
     /// `content_type`, with `schemas` as the formats' schemas. Only a format
     /// can encode a structured literal.
-    pub fn encode(&self, content_type: &str, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
+    pub fn encode(&self, content_type: &ContentType, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
         let Some(f) = self.for_type(content_type) else {
             let have: Vec<&str> = self.iter().map(|f| f.content_type()).collect();
             return Err(format!("no format writes `{content_type}`; a structured literal needs one, and the image has {}", list(&have)));

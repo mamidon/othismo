@@ -12,7 +12,7 @@ use crate::session::Session;
 use crate::world::{Viewpoint, World};
 use format::{AllSchemas, Formats, MessageDoc};
 use protocol::{status::Status, verb::{VERBS, Verb}};
-use protocol::payload::Stat;
+use protocol::{content_type::ContentType, payload::Stat};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Completion {
@@ -266,7 +266,7 @@ fn payload(s: &Session, here: Viewpoint, verb: Verb, path: &str, rest: &str, end
     let entry = w.instance(r.instance).interface.serving(&r.path).cloned();
     let requests: Vec<_> = entry.iter().flat_map(|e| e.requests.iter().filter(|q| q.verb == verb).cloned()).collect();
     if requests.iter().all(|q| q.body.is_none()) {
-        let answers: Vec<String> = requests.iter().filter_map(|q| q.answer.as_ref().map(|a| format!("{}{}", a.message.clone().unwrap_or(a.ty.clone()), if a.stream { "*" } else { "" }))).collect();
+        let answers: Vec<String> = requests.iter().filter_map(|q| q.answer.as_ref().map(|a| format!("{}{}", a.message.clone().unwrap_or(a.ty.to_string()), if a.stream { "*" } else { "" }))).collect();
         let answers = if answers.is_empty() { String::new() } else { format!(" It answers {}.", answers.join(" or ")) };
         return hint(&format!("⏎ to send: {} takes no payload.{answers}", verb.keyword()));
     }
@@ -278,7 +278,7 @@ fn payload(s: &Session, here: Viewpoint, verb: Verb, path: &str, rest: &str, end
     if !rest_trimmed.contains(char::is_whitespace) && !rest_trimmed.starts_with('"') {
         let mut items = vec![];
         for q in &requests {
-            let Some(ct) = &q.body else { continue };
+            let Some(ct) = q.body.as_ref().map(ContentType::as_str) else { continue };
             if let Some(m) = &q.message {
                 let d = describe(&s.formats, messages, m);
                 let fields = d.as_ref().map(|d| d.fields.iter().map(|f| format!("{}: {}", f.name, f.ty)).collect::<Vec<_>>().join(", ")).unwrap_or_default();
@@ -286,10 +286,10 @@ fn payload(s: &Session, here: Viewpoint, verb: Verb, path: &str, rest: &str, end
             } else if ct.starts_with("text/") || ct == "*/*" {
                 items.push(Item::new("\"text\"", "\"|\"").detail("text/plain").doc(r#""…""#, "A text/plain payload. Write another text type before it, as in text/html \"<p>hi</p>\".", "the image syntax"));
                 if ct != "text/plain" && ct != "text/*" && ct != "*/*" {
-                    items.push(Item::new(ct.clone(), &format!("{ct} \"|\"")).detail("content type").doc(ct.clone(), "", &src));
+                    items.push(Item::new(ct, &format!("{ct} \"|\"")).detail("content type").doc(ct, "", &src));
                 }
             } else {
-                items.push(Item::new(ct.clone(), &format!("{ct} from \"./|\"")).detail("a file's bytes").doc(format!("{ct} from \"./file\""), "The bytes of a file on this machine, relative to where the shell was started.", "the image syntax"));
+                items.push(Item::new(ct, &format!("{ct} from \"./|\"")).detail("a file's bytes").doc(format!("{ct} from \"./file\""), "The bytes of a file on this machine, relative to where the shell was started.", "the image syntax"));
             }
         }
         items.retain(|i| i.label.starts_with(rest_trimmed) || rest_trimmed.is_empty());

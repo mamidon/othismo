@@ -6,7 +6,7 @@
 
 use compiler::iface::{self, Entry, Header};
 use format::{Format, Schemas};
-use protocol::verb::Verb;
+use protocol::{content_type::ContentType, verb::Verb};
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
@@ -174,7 +174,7 @@ fn methods(entries: &[Entry]) -> Vec<(&Entry, Vec<Method>)> {
             let mut methods = vec![];
             for verb in verbs {
                 let reqs: Vec<&iface::Request> = e.requests.iter().filter(|r| r.verb == verb).collect();
-                let bodies: BTreeSet<(Option<&str>, Option<&str>)> = reqs.iter().map(|r| (r.body.as_deref(), r.message.as_deref())).collect();
+                let bodies: BTreeSet<(Option<&str>, Option<&str>)> = reqs.iter().map(|r| (r.body.as_ref().map(ContentType::as_str), r.message.as_deref())).collect();
                 let bodies: Vec<_> = bodies.into_iter().collect();
                 // Each message a verb takes is a method of its own, or one
                 // method takes whatever comes.

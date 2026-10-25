@@ -233,6 +233,11 @@ Types and subtypes compare without regard to case. A parameter a header
 writes, such as `charset=utf-8`, must be present and equal; one it leaves
 out constrains nothing.
 
+Any text can be a payload's content type: the runtime carries it as it is,
+and a server may answer with one nobody else has heard of. Headers and
+images must write well-formed ones, `type/subtype` with optional
+parameters; one that isn't well-formed fits nothing.
+
 ### Formats
 
 A format is identified by its media type, and supplies everything Othismo

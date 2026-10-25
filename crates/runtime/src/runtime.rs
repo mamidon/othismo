@@ -616,7 +616,7 @@ impl<'p> Runtime<'p> {
                         self.shared.borrow_mut().reply(to, req, Status::NOT_FOUND, None, String::new(), true)?;
                     }
                     Object::Wasm(obj) => {
-                        let (ty, body) = body.map(|b| (b.content_type, b.bytes)).unwrap_or_default();
+                        let (ty, body): (String, _) = body.map(|b| (b.content_type.into(), b.bytes)).unwrap_or_default();
                         let mut bytes = path.as_str().as_bytes().to_vec();
                         bytes.extend_from_slice(ty.as_bytes());
                         bytes.extend_from_slice(&body);
@@ -632,7 +632,7 @@ impl<'p> Runtime<'p> {
                 // An error's code and description take the place of a payload's type and bytes.
                 let (ty, body) = match body {
                     _ if !status.is_ok() => (status.code.into_owned(), detail.into_bytes()),
-                    Some(b) => (b.content_type, b.bytes),
+                    Some(b) => (b.content_type.into(), b.bytes),
                     None => (String::new(), vec![]),
                 };
                 let mut bytes = ty.as_bytes().to_vec();

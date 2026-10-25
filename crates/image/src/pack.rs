@@ -193,7 +193,7 @@ pub fn describe(pack: &Pack, formats: &Formats) -> String {
 /// `slot listen : text/plain = "0.0.0.0:80" (--set)`, or for a structured
 /// slot, each field's value and where it came from.
 fn describe_slot(slot: &program::Slot, formats: &Formats) -> String {
-    let ty = slot.message.as_ref().unwrap_or(&slot.ty);
+    let ty = slot.message.as_deref().unwrap_or(slot.ty.as_str());
     let origin = |f: &str| slot.origins.iter().find(|(name, _)| name == f).map(|(_, o)| o.as_str()).unwrap_or("?");
     let Some(value) = &slot.value else { return format!("slot {} : {ty} (unbound)", slot.name) };
     if let Some(f) = formats.for_type(&slot.ty).filter(|_| slot.structured()) {

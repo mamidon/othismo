@@ -7,7 +7,7 @@ use crate::iface::{self, Header, Loader, Object, Trait};
 use syntax::image_definition::{self, Ident, ImageDefinition, Literal, Pos, Value};
 use protocol::{namespace::Namespace, path::{MountPoint, PathName}, status::Status, verb::Verb};
 use protocol::pattern::PathPattern;
-use protocol::payload::{self, Payload};
+use protocol::{content_type::ContentType, payload::Payload};
 pub use image::program::*;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cmp::Ordering;
@@ -112,13 +112,13 @@ enum Given {
 /// for a message.
 #[derive(Debug, Clone, PartialEq)]
 struct PayloadType {
-    ty: String,
+    ty: ContentType,
     message: Option<String>,
 }
 
 impl std::fmt::Display for PayloadType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(self.message.as_ref().unwrap_or(&self.ty))
+        f.write_str(self.message.as_deref().unwrap_or(self.ty.as_str()))
     }
 }
 
@@ -222,13 +222,13 @@ impl Builder<'_> {
     /// imports, or a content type that has no schemas.
     fn payload_type(&self, unit: usize, id: &Ident) -> Result<PayloadType> {
         if let Some(ty) = self.units[unit].scope.types.get(&id.name) {
-            return Ok(PayloadType { ty: ty.clone(), message: Some(id.name.clone()) });
+            return Ok(PayloadType { ty: ty.as_str().into(), message: Some(id.name.clone()) });
         }
         if !id.name.contains('/') {
             bail!(err_at(id, format!("`{}` is neither a content type nor a message type declared in or imported into this file", id.name)));
         }
         let ty = content_type(id)?;
-        if self.loader.formats.iter().any(|f| f.content_type() == ty) {
+        if self.loader.formats.iter().any(|f| ty == ContentType::from_static(f.content_type())) {
             bail!(err_at(id, format!("`{ty}` payloads are messages: name the message type, such as `Greeting`, declared in a `schemas {ty}` block")));
         }
         Ok(PayloadType { ty, message: None })
@@ -403,7 +403,7 @@ impl Builder<'_> {
                 out.insert(name.clone(), Given::Literal { literal: default.clone(), unit: child, ty: ty.clone(), what });
             }
             if let Given::Arg(Arg::Slot(i), message) = &out[name]
-                && (!payload::fits(&ty.ty, &self.slots[*i].ty) || (ty.message.is_some() && *message != ty.message))
+                && (!self.slots[*i].ty.fits(&ty.ty) || (ty.message.is_some() && *message != ty.message))
             {
                 bail!(err_at(&inst.name, format!("`{}`'s slot `{name}` is a {ty}, and isn't given one", inst.name.name)));
             }
@@ -418,7 +418,7 @@ impl Builder<'_> {
             Given::Arg(a, message) => Ok((a.clone(), message.clone())),
             Given::Literal { literal, unit, ty, what } => {
                 let (arg, message) = self.literal(*unit, literal, Some(ty)).with_context(|| what.clone())?;
-                if !payload::fits(&ty.ty, arg_type(&self.slots, &arg)) || (ty.message.is_some() && message != ty.message) {
+                if !arg_type(&self.slots, &arg).fits(&ty.ty) || (ty.message.is_some() && message != ty.message) {
                     bail!("{what} is a {ty}, and isn't given one");
                 }
                 Ok((arg, message))
@@ -434,7 +434,7 @@ impl Builder<'_> {
             Literal::Text { ty: t, text, .. } => {
                 let ty = match t {
                     Some(t) => content_type(t)?,
-                    None => want.map_or(payload::TEXT.to_string(), |w| w.ty.clone()),
+                    None => want.map_or(ContentType::TEXT, |w| w.ty.clone()),
                 };
                 (Payload::new(ty, text.as_bytes()), None)
             }
@@ -449,7 +449,7 @@ impl Builder<'_> {
             },
             Literal::Tree { ty: Some(t), pos, .. } => {
                 let ty = content_type(t)?;
-                if self.loader.formats.iter().any(|f| f.content_type() == ty) {
+                if self.loader.formats.iter().any(|f| ty == ContentType::from_static(f.content_type())) {
                     bail!("{pos}: `{ty}` payloads are messages: name the message type, `<message type> {{ ... }}`");
                 }
                 bail!("{pos}: no format writes `{ty}`; a structured literal is a message, `<message type> {{ ... }}`")
@@ -465,9 +465,9 @@ impl Builder<'_> {
     }
 
     /// `value`, a message of type `message`, encoded as content type `ty`.
-    fn message(&self, ty: &str, message: &str, value: &Value, pos: Pos) -> Result<Payload> {
+    fn message(&self, ty: &ContentType, message: &str, value: &Value, pos: Pos) -> Result<Payload> {
         let bytes = self.loader.formats.encode(ty, message, &self.messages, value).map_err(|e| anyhow!("{pos}: {e}"))?;
-        Ok(Payload::new(ty, bytes))
+        Ok(Payload::new(ty.clone(), bytes))
     }
 
     /// What the instance type `ty` names in `unit`: an object it declares or
@@ -711,7 +711,7 @@ impl Builder<'_> {
             let Some(what) = config_what(b) else { continue };
             let needs = format!("{} needs exactly one config: `write` its root with {what}", node.name);
             let [(pos, arg)] = configs[i].as_slice() else { bail!(needs) };
-            if !payload::fits("text/*", arg_type(&self.slots, arg)) {
+            if !arg_type(&self.slots, arg).is_text() {
                 bail!("{pos}: {needs}");
             }
             node.config = Some(arg.clone());
@@ -838,7 +838,7 @@ fn check_request(
         (None, None) => r.verb.to_string(),
     };
     let takes = entry.requests.iter().any(|q| {
-        q.verb == r.verb && iface::body_fits(q.body.as_deref(), body_type) && (q.message.is_none() || q.message.as_deref() == message)
+        q.verb == r.verb && iface::body_fits(q.body.as_ref(), body_type) && (q.message.is_none() || q.message.as_deref() == message)
     });
     match entry.takes(r.verb, body_type) {
         Ok(_) if takes => Ok(()),
@@ -912,7 +912,7 @@ fn builtin_kind(name: &str, includes: &[image_definition::Include]) -> Result<Ki
 }
 
 /// The content type of what `arg` carries.
-fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
+fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a ContentType {
     match arg {
         Arg::Payload(p) => &p.content_type,
         Arg::Slot(i) => &slots[*i].ty,
@@ -920,11 +920,12 @@ fn arg_type<'a>(slots: &'a [Slot], arg: &'a Arg) -> &'a str {
 }
 
 /// The content type an image writes, which must be well-formed.
-fn content_type(id: &Ident) -> Result<String> {
-    if !payload::valid(&id.name) {
+fn content_type(id: &Ident) -> Result<ContentType> {
+    let content_type = ContentType::from(id.name.as_str());
+    if !content_type.is_well_formed() {
         bail!(err_at(id, format!("`{}` isn't a well-formed content type", id.name)));
     }
-    Ok(id.name.clone())
+    Ok(content_type)
 }
 
 #[cfg(test)]
@@ -1300,7 +1301,7 @@ mod tests {
         for name in CONFIGURED {
             assert!(config_what(name).is_some(), "{name}");
             let root = builtin(name).unwrap().serves.into_iter().find(|e| e.path.as_str() == "/").unwrap();
-            assert!(root.takes(Verb::Write, Some("text/plain")).is_ok_and(|r| r.operator), "{name}: {root}");
+            assert!(root.takes(Verb::Write, Some(&ContentType::TEXT)).is_ok_and(|r| r.operator), "{name}: {root}");
         }
         assert_eq!(config_what(CONSOLE), None);
         assert_eq!(config_what(PACKED), None);

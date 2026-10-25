@@ -2,7 +2,7 @@
 
 use super::{Event, Incoming, Reply, What};
 use protocol::{path::PathName, status::Status, verb::Verb};
-use protocol::payload::{OCTETS, Payload};
+use protocol::{content_type::ContentType, payload::Payload};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -39,7 +39,7 @@ struct Conn {
 }
 
 fn data(bytes: Vec<u8>) -> Payload {
-    Payload::new(OCTETS, bytes)
+    Payload::new(ContentType::OCTETS, bytes)
 }
 
 /// What a path under a listener names.

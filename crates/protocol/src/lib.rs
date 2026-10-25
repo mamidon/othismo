@@ -3,6 +3,7 @@
 //! (Layer 0), the protocol's verbs, statuses and payloads (Layer 1), and the
 //! path patterns headers write. See `docs/protocol.md`.
 
+pub mod content_type;
 pub mod namespace;
 pub mod path;
 pub mod pattern;

@@ -1,6 +1,6 @@
 //! How the console turns a payload into a line of text.
 
-use protocol::payload::{Payload, Stat};
+use protocol::{content_type::ContentType, payload::{Payload, Stat}};
 use format::json_string;
 
 /// Text prints as it is. A stat record prints as its fields, since the
@@ -12,7 +12,7 @@ pub fn line(p: &Payload) -> String {
     }
     if let Some(s) = Stat::decode(p) {
         let kind = if s.is_directory { "dir" } else { "file" };
-        return format!("stat {} {kind} {} {} {}", json_string(&s.name), s.length, json_string(&s.content_type), s.version);
+        return format!("stat {} {kind} {} {} {}", json_string(&s.name), s.length, json_string(s.content_type.as_ref().map_or("", ContentType::as_str)), s.version);
     }
     let n = p.bytes.len();
     format!("{} ({n} byte{})", p.content_type, if n == 1 { "" } else { "s" })

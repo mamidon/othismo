@@ -12,7 +12,7 @@ use crate::show;
 use crate::world::{Class, Hop, Source, Viewpoint, World};
 use anyhow::Result;
 use protocol::{namespace::Resolved, status::Status, verb::Verb};
-use protocol::payload::Stat;
+use protocol::{content_type::ContentType, payload::Stat};
 use ratatui::Frame;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
@@ -905,7 +905,7 @@ impl App {
                     Line::from(dim(if s.is_directory { "dir" } else { "file" })),
                     Line::from(if exposed { Span::raw("expose") } else { Span::raw("") }),
                     access(target.as_ref().is_some_and(|t| t.read_only)),
-                    Line::from(Span::raw(s.content_type.clone())),
+                    Line::from(Span::raw(s.content_type.as_ref().map_or(String::new(), ContentType::to_string))),
                     Line::from(Span::raw(if s.is_directory || s.length == 0 { String::new() } else { size(s.length) })).right_aligned(),
                     Line::from(dim(version(s.version))).right_aligned(),
                     info,
@@ -1142,7 +1142,7 @@ impl App {
                     lines.push(kv("name", Span::raw(s.name.clone())));
                     lines.push(kv("kind", Span::raw(if s.is_directory { "dir" } else { "file" })));
                     lines.push(kv("length", Span::raw(s.length.to_string())));
-                    lines.push(kv("type", if s.content_type.is_empty() { dim("—") } else { Span::raw(s.content_type.clone()) }));
+                    lines.push(kv("type", match &s.content_type { None => dim("—"), Some(content_type) => Span::raw(content_type.to_string()) }));
                     lines.push(kv("version", if s.version == 0 { dim("—") } else { Span::raw(s.version.to_string()) }));
                 }
                 if let Some(t) = &row.target {

@@ -5,7 +5,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use format::{AllSchemas, Formats};
 use protocol::verb::Verb;
-use protocol::payload::{self, Payload};
+use protocol::{content_type::ContentType, payload::Payload};
 use syntax::image_definition::{self, Literal};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,19 +97,21 @@ fn builtin(rest: &str) -> Result<Builtin> {
 /// The payload a literal stands for, as an image's would be made.
 fn payload(literal: &Literal, formats: &Formats, messages: &AllSchemas) -> Result<Payload> {
     let content_type = |name: &str| {
-        if payload::valid(name) { Ok(name.to_string()) } else { Err(anyhow!("`{name}` isn't a content type")) }
+        let content_type = ContentType::from(name);
+        if content_type.is_well_formed() { Ok(content_type) } else { Err(anyhow!("`{name}` isn't a content type")) }
     };
     Ok(match literal {
         Literal::Text { ty, text, .. } => {
-            Payload::new(ty.as_ref().map_or(Ok(payload::TEXT.to_string()), |t| content_type(&t.name))?, text.as_bytes())
+            Payload::new(ty.as_ref().map_or(Ok(ContentType::TEXT), |t| content_type(&t.name))?, text.as_bytes())
         }
         Literal::Message { ty, value, .. } => {
             let format = formats
                 .iter()
                 .find(|f| messages.get(f.content_type()).is_some_and(|s| f.fields(s, &ty.name).is_ok()))
                 .ok_or_else(|| anyhow!("no message type `{}` is declared by the image's modules", ty.name))?;
-            let bytes = formats.encode(format.content_type(), &ty.name, messages, value).map_err(|e| anyhow!("{e}"))?;
-            Payload::new(format.content_type(), bytes)
+            let content_type = ContentType::from_static(format.content_type());
+            let bytes = formats.encode(&content_type, &ty.name, messages, value).map_err(|e| anyhow!("{e}"))?;
+            Payload::new(content_type, bytes)
         }
         Literal::File { ty, path, .. } => {
             let bytes = std::fs::read(path).with_context(|| format!("reading {path}"))?;
@@ -145,9 +147,9 @@ mod tests {
         let Line::Request { body: Some(p), .. } = parse(r#"write /x "hi""#).unwrap() else { panic!() };
         assert_eq!(p, Payload::text("hi"));
         let Line::Request { body: Some(p), .. } = parse(r#"write /x text/html "<p>""#).unwrap() else { panic!() };
-        assert_eq!(p.content_type, "text/html");
+        assert_eq!(p.content_type.as_str(), "text/html");
         let Line::Request { body: Some(p), .. } = parse(r#"write /g Greeting { prefix: "Hi", excited: true }"#).unwrap() else { panic!() };
-        assert_eq!(p.content_type, "application/bson");
+        assert_eq!(p.content_type.as_str(), "application/bson");
     }
 
     #[test]

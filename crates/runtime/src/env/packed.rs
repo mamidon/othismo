@@ -89,6 +89,6 @@ mod tests {
         assert_eq!(status(p.serve(1, Verb::Watch, &path("/"))), [Status::NOT_SUPPORTED]);
         assert_eq!(status(p.serve(1, Verb::Create, &path("/b"))), [Status::READ_ONLY]);
         let stat = Stat::decode(&p.serve(1, Verb::Stat, &path("/a.txt")).remove(0).body.unwrap()).unwrap();
-        assert_eq!((stat.name.as_str(), stat.length, stat.content_type.as_str()), ("a.txt", 1, "text/plain; charset=utf-8"));
+        assert_eq!((stat.name.as_str(), stat.length, stat.content_type.as_ref().map(|content_type| content_type.as_str())), ("a.txt", 1, Some("text/plain; charset=utf-8")));
     }
 }

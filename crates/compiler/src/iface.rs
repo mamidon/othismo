@@ -14,7 +14,7 @@ pub use image::header::*;
 pub use syntax::decl::*;
 use format::{Format, Formats, Schemas};
 use protocol::pattern::PathPattern;
-use protocol::payload::{self, STAT, STAT_NAME};
+use protocol::content_type::ContentType;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -486,12 +486,12 @@ impl Shapes<'_> {
 
     /// The content type `id` names, and the message type if it names one:
     /// a message type, `Stat`, or a content type that has no schemas.
-    fn payload_type(&self, id: &Ident) -> Result<(String, Option<String>)> {
+    fn payload_type(&self, id: &Ident) -> Result<(ContentType, Option<String>)> {
         if let Some(ty) = self.messages.get(&id.name) {
-            return Ok((ty.clone(), Some(id.name.clone())));
+            return Ok((ty.as_str().into(), Some(id.name.clone())));
         }
         let ty = content_type(id)?;
-        if self.structured.contains(&ty) {
+        if self.structured.iter().any(|structured| structured == ty.as_str()) {
             bail!(err_at(id, format!("`{ty}` payloads are named by their message type, declared in a `schemas {ty}` block, such as `write Greeting`")));
         }
         Ok((ty, None))
@@ -586,18 +586,19 @@ fn rebase(at: &PathPattern, inner: &PathPattern, pos: Pos) -> Result<PathPattern
 }
 
 fn reserve(name: &Ident) -> Result<()> {
-    if name.name == STAT_NAME {
-        bail!(err_at(name, format!("`{STAT_NAME}` is reserved: it stands for a stat record's content type, {STAT}")));
+    if name.name == ContentType::STAT_NAME {
+        bail!(err_at(name, format!("`{}` is reserved: it stands for a stat record's content type, {}", ContentType::STAT_NAME, ContentType::STAT)));
     }
     Ok(())
 }
 
 /// The content type `id` writes: as it is, or `Stat` for a stat record's.
-fn content_type(id: &Ident) -> Result<String> {
-    if id.name == STAT_NAME {
-        return Ok(STAT.into());
+fn content_type(id: &Ident) -> Result<ContentType> {
+    if id.name == ContentType::STAT_NAME {
+        return Ok(ContentType::STAT);
     }
-    if !payload::valid(&id.name) {
+    let content_type = ContentType::from(id.name.as_str());
+    if !content_type.is_well_formed() {
         let hint = if id.name.contains('/') {
             "it isn't a well-formed content type"
         } else {
@@ -605,7 +606,7 @@ fn content_type(id: &Ident) -> Result<String> {
         };
         bail!(err_at(id, format!("`{}`: {hint}", id.name)));
     }
-    Ok(id.name.clone())
+    Ok(content_type)
 }
 
 fn pattern(p: &image_definition::Path) -> Result<PathPattern> {
@@ -789,7 +790,6 @@ impl Loader {
 mod tests {
     use super::*;
     use protocol::{status::Status, verb::Verb};
-    use protocol::payload::ANY;
 
     const GREETER: &str = r#"
         ## Greets every name typed on the console.
@@ -962,7 +962,7 @@ mod tests {
         )])
         .unwrap();
         let r = &h.objects[0].serves[0].requests;
-        assert_eq!((r[0].body.as_deref(), r[0].message.as_deref()), (Some("application/bson"), Some("Greeting")));
+        assert_eq!((r[0].body.as_ref().map(ContentType::as_str), r[0].message.as_deref()), (Some("application/bson"), Some("Greeting")));
         assert_eq!(r[1].answer.as_ref().and_then(|a| a.message.as_deref()), Some("Greeting"));
         assert_eq!(r[0].to_string(), "write Greeting");
         assert_eq!(h.types["Greeting"], "application/bson");
@@ -1026,12 +1026,12 @@ mod tests {
     fn requests_take_payloads_by_content_type() {
         let h = resolve_str("object A { serves { /h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat } }").unwrap();
         let e = &h.objects[0].serves[0];
-        assert_eq!(e.takes(Verb::Remove, Some("text/plain")).unwrap().body.as_deref(), Some("text/plain"));
+        assert_eq!(e.takes(Verb::Remove, Some(&ContentType::from("text/plain"))).unwrap().body, Some(ContentType::TEXT));
         assert_eq!(e.takes(Verb::Remove, None).unwrap().body, None);
-        assert_eq!(e.takes(Verb::Remove, Some("application/bson")), Err(Status::INVALID));
-        assert_eq!(e.takes(Verb::Write, Some("image/png")).unwrap().body.as_deref(), Some(ANY));
+        assert_eq!(e.takes(Verb::Remove, Some(&ContentType::from("application/bson"))), Err(Status::INVALID));
+        assert_eq!(e.takes(Verb::Write, Some(&ContentType::from("image/png"))).unwrap().body, Some(ContentType::ANY));
         assert_eq!(e.takes(Verb::Write, None), Err(Status::INVALID));
-        assert_eq!(e.takes(Verb::Create, Some("text/html")).unwrap().answer.as_ref().unwrap().ty, STAT);
+        assert_eq!(e.takes(Verb::Create, Some(&ContentType::from("text/html"))).unwrap().answer.as_ref().unwrap().ty, ContentType::STAT);
         assert_eq!(e.takes(Verb::Stat, None), Err(Status::NOT_SUPPORTED));
         assert_eq!(e.takes_verb(Verb::Read, false), Ok(()));
         assert_eq!(e.takes_verb(Verb::Remove, false), Err(Status::FORBIDDEN), "only the operator may remove");

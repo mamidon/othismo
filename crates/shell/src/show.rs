@@ -4,7 +4,7 @@
 
 use format::Formats;
 use protocol::status::Status;
-use protocol::payload::{Payload, Stat};
+use protocol::{content_type::ContentType, payload::{Payload, Stat}};
 use format::json_string;
 use runtime::Answered;
 
@@ -44,7 +44,7 @@ pub fn payload(p: &Payload, formats: &Formats) -> Vec<String> {
 /// A stat record on one line: `stat "name" kind length "type" version`.
 pub fn stat(s: &Stat) -> String {
     let kind = if s.is_directory { "dir" } else { "file" };
-    format!("stat {} {kind} {} {} version {}", json_string(&s.name), s.length, json_string(&s.content_type), s.version)
+    format!("stat {} {kind} {} {} version {}", json_string(&s.name), s.length, json_string(s.content_type.as_ref().map_or("", ContentType::as_str)), s.version)
 }
 
 #[cfg(test)]
