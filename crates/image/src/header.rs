@@ -179,9 +179,9 @@ impl Entry {
     pub fn takes(&self, verb: Verb, body: Option<&str>) -> Result<&Request, Status> {
         let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
         if with_verb.peek().is_none() {
-            return Err(Status::NotSupported);
+            return Err(Status::NOT_SUPPORTED);
         }
-        with_verb.find(|r| body_fits(r.body.as_deref(), body)).ok_or(Status::Invalid)
+        with_verb.find(|r| body_fits(r.body.as_deref(), body)).ok_or(Status::INVALID)
     }
 
     /// Whether the entry takes `verb` from a sender that is the operator or
@@ -190,9 +190,9 @@ impl Entry {
     pub fn takes_verb(&self, verb: Verb, operator: bool) -> Result<(), Status> {
         let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
         if with_verb.peek().is_none() {
-            return Err(Status::NotSupported);
+            return Err(Status::NOT_SUPPORTED);
         }
-        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::Forbidden) }
+        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::FORBIDDEN) }
     }
 
     /// Whether `verb` may be answered more than once here.

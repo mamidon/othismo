@@ -49,7 +49,7 @@ pub fn run(pack: &Pack, options: Options) -> Result<Vec<Report>> {
         let name = &pack.program.instances[i].name;
         let answers = rt.ask(i, Verb::List, "/tests", None)?;
         match answers.last() {
-            Some(a) if a.done && a.status == Status::Ok => {}
+            Some(a) if a.done && a.status == Status::OK => {}
             Some(a) if a.done => bail!("`{name}` answered `list /tests` with {}", a.status),
             _ => bail!("`{name}` never finished listing its tests"),
         }
@@ -86,7 +86,7 @@ fn run_one(pack: &Pack, options: Options, i: usize, test: &str) -> Result<(bool,
 fn outcome(answer: Option<Answered>) -> (bool, String) {
     match answer {
         None => (false, "it never answered".into()),
-        Some(a) if a.status == Status::Ok => (true, String::new()),
+        Some(a) if a.status == Status::OK => (true, String::new()),
         Some(a) if a.detail.is_empty() => (false, format!("it answered {}", a.status)),
         Some(a) => (false, a.detail),
     }
@@ -131,9 +131,9 @@ mod tests {
 
     #[test]
     fn a_test_passes_with_ok_and_fails_with_an_error() {
-        assert_eq!(outcome(answered(Status::Ok, "")), (true, "".into()));
-        assert_eq!(outcome(answered(Status::Invalid, "got 404")), (false, "got 404".into()));
-        assert_eq!(outcome(answered(Status::NotFound, "")), (false, "it answered not_found".into()));
+        assert_eq!(outcome(answered(Status::OK, "")), (true, "".into()));
+        assert_eq!(outcome(answered(Status::INVALID, "got 404")), (false, "got 404".into()));
+        assert_eq!(outcome(answered(Status::NOT_FOUND, "")), (false, "it answered not_found".into()));
         assert_eq!(outcome(None), (false, "it never answered".into()));
     }
 }

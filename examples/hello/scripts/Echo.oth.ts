@@ -1,11 +1,11 @@
 // Generated from Echo.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 
 /** Echoes every line typed on the console back to it. */
 export class EchoServer extends Server {
   serve(req: Request): void {
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 

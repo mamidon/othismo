@@ -9,9 +9,9 @@ use runtime::Answered;
 
 /// One answer, as lines to print.
 pub fn answer(a: &Answered, formats: &Formats) -> Vec<String> {
-    if a.status != Status::Ok {
+    if a.status != Status::OK {
         let detail = if a.detail.is_empty() { String::new() } else { format!(": {}", a.detail) };
-        return vec![format!("✗ {} ({}){detail}", a.status.name(), a.status as i32)];
+        return vec![format!("✗ {} ({}){detail}", a.status.code, a.status.errno)];
     }
     let end = if a.done { "ok done" } else { "ok more" };
     match &a.body {
@@ -51,7 +51,7 @@ mod tests {
     use super::*;
 
     fn ok(body: Option<Payload>, done: bool) -> Answered {
-        Answered { status: Status::Ok, body, detail: String::new(), done }
+        Answered { status: Status::OK, body, detail: String::new(), done }
     }
 
     #[test]
@@ -61,7 +61,7 @@ mod tests {
         assert_eq!(answer(&ok(Some(Payload::text("a\nb")), true), &f), ["ok done · text/plain", "a", "b"]);
         assert_eq!(answer(&ok(Some(Stat::file("x", 3, "text/plain").encode()), false), &f), [r#"ok more · stat "x" file 3 "text/plain" version 0"#]);
         assert_eq!(answer(&ok(Some(Payload::new("image/png", vec![1, 2])), true), &f), ["ok done · image/png", "(2 bytes)"]);
-        let failed = Answered { status: Status::Forbidden, body: None, detail: "operator only".into(), done: true };
+        let failed = Answered { status: Status::FORBIDDEN, body: None, detail: "operator only".into(), done: true };
         assert_eq!(answer(&failed, &f), ["✗ forbidden (9): operator only"]);
     }
 }

@@ -158,12 +158,12 @@ impl Shared {
     fn resolve(&self, inst: usize, path: &str, verb: Verb) -> Result<Resolved, Status> {
         let r = self.ns.resolve(inst, path)?;
         if r.read_only && !verb.is_safe() {
-            return Err(Status::ReadOnly);
+            return Err(Status::READ_ONLY);
         }
         if self.checks {
-            let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NotFound)?;
-            let need = self.interfaces[inst].need(&at).ok_or(Status::NotFound)?;
-            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
+            let (at, rest) = self.ns.mount_of(inst, path).ok_or(Status::NOT_FOUND)?;
+            let need = self.interfaces[inst].need(&at).ok_or(Status::NOT_FOUND)?;
+            need.entry(&rest).ok_or(Status::NOT_FOUND)?.takes_verb(verb, false)?;
         }
         Ok(r)
     }
@@ -179,11 +179,11 @@ impl Shared {
         let entry = self.interfaces[r.instance].serving(&r.path);
         // Like a read-only mount, the operator's requests are off limits to
         // objects whether or not checks are on.
-        if !operator && entry.is_some_and(|e| e.takes_verb(verb, false) == Err(Status::Forbidden)) {
-            return self.answer(&caller, Status::Forbidden, None, String::new(), true);
+        if !operator && entry.is_some_and(|e| e.takes_verb(verb, false) == Err(Status::FORBIDDEN)) {
+            return self.answer(&caller, Status::FORBIDDEN, None, String::new(), true);
         }
         let promise = if self.checks {
-            match entry.ok_or(Status::NotFound).and_then(|e| e.takes_verb(verb, operator).map(|_| e.streams(verb))) {
+            match entry.ok_or(Status::NOT_FOUND).and_then(|e| e.takes_verb(verb, operator).map(|_| e.streams(verb))) {
                 Ok(stream) => Some(Promise { what: format!("{verb} {}", r.path), stream }),
                 Err(status) => return self.answer(&caller, status, None, String::new(), true),
             }
@@ -208,7 +208,7 @@ impl Shared {
     fn answer(&mut self, caller: &Requester, status: Status, body: Option<Payload>, detail: String, done: bool) {
         match *caller {
             Requester::Image(ref what) => {
-                if status != Status::Ok {
+                if status != Status::OK {
                     let detail = if detail.is_empty() { String::new() } else { format!(": {detail}") };
                     eprintln!("warning: startup request `{what}` failed: {status}{detail}");
                 }
@@ -277,7 +277,7 @@ impl Shared {
             self.queue.push_back(Delivery::Cancel { to: server, req });
         }
         if let Some(notify) = &mut self.notify {
-            let answer = Answered { status: Status::Ok, body: None, detail: String::new(), done: true };
+            let answer = Answered { status: Status::OK, body: None, detail: String::new(), done: true };
             notify(Notice::Answer { id, answer });
         }
     }
@@ -426,7 +426,7 @@ impl<'p> Runtime<'p> {
             let body = s.body.as_ref().map(|b| b.payload()).transpose()?;
             let mut shared = self.shared.borrow_mut();
             let to = shared.ns.resolve(s.image.unwrap_or(root_view), &s.path).and_then(|r| {
-                if r.read_only && !s.verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
+                if r.read_only && !s.verb.is_safe() { Err(Status::READ_ONLY) } else { Ok(r) }
             });
             shared.request(Requester::Image(what), to, s.verb, body);
         }
@@ -562,16 +562,16 @@ impl<'p> Runtime<'p> {
                 let mut shared = self.shared.borrow_mut();
                 let to = match (image, from) {
                     (Some(view), _) => shared.ns.resolve(view, &path).and_then(|r| {
-                        if r.read_only && !verb.is_safe() { Err(Status::ReadOnly) } else { Ok(r) }
+                        if r.read_only && !verb.is_safe() { Err(Status::READ_ONLY) } else { Ok(r) }
                     }),
                     (None, Some(i)) if i < n => shared.resolve(i, &path, verb),
-                    (None, _) => Err(Status::Invalid),
+                    (None, _) => Err(Status::INVALID),
                 };
                 shared.request(Requester::Operator { id, operator: image.is_some() }, to, verb, body);
             }
             Command::Look { id, inst, verb, path } => {
                 let to = match path::clean(&path) {
-                    _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::Invalid),
+                    _ if !verb.is_safe() || inst >= self.program.instances.len() => Err(Status::INVALID),
                     Ok(path) => Ok(Resolved { instance: inst, path, read_only: false }),
                     Err(status) => Err(status),
                 };
@@ -613,7 +613,7 @@ impl<'p> Runtime<'p> {
                         self.send_replies(to, replies)?;
                     }
                     Object::Image => {
-                        self.shared.borrow_mut().reply(to, req, Status::NotFound, None, String::new(), true)?;
+                        self.shared.borrow_mut().reply(to, req, Status::NOT_FOUND, None, String::new(), true)?;
                     }
                     Object::Wasm(obj) => {
                         let (ty, body) = body.map(|b| (b.content_type, b.bytes)).unwrap_or_default();
@@ -629,14 +629,15 @@ impl<'p> Runtime<'p> {
             }
             Delivery::Answer { to, ticket, status, body, detail, done } => {
                 let Object::Wasm(obj) = &mut self.objects[to] else { unreachable!("only Wasm objects make calls") };
-                // An error's description takes the place of a payload.
+                // An error's code and description take the place of a payload's type and bytes.
                 let (ty, body) = match body {
+                    _ if !status.is_ok() => (status.code.into_owned(), detail.into_bytes()),
                     Some(b) => (b.content_type, b.bytes),
-                    None => (String::new(), detail.into_bytes()),
+                    None => (String::new(), vec![]),
                 };
                 let mut bytes = ty.as_bytes().to_vec();
                 bytes.extend_from_slice(&body);
-                let args = (ticket as i32, status as i32, ty.len() as i32, body.len() as i32, done as i32);
+                let args = (ticket as i32, status.errno, ty.len() as i32, body.len() as i32, done as i32);
                 let res = obj.fill_inbox(&bytes).and_then(|_| Ok(obj.answer.call(&mut obj.store, args)?));
                 res.map_err(|e| self.failed(to, "handling an answer", e))?;
             }
@@ -743,10 +744,10 @@ fn read_body(caller: &mut Caller<'_, HostState>, ty: i32, ty_len: i32, body: i32
     }
 }
 
-fn status_code(r: Result<(), Status>) -> i32 {
+fn errno(r: Result<(), Status>) -> i32 {
     match r {
-        Ok(()) => Status::Ok as i32,
-        Err(s) => s as i32,
+        Ok(()) => Status::OK.errno,
+        Err(s) => s.errno,
     }
 }
 
@@ -776,7 +777,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
                 0
             };
             let to = match path {
-                None => Err(Status::Invalid),
+                None => Err(Status::INVALID),
                 Some(p) => shared.resolve(me, &p, verb),
             };
             shared.request(Requester::Wasm { inst: me, ticket }, to, verb, body);
@@ -790,17 +791,17 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let me = caller.data().me;
             let body = read_body(&mut caller, ty, ty_len, body, body_len)?;
             let mut shared = caller.data().shared.borrow_mut();
-            shared.reply(me, req as u32, Status::Ok, body, String::new(), done != 0).map_err(host_err)
+            shared.reply(me, req as u32, Status::OK, body, String::new(), done != 0).map_err(host_err)
         },
     )?;
     linker.func_wrap(
         "othismo",
         "fail",
-        |mut caller: Caller<'_, HostState>, req: i32, errno: i32, desc: i32, desc_len: i32| -> HostResult<()> {
+        |mut caller: Caller<'_, HostState>, req: i32, errno: i32, code: i32, code_len: i32, desc: i32, desc_len: i32| -> HostResult<()> {
             let me = caller.data().me;
+            let code = String::from_utf8_lossy(&read_bytes(&mut caller, code, code_len)?).into_owned();
             let detail = String::from_utf8_lossy(&read_bytes(&mut caller, desc, desc_len)?).into_owned();
-            let status = Status::from_i32(errno).filter(|s| *s != Status::Ok);
-            let status = status.ok_or_else(|| wasmtime::format_err!("fail with errno {errno}, which isn't an error"))?;
+            let status = Status::error(errno, code).map_err(|e| wasmtime::format_err!("fail with {e}"))?;
             let mut shared = caller.data().shared.borrow_mut();
             shared.reply(me, req as u32, status, None, detail, true).map_err(host_err)
         },
@@ -827,9 +828,9 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let me = caller.data().me;
             let (src, at) = (read_path(&mut caller, src, src_len)?, read_path(&mut caller, at, at_len)?);
             let mut shared = caller.data().shared.borrow_mut();
-            Ok(status_code(match (src, at) {
+            Ok(errno(match (src, at) {
                 (Some(src), Some(at)) => shared.ns.bind(me, &src, &at, flags & verb::READ_ONLY != 0),
-                _ => Err(Status::Invalid),
+                _ => Err(Status::INVALID),
             }))
         },
     )?;
@@ -837,7 +838,7 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
         let me = caller.data().me;
         let at = read_path(&mut caller, at, at_len)?;
         let mut shared = caller.data().shared.borrow_mut();
-        Ok(status_code(at.ok_or(Status::Invalid).and_then(|at| shared.ns.unmount(me, &at))))
+        Ok(errno(at.ok_or(Status::INVALID).and_then(|at| shared.ns.unmount(me, &at))))
     })?;
     linker.func_wrap(
         "othismo",
@@ -846,9 +847,9 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>> {
             let me = caller.data().me;
             let (at, src) = (read_path(&mut caller, at, at_len)?, read_path(&mut caller, src, src_len)?);
             let mut shared = caller.data().shared.borrow_mut();
-            Ok(status_code(match (at, src) {
+            Ok(errno(match (at, src) {
                 (Some(at), Some(src)) => shared.ns.expose(me, &at, &src, flags & verb::READ_ONLY != 0),
-                _ => Err(Status::Invalid),
+                _ => Err(Status::INVALID),
             }))
         },
     )?;

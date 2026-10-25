@@ -244,11 +244,11 @@ fn path_item(w: &World, here: Viewpoint, verb: Verb, path: &str, is_dir: bool, n
 fn why(w: &World, here: Viewpoint, verb: Verb, path: &str) -> String {
     match w.check(here, verb, path) {
         Ok(_) => String::new(),
-        Err(Status::ReadOnly) => "read-only from here".into(),
-        Err(Status::Forbidden) => format!("operator only; {} isn't one", w.name(here)),
-        Err(Status::NotSupported) => format!("doesn't take {}", verb.keyword()),
-        Err(Status::NotFound) if !w.is_operator(here) => format!("not among {}'s needs", w.name(here)),
-        Err(s) => s.name().to_string(),
+        Err(s) if s == Status::READ_ONLY => "read-only from here".into(),
+        Err(s) if s == Status::FORBIDDEN => format!("operator only; {} isn't one", w.name(here)),
+        Err(s) if s == Status::NOT_SUPPORTED => format!("doesn't take {}", verb.keyword()),
+        Err(s) if s == Status::NOT_FOUND && !w.is_operator(here) => format!("not among {}'s needs", w.name(here)),
+        Err(s) => s.code.to_string(),
     }
 }
 

@@ -66,15 +66,15 @@ pub struct Reply {
 
 impl Reply {
     fn ok(req: u32, body: Payload) -> Reply {
-        Reply { req, status: Status::Ok, body: Some(body), done: true }
+        Reply { req, status: Status::OK, body: Some(body), done: true }
     }
 
     fn more(req: u32, body: Payload) -> Reply {
-        Reply { req, status: Status::Ok, body: Some(body), done: false }
+        Reply { req, status: Status::OK, body: Some(body), done: false }
     }
 
     fn end(req: u32) -> Reply {
-        Reply { req, status: Status::Ok, body: None, done: true }
+        Reply { req, status: Status::OK, body: None, done: true }
     }
 
     fn fail(req: u32, status: Status) -> Reply {
@@ -127,7 +127,7 @@ impl EnvObject {
         // they are made; changing it while they run isn't supported yet.
         let configured = matches!(self, EnvObject::Tcp(_) | EnvObject::Files(_) | EnvObject::MemoryListener(_));
         if configured && verb == Verb::Write && path == "/" {
-            return Ok(vec![Reply::fail(req, Status::NotSupported)]);
+            return Ok(vec![Reply::fail(req, Status::NOT_SUPPORTED)]);
         }
         Ok(match self {
             EnvObject::Console(c) => c.serve(req, verb, path, body, out)?,

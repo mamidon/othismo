@@ -267,17 +267,17 @@ impl World {
     pub fn check(&self, at: Viewpoint, verb: Verb, path: &str) -> Result<Resolved, Status> {
         let r = self.resolve(at, path)?;
         if r.read_only && !verb.is_safe() {
-            return Err(Status::ReadOnly);
+            return Err(Status::READ_ONLY);
         }
         let operator = self.is_operator(at);
         if let (Viewpoint::Instance(i), false) = (at, operator) {
-            let (mount, rest) = self.ns.mount_of(i, path).ok_or(Status::NotFound)?;
-            let need = self.instance(i).interface.need(&mount).ok_or(Status::NotFound)?;
-            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
+            let (mount, rest) = self.ns.mount_of(i, path).ok_or(Status::NOT_FOUND)?;
+            let need = self.instance(i).interface.need(&mount).ok_or(Status::NOT_FOUND)?;
+            need.entry(&rest).ok_or(Status::NOT_FOUND)?.takes_verb(verb, false)?;
         }
-        let entry = self.instance(r.instance).interface.serving(&r.path).ok_or(Status::NotFound)?;
-        if !operator && entry.takes_verb(verb, false) == Err(Status::Forbidden) {
-            return Err(Status::Forbidden);
+        let entry = self.instance(r.instance).interface.serving(&r.path).ok_or(Status::NOT_FOUND)?;
+        if !operator && entry.takes_verb(verb, false) == Err(Status::FORBIDDEN) {
+            return Err(Status::FORBIDDEN);
         }
         entry.takes_verb(verb, operator)?;
         Ok(r)

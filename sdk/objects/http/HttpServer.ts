@@ -1,4 +1,4 @@
-import { OCTETS, OnText, Payload, Request, Response, Stat, Errno, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { OCTETS, OnText, Payload, Request, Response, Stat, Status, Then, ns, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { HttpServerServer, cons, tcp } from "./HttpServer.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
@@ -50,7 +50,7 @@ class HttpServer extends HttpServerServer {
   }
 
   readHosts(req: Request, name: string): void {
-    if (!this.hosts.has(name.toLowerCase())) req.fail(Errno.NotFound)
+    if (!this.hosts.has(name.toLowerCase())) req.fail(Status.NotFound)
     else req.reply(Payload.text(this.hosts.get(name.toLowerCase())))
   }
 
@@ -191,19 +191,19 @@ class Respond extends Then {
     const body = res.body
     const stat = Stat.decode(body)
     const plain = "Content-Type: text/plain\r\n"
-    const directory = res.status == Errno.IsDirectory || (stat !== null && stat.dir)
+    const directory = res.status.is(Status.IsDirectory) || (stat !== null && stat.dir)
     if (directory && !this.path.endsWith("/")) {
       const location = this.path + "/"
       this.send(301, "Moved Permanently", "Location: " + encodeURI(location) + "\r\n" + plain, text("301 -> " + location + "\n"))
-    } else if (directory || res.status == Errno.NotFound) {
+    } else if (directory || res.status.is(Status.NotFound)) {
       this.send(404, "Not Found", plain, text("404 Not Found\n"))
-    } else if (res.status == Errno.ReadOnly || res.status == Errno.NotSupported) {
+    } else if (res.status.is(Status.ReadOnly) || res.status.is(Status.NotSupported)) {
       this.send(405, "Method Not Allowed", "Allow: GET, HEAD\r\n" + plain, text("405 Method Not Allowed\n"))
-    } else if (res.status == Errno.Forbidden) {
+    } else if (res.status.is(Status.Forbidden)) {
       this.send(403, "Forbidden", plain, text("403 Forbidden\n"))
-    } else if (res.status == Errno.Invalid) {
+    } else if (res.status.is(Status.Invalid)) {
       this.send(400, "Bad Request", plain, text("400 Bad Request\n"))
-    } else if (res.status != Errno.Ok) {
+    } else if (!res.ok) {
       this.send(500, "Internal Server Error", plain, text("500 Internal Server Error\n"))
     } else if (stat !== null) {
       // HEAD: the size without the bytes.

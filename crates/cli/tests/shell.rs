@@ -108,21 +108,21 @@ fn an_image_sends_as_the_operator_and_an_object_as_itself() {
     assert!(s.run_line("read /x").is_err(), "nowhere to send it from at the image");
     said(&mut s, ":look web");
     assert_eq!(s.prompt(), "web # ");
-    assert_eq!(last(&ask(&mut s, r#"write /http/hosts/a.example "/www""#)).status, Status::Ok);
+    assert_eq!(last(&ask(&mut s, r#"write /http/hosts/a.example "/www""#)).status, Status::OK);
     let read = ask(&mut s, "read /http/hosts/a.example");
     assert_eq!(last(&read).body.as_ref().map(|p| p.bytes.clone()), Some(b"/www".to_vec()));
     let listed = ask(&mut s, "list /http/hosts");
     assert_eq!(listed.len(), 4, "three hosts, then done");
     said(&mut s, ":look /http");
     assert_eq!(s.prompt(), "web.http $ ");
-    assert_eq!(last(&ask(&mut s, r#"write /net/tcp "x""#)).status, Status::NotFound, "an object can't configure a listener");
+    assert_eq!(last(&ask(&mut s, r#"write /net/tcp "x""#)).status, Status::NOT_FOUND, "an object can't configure a listener");
 }
 
 #[test]
 fn messages_are_written_as_in_an_image_and_the_console_is_typed_into() {
     let mut s = start("greeter/greeter.oth");
     said(&mut s, ":look /");
-    assert_eq!(last(&ask(&mut s, r#"write /greeter/greeting Greeting { prefix: "Hi, ", excited: false }"#)).status, Status::Ok);
+    assert_eq!(last(&ask(&mut s, r#"write /greeter/greeting Greeting { prefix: "Hi, ", excited: false }"#)).status, Status::OK);
     assert!(s.run_line(r#"write /greeter/greeting Greeting { prefix: "Hi, " }"#).is_err(), "checked before it is sent");
     s.run_line(":type Ada").unwrap();
     let printed = printed_until(&mut s, "HI, ADA.");

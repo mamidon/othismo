@@ -1,4 +1,4 @@
-import { Errno, OCTETS, Payload, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Status, OCTETS, Payload, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { SiteTestsServer, net } from "./SiteTests.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
@@ -36,7 +36,7 @@ class SiteTests extends SiteTestsServer {
       net.createDial(new Payload(OCTETS, String.UTF8.encode(request)), new Check(req, c))
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -53,9 +53,9 @@ class Check extends Then {
     if (body !== null) this.got += body.asText()
     if (!res.done) return
     const line = this.got.split("\r\n")[0]
-    if (!res.ok) this.req.fail(Errno.Invalid, "dialing failed with errno " + res.status.toString())
+    if (!res.ok) this.req.fail(Status.Invalid, "dialing failed with " + res.status.code)
     else if (line.startsWith(this.c.want)) this.req.end()
-    else this.req.fail(Errno.Invalid, "expected `" + this.c.want + "...`, got `" + line + "`")
+    else this.req.fail(Status.Invalid, "expected `" + this.c.want + "...`, got `" + line + "`")
   }
 }
 

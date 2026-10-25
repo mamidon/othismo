@@ -232,7 +232,7 @@ impl App {
                     }
                     if answer.done {
                         let (key, stats) = self.listing.remove(&id).expect("just found");
-                        let listed = if answer.status == Status::Ok { Listing::Got(stats) } else { Listing::Failed(answer.status) };
+                        let listed = if answer.status == Status::OK { Listing::Got(stats) } else { Listing::Failed(answer.status) };
                         self.listings.insert(key, listed);
                         self.rebuild();
                         self.recomplete();
@@ -240,7 +240,7 @@ impl App {
                     return;
                 }
                 let tag = if answer.done && self.session.open.is_empty() { "  ".to_string() } else { format!("  [{id}] ") };
-                let ok = answer.status == Status::Ok;
+                let ok = answer.status == Status::OK;
                 for (i, l) in show::answer(&answer, &self.session.formats).into_iter().enumerate() {
                     let style = match (ok, i) {
                         (false, _) => Style::new().fg(colour::ERR),
@@ -865,7 +865,7 @@ impl App {
         }
         let status = match self.listings.get(&(r.instance, r.path.clone())) {
             None | Some(Listing::Waiting) => Some("listing…".to_string()),
-            Some(Listing::Failed(s)) => Some(format!("not listed: {}", s.name())),
+            Some(Listing::Failed(s)) => Some(format!("not listed: {}", s.code)),
             Some(Listing::Got(_)) if entries.is_empty() && patterns.is_empty() => Some("empty".to_string()),
             Some(Listing::Got(_)) => None,
         };

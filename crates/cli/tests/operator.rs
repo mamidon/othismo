@@ -117,7 +117,7 @@ fn text(s: &str) -> Option<Payload> {
 }
 
 fn status(answers: &[Answered]) -> Status {
-    answers.last().unwrap().status
+    answers.last().unwrap().status.clone()
 }
 
 #[test]
@@ -153,9 +153,9 @@ fn a_snapshot_shows_what_changed_at_run_time() {
 #[test]
 fn an_object_makes_requests_as_itself() {
     let mut op = Operated::start("greeter/greeter.oth");
-    assert_eq!(status(&op.ask(Some("greeter"), Verb::Write, "/shouter", text("hi"))), Status::Ok);
-    assert_eq!(status(&op.ask(Some("greeter"), Verb::Read, "/shouter", None)), Status::NotSupported, "not among its needs");
-    assert_eq!(status(&op.ask(Some("greeter"), Verb::Read, "/nowhere", None)), Status::NotFound);
+    assert_eq!(status(&op.ask(Some("greeter"), Verb::Write, "/shouter", text("hi"))), Status::OK);
+    assert_eq!(status(&op.ask(Some("greeter"), Verb::Read, "/shouter", None)), Status::NOT_SUPPORTED, "not among its needs");
+    assert_eq!(status(&op.ask(Some("greeter"), Verb::Read, "/nowhere", None)), Status::NOT_FOUND);
     assert!(op.stop().contains("HI"));
 }
 
@@ -163,10 +163,10 @@ fn an_object_makes_requests_as_itself() {
 fn only_an_image_sends_as_the_operator() {
     let mut op = Operated::start("static/static.test.oth");
     // Configuring a listener is the operator's: an object can't even need it.
-    assert_eq!(status(&op.ask(Some("web.http"), Verb::Write, "/net/tcp", text("x"))), Status::NotFound);
-    assert_eq!(status(&op.ask(Some("web"), Verb::Write, "/net/tcp", text("x"))), Status::NotSupported, "and once it runs, not even the operator can");
+    assert_eq!(status(&op.ask(Some("web.http"), Verb::Write, "/net/tcp", text("x"))), Status::NOT_FOUND);
+    assert_eq!(status(&op.ask(Some("web"), Verb::Write, "/net/tcp", text("x"))), Status::NOT_SUPPORTED, "and once it runs, not even the operator can");
     // From the image that holds it, a host is the operator's to add.
-    assert_eq!(status(&op.ask(Some("web"), Verb::Write, "/http/hosts/example.com", text("/www"))), Status::Ok);
+    assert_eq!(status(&op.ask(Some("web"), Verb::Write, "/http/hosts/example.com", text("/www"))), Status::OK);
     let read = op.ask(Some("web"), Verb::Read, "/http/hosts/example.com", None);
     assert_eq!(read.last().unwrap().body, text("/www"));
     op.stop();
@@ -175,8 +175,8 @@ fn only_an_image_sends_as_the_operator() {
 #[test]
 fn the_root_image_resolves_in_its_own_view() {
     let mut op = Operated::start("greeter/greeter.oth");
-    assert_eq!(status(&op.ask(None, Verb::Write, "/dev/cons", text("from the operator"))), Status::Ok);
-    assert_eq!(status(&op.ask(None, Verb::Read, "/shouter", None)), Status::NotFound, "the greeter's, not the image's");
+    assert_eq!(status(&op.ask(None, Verb::Write, "/dev/cons", text("from the operator"))), Status::OK);
+    assert_eq!(status(&op.ask(None, Verb::Read, "/shouter", None)), Status::NOT_FOUND, "the greeter's, not the image's");
     assert!(op.stop().contains("from the operator"));
 }
 
@@ -190,7 +190,7 @@ fn a_stream_ends_when_the_operator_cancels_it() {
     assert!(op.snapshot().instances.iter().any(|i| i.name == "cons" && i.pending == 1), "the watch is open");
     assert!(op.op.send(Command::Cancel { id }));
     let last = op.answer(id);
-    assert!(last.done && last.status == Status::Ok);
+    assert!(last.done && last.status == Status::OK);
     assert!(op.snapshot().instances.iter().all(|i| i.name != "cons" || i.pending == 0), "and closed");
     op.stop();
 }
@@ -213,7 +213,7 @@ fn the_operator_can_look_inside_any_served_tree() {
     };
     let listed = look(Verb::List, "/");
     assert!(listed.len() > 2, "what web.files serves, though nothing looks from a view that has it: {listed:?}");
-    assert_eq!(status(&look(Verb::Write, "/x")), Status::Invalid, "looking changes nothing");
-    assert_eq!(status(&look(Verb::List, "/../x")), Status::Invalid);
+    assert_eq!(status(&look(Verb::Write, "/x")), Status::INVALID, "looking changes nothing");
+    assert_eq!(status(&look(Verb::List, "/../x")), Status::INVALID);
     op.stop();
 }

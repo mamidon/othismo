@@ -1,6 +1,6 @@
 // Generated from TypesTests.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 import { Payload } from "othismo"
 import { Box, Message, Reader, Uuid, Writer, bson, registerMessage } from "othismo/bson"
 
@@ -282,29 +282,29 @@ export class TypesTestsServer extends Server {
    *
    * `/tests/{name} write`
    */
-  writeTests(req: Request, name: string): void { req.fail(Errno.NotSupported) }
+  writeTests(req: Request, name: string): void { req.fail(Status.NotSupported) }
 
   /**
    * The tests, a stat record each.
    *
    * `/tests list`
    */
-  listTests(req: Request): void { req.fail(Errno.NotSupported) }
+  listTests(req: Request): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/tests/{name}", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { this.writeTests(req, m0![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/tests", req.path)
     if (m1 !== null) {
       if (req.verb == Verb.List) { this.listTests(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 

@@ -23,15 +23,15 @@ impl Files {
 
     pub(super) fn serve(&self, req: u32, verb: Verb, path: &str) -> Vec<Reply> {
         if !verb.is_safe() {
-            return vec![Reply::fail(req, Status::ReadOnly)];
+            return vec![Reply::fail(req, Status::READ_ONLY)];
         }
         let real = match self.locate(path) {
             Ok(p) => p,
             Err(status) => return vec![Reply::fail(req, status)],
         };
-        let io = |e: std::io::Error| if e.kind() == std::io::ErrorKind::NotFound { Status::NotFound } else { Status::Io };
+        let io = |e: std::io::Error| if e.kind() == std::io::ErrorKind::NotFound { Status::NOT_FOUND } else { Status::IO };
         match verb {
-            Verb::Read if real.is_dir() => vec![Reply::fail(req, Status::IsDirectory)],
+            Verb::Read if real.is_dir() => vec![Reply::fail(req, Status::IS_DIRECTORY)],
             Verb::Read => match std::fs::read(&real) {
                 Ok(data) => vec![Reply::ok(req, Payload::new(mime(&real), data))],
                 Err(e) => vec![Reply::fail(req, io(e))],
@@ -40,7 +40,7 @@ impl Files {
                 Ok(s) => vec![Reply::ok(req, s.encode())],
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
-            Verb::List if !real.is_dir() => vec![Reply::fail(req, Status::NotDirectory)],
+            Verb::List if !real.is_dir() => vec![Reply::fail(req, Status::NOT_DIRECTORY)],
             Verb::List => match std::fs::read_dir(&real) {
                 Ok(entries) => {
                     let mut stats: Vec<Stat> = entries
@@ -54,7 +54,7 @@ impl Files {
                 }
                 Err(e) => vec![Reply::fail(req, io(e))],
             },
-            _ => vec![Reply::fail(req, Status::NotSupported)],
+            _ => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
         }
     }
 
@@ -63,9 +63,9 @@ impl Files {
     /// `NotFound`, as if it didn't exist.
     fn locate(&self, path: &str) -> std::result::Result<PathBuf, Status> {
         let full = resolve(&self.root, path)?;
-        let real = full.canonicalize().map_err(|_| Status::NotFound)?;
+        let real = full.canonicalize().map_err(|_| Status::NOT_FOUND)?;
         if !real.starts_with(&self.root) {
-            return Err(Status::NotFound);
+            return Err(Status::NOT_FOUND);
         }
         Ok(real)
     }
@@ -73,14 +73,14 @@ impl Files {
 
 fn resolve(root: &Path, path: &str) -> std::result::Result<PathBuf, Status> {
     if path.contains('\0') || path.contains('\\') {
-        return Err(Status::Invalid);
+        return Err(Status::INVALID);
     }
     let mut out = root.to_path_buf();
     for c in Path::new(path.trim_start_matches('/')).components() {
         match c {
             Component::Normal(part) => out.push(part),
             Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(Status::Invalid),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(Status::INVALID),
         }
     }
     Ok(out)
@@ -139,14 +139,14 @@ mod tests {
         let read = |p: &str| f.serve(1, Verb::Read, p);
         let a = read("/a.txt").remove(0).body.unwrap();
         assert_eq!(a, Payload::new("text/plain; charset=utf-8", "A"));
-        assert_eq!(status(read("sub/./b.css")), [Status::Ok]);
-        assert_eq!(status(read("/sub")), [Status::IsDirectory]);
-        assert_eq!(status(read("/missing")), [Status::NotFound]);
-        assert_eq!(status(read("/../secret.txt")), [Status::Invalid]);
-        assert_eq!(status(read("sub\\..\\a.txt")), [Status::Invalid]);
+        assert_eq!(status(read("sub/./b.css")), [Status::OK]);
+        assert_eq!(status(read("/sub")), [Status::IS_DIRECTORY]);
+        assert_eq!(status(read("/missing")), [Status::NOT_FOUND]);
+        assert_eq!(status(read("/../secret.txt")), [Status::INVALID]);
+        assert_eq!(status(read("sub\\..\\a.txt")), [Status::INVALID]);
         #[cfg(unix)]
-        assert_eq!(status(read("/link.txt")), [Status::NotFound], "symlinks out of the root don't exist");
-        assert_eq!(status(f.serve(1, Verb::Write, "/a.txt")), [Status::ReadOnly]);
+        assert_eq!(status(read("/link.txt")), [Status::NOT_FOUND], "symlinks out of the root don't exist");
+        assert_eq!(status(f.serve(1, Verb::Write, "/a.txt")), [Status::READ_ONLY]);
 
         let info = Stat::decode(&f.serve(1, Verb::Stat, "/sub/b.css").remove(0).body.unwrap()).unwrap();
         assert_eq!(info, Stat::file("b.css", 1, "text/css; charset=utf-8"));
@@ -161,7 +161,7 @@ mod tests {
             want.remove(1);
         }
         assert_eq!(list, want);
-        assert_eq!(status(f.serve(1, Verb::List, "/a.txt")), [Status::NotDirectory]);
+        assert_eq!(status(f.serve(1, Verb::List, "/a.txt")), [Status::NOT_DIRECTORY]);
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -23,7 +23,7 @@ impl Console {
 
     pub(super) fn serve(&mut self, req: u32, verb: Verb, path: &str, body: Option<&Payload>, out: &mut dyn Write) -> Result<Vec<Reply>> {
         if path != "/" {
-            return Ok(vec![Reply::fail(req, Status::NotFound)]);
+            return Ok(vec![Reply::fail(req, Status::NOT_FOUND)]);
         }
         Ok(match (verb, body) {
             (Verb::Watch, _) if self.eof => vec![Reply::end(req)],
@@ -35,8 +35,8 @@ impl Console {
                 writeln!(out, "{}", render::line(p)).and_then(|_| out.flush()).context("writing stdout")?;
                 vec![Reply::end(req)]
             }
-            (Verb::Write, None) => vec![Reply::fail(req, Status::Invalid)],
-            _ => vec![Reply::fail(req, Status::NotSupported)],
+            (Verb::Write, None) => vec![Reply::fail(req, Status::INVALID)],
+            _ => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
         })
     }
 
@@ -88,9 +88,9 @@ impl MemoryConsole {
                 self.printed.push(req);
                 vec![]
             }
-            ("/" | "/typed", Verb::Write, None) => vec![Reply::fail(req, Status::Invalid)],
-            ("/" | "/typed" | "/printed", ..) => vec![Reply::fail(req, Status::NotSupported)],
-            _ => vec![Reply::fail(req, Status::NotFound)],
+            ("/" | "/typed", Verb::Write, None) => vec![Reply::fail(req, Status::INVALID)],
+            ("/" | "/typed" | "/printed", ..) => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
+            _ => vec![Reply::fail(req, Status::NOT_FOUND)],
         }
     }
 
@@ -150,7 +150,7 @@ mod tests {
         let w = c.serve(4, Verb::Write, "/", Some(&Payload::text("out")), &mut out).unwrap();
         assert_eq!(w, [Reply::end(4)]);
         assert_eq!(out, b"out\n");
-        assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out).unwrap()), [Status::NotFound]);
+        assert_eq!(status(c.serve(5, Verb::Write, "/x", None, &mut out).unwrap()), [Status::NOT_FOUND]);
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(c.serve(4, Verb::Write, "/", Some(&out)), [Reply::more(2, out), Reply::end(4)]);
         c.cancel(2);
         assert_eq!(c.serve(5, Verb::Write, "/", Some(&line)), [Reply::end(5)]);
-        assert_eq!(status(c.serve(6, Verb::Read, "/printed", None)), [Status::NotSupported]);
-        assert_eq!(status(c.serve(7, Verb::Read, "/x", None)), [Status::NotFound]);
+        assert_eq!(status(c.serve(6, Verb::Read, "/printed", None)), [Status::NOT_SUPPORTED]);
+        assert_eq!(status(c.serve(7, Verb::Read, "/x", None)), [Status::NOT_FOUND]);
     }
 }

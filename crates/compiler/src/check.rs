@@ -838,7 +838,7 @@ fn check_request(
     });
     match entry.takes(r.verb, body_type) {
         Ok(_) if takes => Ok(()),
-        Err(Status::NotSupported) => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
+        Err(status) if status == Status::NOT_SUPPORTED => bail!("{}: `{name}` doesn't take `{}` at `{path}`; it serves `{entry}`", r.verb_pos, r.verb),
         _ => bail!("{}: `{name}` doesn't take `{given}` at `{path}`; it serves `{entry}`", r.verb_pos),
     }
 }

@@ -97,16 +97,16 @@ impl Tcp {
                 self.accept_watchers.push(req);
                 return vec![];
             }
-            (At::Address | At::Accept, _) => return vec![Reply::fail(req, Status::NotSupported)],
-            (At::Nothing | At::Dial, _) => return vec![Reply::fail(req, Status::NotFound)],
+            (At::Address | At::Accept, _) => return vec![Reply::fail(req, Status::NOT_SUPPORTED)],
+            (At::Nothing | At::Dial, _) => return vec![Reply::fail(req, Status::NOT_FOUND)],
             (At::Conn(n) | At::Data(n) | At::Remote(n), _) => match self.conns.get_mut(&n) {
                 Some(c) => (n, c),
-                None => return vec![Reply::fail(req, Status::NotFound)],
+                None => return vec![Reply::fail(req, Status::NOT_FOUND)],
             },
         };
         match (at(path), verb) {
             (At::Remote(_), Verb::Read) => vec![Reply::ok(req, Payload::text(&c.peer))],
-            (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::Exists)],
+            (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::EXISTS)],
             (At::Data(_), Verb::Watch) => {
                 let mut replies: Vec<Reply> = c.pending.drain(..).map(|d| Reply::more(req, data(d))).collect();
                 if c.eof {
@@ -118,15 +118,15 @@ impl Tcp {
                 replies
             }
             (At::Data(_), Verb::Write) => {
-                let Some(body) = body else { return vec![Reply::fail(req, Status::Invalid)] };
+                let Some(body) = body else { return vec![Reply::fail(req, Status::INVALID)] };
                 if c.shut {
-                    return vec![Reply::fail(req, Status::Invalid)];
+                    return vec![Reply::fail(req, Status::INVALID)];
                 }
                 match c.stream.write_all(&body.bytes) {
                     Ok(()) => vec![Reply::end(req)],
                     Err(e) => {
                         eprintln!("tcp: write to connection {conn} failed: {e}");
-                        vec![Reply::fail(req, Status::Io)]
+                        vec![Reply::fail(req, Status::IO)]
                     }
                 }
             }
@@ -137,7 +137,7 @@ impl Tcp {
                 self.forget_if_finished(conn);
                 vec![Reply::end(req)]
             }
-            _ => vec![Reply::fail(req, Status::NotSupported)],
+            _ => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
         }
     }
 
@@ -223,7 +223,7 @@ impl MemoryListener {
                 return self.unannounced.drain(..).map(|conn| Reply::more(req, accepted(conn))).collect();
             }
             (At::Dial, Verb::Create) => {
-                let Some(body) = body else { return vec![Reply::fail(req, Status::Invalid)] };
+                let Some(body) = body else { return vec![Reply::fail(req, Status::INVALID)] };
                 self.next += 1;
                 let conn = self.next;
                 self.conns.insert(conn, MemoryConn { dialer: req, watcher: None, pending: vec![body.bytes.clone()] });
@@ -232,23 +232,23 @@ impl MemoryListener {
                 }
                 return self.accept_watchers.iter().map(|&w| Reply::more(w, accepted(conn))).collect();
             }
-            (At::Address | At::Accept | At::Dial, _) => return vec![Reply::fail(req, Status::NotSupported)],
-            (At::Nothing, _) => return vec![Reply::fail(req, Status::NotFound)],
+            (At::Address | At::Accept | At::Dial, _) => return vec![Reply::fail(req, Status::NOT_SUPPORTED)],
+            (At::Nothing, _) => return vec![Reply::fail(req, Status::NOT_FOUND)],
             (At::Conn(n) | At::Data(n) | At::Remote(n), _) => match self.conns.get_mut(&n) {
                 Some(c) => (n, c),
-                None => return vec![Reply::fail(req, Status::NotFound)],
+                None => return vec![Reply::fail(req, Status::NOT_FOUND)],
             },
         };
         match (at(path), verb) {
             (At::Remote(_), Verb::Read) => vec![Reply::ok(req, Payload::text("memory"))],
-            (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::Exists)],
+            (At::Data(_), Verb::Watch) if c.watcher.is_some() => vec![Reply::fail(req, Status::EXISTS)],
             (At::Data(_), Verb::Watch) => {
                 c.watcher = Some(req);
                 c.pending.drain(..).map(|d| Reply::more(req, data(d))).collect()
             }
             (At::Data(_), Verb::Write) => match body {
                 Some(body) => vec![Reply::more(c.dialer, data(body.bytes.clone())), Reply::end(req)],
-                None => vec![Reply::fail(req, Status::Invalid)],
+                None => vec![Reply::fail(req, Status::INVALID)],
             },
             // The server hangs up: the dialer has everything, and the server
             // hears the dialer hang up too.
@@ -259,7 +259,7 @@ impl MemoryListener {
                 replies.push(Reply::end(req));
                 replies
             }
-            _ => vec![Reply::fail(req, Status::NotSupported)],
+            _ => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
         }
     }
 
@@ -335,14 +335,14 @@ mod tests {
         assert_eq!(l.serve(4, Verb::Write, "/1/data", Some(&bytes("200"))), [Reply::more(1, bytes("200")), Reply::end(4)]);
         assert_eq!(l.serve(5, Verb::Read, "/1/remote", None), [Reply::ok(5, Payload::text("memory"))]);
         assert_eq!(l.serve(6, Verb::Remove, "/1", None), [Reply::end(1), Reply::end(3), Reply::end(6)]);
-        assert_eq!(l.serve(7, Verb::Watch, "/1/data", None)[0].status, Status::NotFound);
+        assert_eq!(l.serve(7, Verb::Watch, "/1/data", None)[0].status, Status::NOT_FOUND);
 
         // Dialed while watched: announced at once.
         assert_eq!(l.serve(8, Verb::Create, "/dial", Some(&bytes("x"))), [Reply::more(2, accepted(2))]);
         assert_eq!(l.serve(9, Verb::Watch, "/2/data", None), [Reply::more(9, bytes("x"))]);
         assert_eq!(l.cancel(8), [Reply::end(9)], "the dialer hung up");
-        assert_eq!(l.serve(10, Verb::Create, "/dial", None)[0].status, Status::Invalid);
+        assert_eq!(l.serve(10, Verb::Create, "/dial", None)[0].status, Status::INVALID);
         assert_eq!(l.serve(11, Verb::Read, "/address", None)[0].body, Some(Payload::text("memory")));
-        assert_eq!(l.serve(12, Verb::Read, "/2/nothing", None)[0].status, Status::NotFound);
+        assert_eq!(l.serve(12, Verb::Read, "/2/nothing", None)[0].status, Status::NOT_FOUND);
     }
 }

@@ -6,13 +6,13 @@ use crate::status::Status;
 /// trailing `/`. Relative paths, `..` segments and NUL bytes are `Invalid`.
 pub fn clean(path: &str) -> Result<String, Status> {
     if !path.starts_with('/') || path.contains('\0') {
-        return Err(Status::Invalid);
+        return Err(Status::INVALID);
     }
     let mut cleaned = String::with_capacity(path.len());
     for segment in path.split('/') {
         match segment {
             "" | "." => {}
-            ".." => return Err(Status::Invalid),
+            ".." => return Err(Status::INVALID),
             segment => {
                 cleaned.push('/');
                 cleaned.push_str(segment);
@@ -46,11 +46,11 @@ mod tests {
         assert_eq!(clean("/a/b/").unwrap(), "/a/b/");
         assert_eq!(clean("/a/.").unwrap(), "/a/");
         assert_eq!(clean("/."), Ok("/".into()));
-        assert_eq!(clean("a/b"), Err(Status::Invalid));
-        assert_eq!(clean(""), Err(Status::Invalid));
-        assert_eq!(clean("/a/../b"), Err(Status::Invalid));
-        assert_eq!(clean("/a/.."), Err(Status::Invalid));
-        assert_eq!(clean("/a\0"), Err(Status::Invalid));
+        assert_eq!(clean("a/b"), Err(Status::INVALID));
+        assert_eq!(clean(""), Err(Status::INVALID));
+        assert_eq!(clean("/a/../b"), Err(Status::INVALID));
+        assert_eq!(clean("/a/.."), Err(Status::INVALID));
+        assert_eq!(clean("/a\0"), Err(Status::INVALID));
         assert_eq!(clean("/a/..b/c.").unwrap(), "/a/..b/c.", "only whole `..` segments are refused");
         assert_eq!(mount_point("/a/b/").unwrap(), "/a/b");
         assert_eq!(mount_point("/").unwrap(), "/");

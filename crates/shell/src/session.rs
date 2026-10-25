@@ -251,7 +251,7 @@ impl Session {
             Builtin::Look(target) => {
                 let at = match (target.starts_with('/') && target != "/", self.here) {
                     (true, Some(here)) => {
-                        let r = self.world.resolve(here, &target).map_err(|s| anyhow!("{target}: {}", s.name()))?;
+                        let r = self.world.resolve(here, &target).map_err(|s| anyhow!("{target}: {}", s.code))?;
                         Viewpoint::Instance(r.instance)
                     }
                     (true, None) => bail!("look from a root first; paths resolve in a view"),

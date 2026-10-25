@@ -24,27 +24,27 @@ impl Packed {
     /// Answers as [`Files`] does, from the tree.
     pub(super) fn serve(&self, req: u32, verb: Verb, path: &str) -> Vec<Reply> {
         if !verb.is_safe() {
-            return vec![Reply::fail(req, Status::ReadOnly)];
+            return vec![Reply::fail(req, Status::READ_ONLY)];
         }
         let as_dir = path.len() > 1 && path.ends_with('/');
-        let Ok(path) = path::mount_point(path) else { return vec![Reply::fail(req, Status::Invalid)] };
+        let Ok(path) = path::mount_point(path) else { return vec![Reply::fail(req, Status::INVALID)] };
         // As on disk, `file/` names nothing.
         let node = self.tree.get(&path).filter(|n| !as_dir || **n == Node::Dir);
-        let Some(node) = node else { return vec![Reply::fail(req, Status::NotFound)] };
+        let Some(node) = node else { return vec![Reply::fail(req, Status::NOT_FOUND)] };
         match (verb, node) {
-            (Verb::Read, Node::Dir) => vec![Reply::fail(req, Status::IsDirectory)],
+            (Verb::Read, Node::Dir) => vec![Reply::fail(req, Status::IS_DIRECTORY)],
             (Verb::Read, Node::File { hash, .. }) => {
                 vec![Reply::ok(req, Payload::new(mime(Path::new(&path)), self.blobs[hash].to_vec()))]
             }
             (Verb::Stat, node) => vec![Reply::ok(req, stat(&name(&path), node).encode())],
-            (Verb::List, Node::File { .. }) => vec![Reply::fail(req, Status::NotDirectory)],
+            (Verb::List, Node::File { .. }) => vec![Reply::fail(req, Status::NOT_DIRECTORY)],
             (Verb::List, Node::Dir) => {
                 let mut replies: Vec<Reply> =
                     self.tree.children(&path).map(|(name, node)| Reply::more(req, stat(name, node).encode())).collect();
                 replies.push(Reply::end(req));
                 replies
             }
-            _ => vec![Reply::fail(req, Status::NotSupported)],
+            _ => vec![Reply::fail(req, Status::NOT_SUPPORTED)],
         }
     }
 }
@@ -76,14 +76,14 @@ mod tests {
         tree.put("/sub", Node::Dir, &mut vec![]);
         let p = Packed { tree, blobs: BTreeMap::from([("h".to_string(), Rc::from(&b"A"[..]))]) };
         let read = |path: &str| status(p.serve(1, Verb::Read, path));
-        assert_eq!(read("/a.txt"), [Status::Ok]);
-        assert_eq!(read("/./a.txt"), [Status::Ok]);
-        assert_eq!(read("/a.txt/"), [Status::NotFound]);
-        assert_eq!(read("/sub/"), [Status::IsDirectory]);
-        assert_eq!(read("/sub/../a.txt"), [Status::Invalid]);
-        assert_eq!(status(p.serve(1, Verb::List, "/sub/")), [Status::Ok]);
-        assert_eq!(status(p.serve(1, Verb::Watch, "/")), [Status::NotSupported]);
-        assert_eq!(status(p.serve(1, Verb::Create, "/b")), [Status::ReadOnly]);
+        assert_eq!(read("/a.txt"), [Status::OK]);
+        assert_eq!(read("/./a.txt"), [Status::OK]);
+        assert_eq!(read("/a.txt/"), [Status::NOT_FOUND]);
+        assert_eq!(read("/sub/"), [Status::IS_DIRECTORY]);
+        assert_eq!(read("/sub/../a.txt"), [Status::INVALID]);
+        assert_eq!(status(p.serve(1, Verb::List, "/sub/")), [Status::OK]);
+        assert_eq!(status(p.serve(1, Verb::Watch, "/")), [Status::NOT_SUPPORTED]);
+        assert_eq!(status(p.serve(1, Verb::Create, "/b")), [Status::READ_ONLY]);
         let stat = Stat::decode(&p.serve(1, Verb::Stat, "/a.txt").remove(0).body.unwrap()).unwrap();
         assert_eq!((stat.name.as_str(), stat.length, stat.content_type.as_str()), ("a.txt", 1, "text/plain; charset=utf-8"));
     }

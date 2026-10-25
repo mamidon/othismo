@@ -108,7 +108,7 @@ impl Namespace {
     /// Resolves `path` in `instance`'s view.
     pub fn resolve(&self, instance: usize, path: &str) -> Result<Resolved, Status> {
         let path = clean(path)?;
-        let resolved = self.instances[instance].view.resolve(&path).ok_or(Status::NotFound)?;
+        let resolved = self.instances[instance].view.resolve(&path).ok_or(Status::NOT_FOUND)?;
         self.follow(resolved)
     }
 
@@ -128,7 +128,7 @@ impl Namespace {
             };
             resolved = Resolved { read_only: resolved.read_only || exposed.read_only, ..exposed };
         }
-        Err(Status::Invalid)
+        Err(Status::INVALID)
     }
 
     /// Makes what `source` names in `instance`'s view also appear at `at`,
@@ -142,7 +142,7 @@ impl Namespace {
 
     pub fn unmount(&mut self, instance: usize, at: &str) -> Result<(), Status> {
         let at = mount_point(at)?;
-        self.instances[instance].view.0.remove(&at).map(|_| ()).ok_or(Status::NotFound)
+        self.instances[instance].view.0.remove(&at).map(|_| ()).ok_or(Status::NOT_FOUND)
     }
 
     /// Splices what `source` names in `instance`'s view into `instance`'s served
@@ -181,9 +181,9 @@ mod tests {
         assert_eq!(namespace.resolve(0, "/www/blog/post/1"), resolved(2, "/post/1", false));
         assert_eq!(namespace.resolve(0, "/www/blogger"), resolved(1, "/blogger", false));
         assert_eq!(namespace.resolve(0, "/files/a"), resolved(3, "/a", true));
-        assert_eq!(namespace.resolve(0, "/wwwx"), Err(Status::NotFound));
-        assert_eq!(namespace.resolve(0, "/www/../files/a"), Err(Status::Invalid));
-        assert_eq!(namespace.resolve(1, "/www"), Err(Status::NotFound), "views are private");
+        assert_eq!(namespace.resolve(0, "/wwwx"), Err(Status::NOT_FOUND));
+        assert_eq!(namespace.resolve(0, "/www/../files/a"), Err(Status::INVALID));
+        assert_eq!(namespace.resolve(1, "/www"), Err(Status::NOT_FOUND), "views are private");
     }
 
     #[test]
@@ -216,15 +216,15 @@ mod tests {
         assert_eq!(namespace.resolve(0, "/d/x"), resolved(1, "/docs/x", true));
         assert_eq!(namespace.unmount(0, "/files"), Ok(()));
         assert_eq!(namespace.resolve(0, "/d/x"), resolved(1, "/docs/x", true), "bind took effect when made");
-        assert_eq!(namespace.resolve(0, "/files/x"), Err(Status::NotFound));
-        assert_eq!(namespace.unmount(0, "/files"), Err(Status::NotFound));
-        assert_eq!(namespace.bind(0, "/nothing", "/n", false), Err(Status::NotFound));
-        assert_eq!(namespace.bind(0, "/d", "relative", false), Err(Status::Invalid));
+        assert_eq!(namespace.resolve(0, "/files/x"), Err(Status::NOT_FOUND));
+        assert_eq!(namespace.unmount(0, "/files"), Err(Status::NOT_FOUND));
+        assert_eq!(namespace.bind(0, "/nothing", "/n", false), Err(Status::NOT_FOUND));
+        assert_eq!(namespace.bind(0, "/d", "relative", false), Err(Status::INVALID));
         // Re-binding a read-only name read-write doesn't lift the restriction.
         assert_eq!(namespace.bind(0, "/d", "/e", false), Ok(()));
         assert_eq!(namespace.resolve(0, "/e"), resolved(1, "/docs", true));
         assert_eq!(namespace.unmount(0, "/d/"), Ok(()), "a trailing / names the same mount point");
-        assert_eq!(namespace.resolve(0, "/d/x"), Err(Status::NotFound));
+        assert_eq!(namespace.resolve(0, "/d/x"), Err(Status::NOT_FOUND));
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(namespace.resolve(0, "/www/static/a.css"), resolved(2, "/public/a.css", true));
         assert_eq!(namespace.resolve(0, "/www/staticky"), resolved(1, "/staticky", false));
         assert_eq!(namespace.resolve(0, "/www/index.html"), resolved(1, "/index.html", false));
-        assert_eq!(namespace.expose(1, "/x", "/unseen", false), Err(Status::NotFound));
+        assert_eq!(namespace.expose(1, "/x", "/unseen", false), Err(Status::NOT_FOUND));
     }
 
     #[test]
@@ -247,6 +247,6 @@ mod tests {
         mount(&mut namespace, 1, "/a", 0, false);
         namespace.expose(0, "/loop", "/b/loop", false).unwrap();
         namespace.expose(1, "/loop", "/a/loop", false).unwrap();
-        assert_eq!(namespace.resolve(0, "/b/loop"), Err(Status::Invalid));
+        assert_eq!(namespace.resolve(0, "/b/loop"), Err(Status::INVALID));
     }
 }

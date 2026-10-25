@@ -1,6 +1,6 @@
 // Generated from env by `othismo bindings`. Edit the runtime's header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "./index"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "./index"
 
 /**
  * A console: lines in, and anything out. The runtime runs it on the host's
@@ -38,24 +38,24 @@ export class ConsoleServer extends Server {
    *
    * `/ watch -> text/plain*`
    */
-  watch(req: Request): void { req.fail(Errno.NotSupported) }
+  watch(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * Watch for every line of input, until it ends; write to print.
    *
    * `/ write *\/*`
    */
-  write(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }
+  write(req: Request, body: Payload): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Watch) { this.watch(req); return }
       if (req.verb == Verb.Write) { const body = payloadOf(req, "*/*"); if (body !== null) this.write(req, body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -82,16 +82,16 @@ export class DialerServer extends Server {
    *
    * `/dial create application/octet-stream -> application/octet-stream*`
    */
-  createDial(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }
+  createDial(req: Request, body: Payload): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/dial", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Create) { const body = payloadOf(req, "application/octet-stream"); if (body !== null) this.createDial(req, body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -118,13 +118,13 @@ export class FileTreeClient {
 /** A tree of files, read-only. */
 export class FileTreeServer extends Server {
   /** `/** read -> *\/*` */
-  readAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  readAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   /** `/** stat` */
-  statAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  statAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   /** `/** list` */
-  listAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  listAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/**", req.path)
@@ -132,10 +132,10 @@ export class FileTreeServer extends Server {
       if (req.verb == Verb.Read) { this.readAny(req, m0![0]); return }
       if (req.verb == Verb.Stat) { this.statAny(req, m0![0]); return }
       if (req.verb == Verb.List) { this.listAny(req, m0![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -197,7 +197,7 @@ export class FilesServer extends Server {
    *
    * `/ operator write text/plain`
    */
-  write(req: Request, body: string): void { req.fail(Errno.NotSupported) }
+  write(req: Request, body: string): void { req.fail(Status.NotSupported) }
 
   /**
    * Configured by the image only, with the directory to serve, relative
@@ -205,7 +205,7 @@ export class FilesServer extends Server {
    *
    * `/ read -> *\/*`
    */
-  read(req: Request): void { req.fail(Errno.NotSupported) }
+  read(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * Configured by the image only, with the directory to serve, relative
@@ -213,7 +213,7 @@ export class FilesServer extends Server {
    *
    * `/ stat`
    */
-  stat(req: Request): void { req.fail(Errno.NotSupported) }
+  stat(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * Configured by the image only, with the directory to serve, relative
@@ -221,16 +221,16 @@ export class FilesServer extends Server {
    *
    * `/ list`
    */
-  list(req: Request): void { req.fail(Errno.NotSupported) }
+  list(req: Request): void { req.fail(Status.NotSupported) }
 
   /** `/** read -> *\/*` */
-  readAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  readAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   /** `/** stat` */
-  statAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  statAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   /** `/** list` */
-  listAny(req: Request, rest: string): void { req.fail(Errno.NotSupported) }
+  listAny(req: Request, rest: string): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/", req.path)
@@ -239,7 +239,7 @@ export class FilesServer extends Server {
       if (req.verb == Verb.Read) { this.read(req); return }
       if (req.verb == Verb.Stat) { this.stat(req); return }
       if (req.verb == Verb.List) { this.list(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/**", req.path)
@@ -247,10 +247,10 @@ export class FilesServer extends Server {
       if (req.verb == Verb.Read) { this.readAny(req, m1![0]); return }
       if (req.verb == Verb.Stat) { this.statAny(req, m1![0]); return }
       if (req.verb == Verb.List) { this.listAny(req, m1![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -329,21 +329,21 @@ export class ListenerServer extends Server {
    *
    * `/ operator write text/plain`
    */
-  write(req: Request, body: string): void { req.fail(Errno.NotSupported) }
+  write(req: Request, body: string): void { req.fail(Status.NotSupported) }
 
   /**
    * The bound address, e.g. "127.0.0.1:8080".
    *
    * `/address read -> text/plain`
    */
-  readAddress(req: Request): void { req.fail(Errno.NotSupported) }
+  readAddress(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * The name of every connection accepted, as it is.
    *
    * `/accept watch -> text/plain*`
    */
-  watchAccept(req: Request): void { req.fail(Errno.NotSupported) }
+  watchAccept(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * A connection's bytes: watch for those received, until the peer
@@ -351,7 +351,7 @@ export class ListenerServer extends Server {
    *
    * `/{conn}/data watch -> application/octet-stream*`
    */
-  watchData(req: Request, conn: string): void { req.fail(Errno.NotSupported) }
+  watchData(req: Request, conn: string): void { req.fail(Status.NotSupported) }
 
   /**
    * A connection's bytes: watch for those received, until the peer
@@ -359,61 +359,61 @@ export class ListenerServer extends Server {
    *
    * `/{conn}/data write application/octet-stream`
    */
-  writeData(req: Request, conn: string, body: Payload): void { req.fail(Errno.NotSupported) }
+  writeData(req: Request, conn: string, body: Payload): void { req.fail(Status.NotSupported) }
 
   /**
    * The peer's address.
    *
    * `/{conn}/remote read -> text/plain`
    */
-  readRemote(req: Request, conn: string): void { req.fail(Errno.NotSupported) }
+  readRemote(req: Request, conn: string): void { req.fail(Status.NotSupported) }
 
   /**
    * Close our side, once everything written is sent.
    *
    * `/{conn} remove`
    */
-  remove(req: Request, conn: string): void { req.fail(Errno.NotSupported) }
+  remove(req: Request, conn: string): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { const body = textOf(req, "text/plain"); if (body !== null) this.write(req, body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/address", req.path)
     if (m1 !== null) {
       if (req.verb == Verb.Read) { this.readAddress(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m2 = route("/accept", req.path)
     if (m2 !== null) {
       if (req.verb == Verb.Watch) { this.watchAccept(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m3 = route("/{conn}/data", req.path)
     if (m3 !== null) {
       if (req.verb == Verb.Watch) { this.watchData(req, m3![0]); return }
       if (req.verb == Verb.Write) { const body = payloadOf(req, "application/octet-stream"); if (body !== null) this.writeData(req, m3![0], body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m4 = route("/{conn}/remote", req.path)
     if (m4 !== null) {
       if (req.verb == Verb.Read) { this.readRemote(req, m4![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m5 = route("/{conn}", req.path)
     if (m5 !== null) {
       if (req.verb == Verb.Remove) { this.remove(req, m5![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -453,29 +453,29 @@ export class TerminalServer extends Server {
    *
    * `/typed write text/plain`
    */
-  writeTyped(req: Request, body: string): void { req.fail(Errno.NotSupported) }
+  writeTyped(req: Request, body: string): void { req.fail(Status.NotSupported) }
 
   /**
    * Everything written to the console, as it is written.
    *
    * `/printed watch -> *\/**`
    */
-  watchPrinted(req: Request): void { req.fail(Errno.NotSupported) }
+  watchPrinted(req: Request): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/typed", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { const body = textOf(req, "text/plain"); if (body !== null) this.writeTyped(req, body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/printed", req.path)
     if (m1 !== null) {
       if (req.verb == Verb.Watch) { this.watchPrinted(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
@@ -517,28 +517,28 @@ export class TestSuiteServer extends Server {
    *
    * `/tests/{name} write`
    */
-  writeTests(req: Request, name: string): void { req.fail(Errno.NotSupported) }
+  writeTests(req: Request, name: string): void { req.fail(Status.NotSupported) }
 
   /**
    * The tests, a stat record each.
    *
    * `/tests list`
    */
-  listTests(req: Request): void { req.fail(Errno.NotSupported) }
+  listTests(req: Request): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/tests/{name}", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { this.writeTests(req, m0![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/tests", req.path)
     if (m1 !== null) {
       if (req.verb == Verb.List) { this.listTests(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }

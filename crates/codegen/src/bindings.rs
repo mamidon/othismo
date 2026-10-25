@@ -96,7 +96,7 @@ pub fn namespace(header: &Header, schemas: &[(&dyn Format, Schemas)], source: &s
     }
     let mut out = format!("// Generated from {source} by `othismo bindings`. Edit the header, not this file.\n\n");
     if !header.objects.is_empty() {
-        writeln!(out, "import {{ Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"").unwrap();
+        writeln!(out, "import {{ Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"").unwrap();
     }
     if !from_env.is_empty() {
         writeln!(out, "import {{ {} }} from \"{env}\"", from_env.into_iter().collect::<Vec<_>>().join(", ")).unwrap();
@@ -117,7 +117,7 @@ pub fn namespace(header: &Header, schemas: &[(&dyn Format, Schemas)], source: &s
 pub fn env(library: &str) -> String {
     let mut out = format!(
         "// Generated from env by `othismo bindings`. Edit the runtime's header, not this file.\n\n\
-         import {{ Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"\n"
+         import {{ Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under }} from \"{library}\"\n"
     );
     for t in iface::env().traits.values() {
         out.push('\n');
@@ -273,7 +273,7 @@ fn server(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
                 Takes::Anything => args.push("body: Payload | null".into()),
             }
             doc(out, "  ", &m.doc);
-            writeln!(out, "  {}({}): void {{ req.fail(Errno.NotSupported) }}\n", m.name, args.join(", ")).unwrap();
+            writeln!(out, "  {}({}): void {{ req.fail(Status.NotSupported) }}\n", m.name, args.join(", ")).unwrap();
         }
     }
     out.push_str("  serve(req: Request): void {\n");
@@ -320,11 +320,11 @@ fn server(out: &mut String, class: &str, about: &str, entries: &[Entry]) {
         }
         for (v, types) in expected {
             let types: Vec<String> = types.iter().map(|t| format!("a {t}")).collect();
-            writeln!(out, "      if (req.verb == Verb.{}) {{ req.fail(Errno.Invalid, \"expected {}\"); return }}", verb(v), types.join(" or ")).unwrap();
+            writeln!(out, "      if (req.verb == Verb.{}) {{ req.fail(Status.Invalid, \"expected {}\"); return }}", verb(v), types.join(" or ")).unwrap();
         }
-        out.push_str("      req.fail(Errno.NotSupported)\n      return\n    }\n");
+        out.push_str("      req.fail(Status.NotSupported)\n      return\n    }\n");
     }
-    out.push_str("    req.fail(Errno.NotFound)\n  }\n}\n");
+    out.push_str("    req.fail(Status.NotFound)\n  }\n}\n");
 }
 
 /// A client: a method for each request `entries` list, made of the mount
@@ -454,7 +454,7 @@ mod tests {
         let out = namespace(&header, &[], "Greeter.oth", "othismo", "othismo/env").unwrap();
         assert!(out.contains("import { ConsoleClient } from \"othismo/env\"\n"), "{out}");
         assert!(out.contains("/** Greets. */\nexport class GreeterServer extends Server {"), "{out}");
-        assert!(out.contains("  writeGreeting(req: Request, body: Payload): void { req.fail(Errno.NotSupported) }"), "{out}");
+        assert!(out.contains("  writeGreeting(req: Request, body: Payload): void { req.fail(Status.NotSupported) }"), "{out}");
         assert!(out.contains("  writeHosts(req: Request, name: string, body: string): void"), "{out}");
         assert!(out.contains("  removeHosts(req: Request, name: string): void"), "{out}");
         assert!(out.contains("  listHostsIndex(req: Request): void"), "{out}");
@@ -496,9 +496,9 @@ mod tests {
         let classes: Vec<&str> = out.lines().filter_map(|l| l.strip_prefix("export class ")).collect();
         assert_eq!(classes, ["Count extends Message {", "Hello extends Message {", "Reset extends Message {", "BServer extends Server {", "PeerClient {"]);
         assert!(!out.contains("class Unused"), "only the types it uses are generated");
-        assert!(out.contains("  writeXHello(req: Request, body: Hello): void { req.fail(Errno.NotSupported) }"), "{out}");
+        assert!(out.contains("  writeXHello(req: Request, body: Hello): void { req.fail(Status.NotSupported) }"), "{out}");
         assert!(out.contains("const body = Reset.fromPayload(req.body); if (body !== null) { this.writeXReset(req, body); return }"), "{out}");
-        assert!(out.contains("if (req.verb == Verb.Write) { req.fail(Errno.Invalid, \"expected a Hello or a Reset\"); return }"), "{out}");
+        assert!(out.contains("if (req.verb == Verb.Write) { req.fail(Status.Invalid, \"expected a Hello or a Reset\"); return }"), "{out}");
         assert!(out.contains("  writeHello(body: Hello, then: Then | null = null): Call {\n    return ns.call(Verb.Write, under(this.at, \"/hello\"), body.toPayload(), then)"), "{out}");
     }
 }
