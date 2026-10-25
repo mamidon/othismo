@@ -24,7 +24,7 @@ use image::pack::Pack;
 use crate::env::{self, EnvObject, Incoming, Reply};
 use crate::operator::{Command, How, InstanceInfo, Link, Notice, Snapshot};
 use image::header as iface;
-use protocol::{namespace::{self, Namespace, Resolved}, path, status::Status, verb::{self, Verb}};
+use protocol::{namespace::{Namespace, Resolved}, path, status::Status, verb::{self, Verb}};
 use protocol::payload::Payload;
 use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
@@ -433,20 +433,7 @@ impl<'p> Runtime<'p> {
         self.drain()?;
         // Then every module's start(), each instance after everything it
         // mounts, and an image's after everything it exports.
-        let mounts: Vec<Vec<usize>> = self
-            .program
-            .instances
-            .iter()
-            .map(|i| {
-                let exports = match &i.kind {
-                    Kind::Image { exports } => exports.as_slice(),
-                    _ => &[],
-                };
-                i.mounts.iter().chain(exports).map(|m| m.target).collect()
-            })
-            .collect();
-        let order = namespace::start_order(&mounts);
-        for &i in &order {
+        for &i in &self.program.start_order() {
             if let Object::Wasm(obj) = &mut self.objects[i] {
                 obj.start.call(&mut obj.store, ()).map_err(|e| self.failed(i, "starting", e))?;
             }
@@ -479,13 +466,13 @@ impl<'p> Runtime<'p> {
     pub fn snapshot(&self) -> Snapshot {
         let shared = self.shared.borrow();
         let p = self.program;
-        let link = |decls: &[image::program::MountDecl], m: &namespace::Mount| {
-            let how = match decls.iter().find(|d| d.at == m.at && d.resolved() == m.target) {
+        let link = |decls: &[image::program::MountDecl], (at, target): (&str, &Resolved)| {
+            let how = match decls.iter().find(|d| d.at == at && d.resolved() == *target) {
                 Some(d) if d.bound => How::Bind,
                 Some(_) => How::Mount,
                 None => How::Runtime,
             };
-            Link { at: m.at.clone(), target: m.target.clone(), how }
+            Link { at: at.to_string(), target: target.clone(), how }
         };
         let instances = p
             .instances
@@ -496,7 +483,7 @@ impl<'p> Runtime<'p> {
                     Kind::Image { exports } => exports.as_slice(),
                     _ => &[],
                 };
-                let exposed = shared.ns.exposed(i).iter().map(|m| {
+                let exposed = shared.ns.exposures(i).map(|m| {
                     // What an image exports is passed on, never held.
                     let mut l = link(exports, m);
                     if l.how == How::Mount {
@@ -509,14 +496,14 @@ impl<'p> Runtime<'p> {
                     type_name: inst.type_name.clone(),
                     kind: inst.kind.clone(),
                     interface: shared.interfaces[i].clone(),
-                    view: shared.ns.view(i).iter().map(|m| link(&inst.mounts, m)).collect(),
+                    view: shared.ns.view(i).map(|m| link(&inst.mounts, m)).collect(),
                     exposed: exposed.collect(),
                     served: shared.next_req[i],
                     pending: shared.requests.keys().filter(|(server, _)| *server == i).count(),
                 }
             })
             .collect();
-        let root = shared.ns.view(p.instances.len()).iter().map(|m| link(&p.view, m)).collect();
+        let root = shared.ns.view(p.instances.len()).map(|m| link(&p.view, m)).collect();
         Snapshot { instances, root, messages: p.messages.clone() }
     }
 
