@@ -5,7 +5,7 @@
 
 use crate::image_definition::{self, Ident, Import, Parser, Pos, Tok};
 use anyhow::{Result, bail};
-use protocol::ns::Verb;
+use protocol::verb::Verb;
 
 /// A `.oth` file's declarations: what it imports, declares and exports.
 #[derive(Debug, Clone, PartialEq)]
@@ -267,7 +267,7 @@ impl Parser {
             _ => None,
         };
         let Some(verb) = verb else {
-            let verbs: Vec<&str> = protocol::ns::VERBS.iter().map(|v| v.keyword()).collect();
+            let verbs: Vec<&str> = protocol::verb::VERBS.iter().map(|v| v.keyword()).collect();
             bail!("{pos}: expected a verb ({}), found {tok}", verbs.join(", "));
         };
         let body = match self.peek() {

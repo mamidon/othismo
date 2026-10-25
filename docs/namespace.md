@@ -103,7 +103,7 @@ Every view is built by an image and none is inherited: there is no
 equivalent of Plan 9's `rfork`, since objects don't make other objects.
 
 ```ts
-import { Server, Request, Verb, Errno, Flag, ns, run } from "othismo"
+import { Server, Request, Verb, Flag, ns, run } from "othismo"
 
 class Site extends Server {
   start(): void {

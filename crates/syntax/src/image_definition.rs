@@ -3,7 +3,7 @@
 //! [`crate::iface`]) and an image's instances, views and requests.
 
 use crate::decl as iface;
-use protocol::ns::Verb;
+use protocol::verb::Verb;
 use anyhow::{Result, bail};
 
 /// A source position, 1-based.

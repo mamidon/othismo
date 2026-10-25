@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Fixture, module, run_image};
-use othismo::ns::{Status, Verb};
+use othismo::{status::Status, verb::Verb};
 use othismo::payload::Payload;
 use othismo::runtime::Options;
 
@@ -91,22 +91,23 @@ fn write(path: &'static str, body: Payload) -> Act {
 }
 
 fn reply(body: Payload) -> Act {
-    Act::Reply { status: Status::Ok, body: Some(body), done: true }
+    Act::Reply { status: Status::OK, body: Some(body), done: true }
 }
 
 const INBOX: usize = 65536;
+/// The statuses `Report` can tell apart.
 const STATUSES: [Status; 11] = [
-    Status::Ok,
-    Status::NotFound,
-    Status::ReadOnly,
-    Status::NotSupported,
-    Status::IsDirectory,
-    Status::NotDirectory,
-    Status::Exists,
-    Status::Invalid,
-    Status::Io,
-    Status::Forbidden,
-    Status::UnsupportedType,
+    Status::OK,
+    Status::NOT_FOUND,
+    Status::READ_ONLY,
+    Status::NOT_SUPPORTED,
+    Status::IS_DIRECTORY,
+    Status::NOT_DIRECTORY,
+    Status::EXISTS,
+    Status::INVALID,
+    Status::IO,
+    Status::FORBIDDEN,
+    Status::UNSUPPORTED_TYPE,
 ];
 
 /// Builds the data segment and code for a script.
@@ -126,7 +127,7 @@ impl Wat {
     /// arguments that pass one: all 0 for none.
     fn body(&mut self, body: &Option<Payload>) -> [String; 4] {
         let Some(p) = body else { return [k(0), k(0), k(0), k(0)] };
-        let (t, tl) = self.put(p.ty.as_bytes());
+        let (t, tl) = self.put(p.content_type.as_str().as_bytes());
         let (b, bl) = self.put(&p.bytes);
         [k(t), k(tl), k(b), k(bl)]
     }
@@ -143,14 +144,15 @@ impl Wat {
                 let call = wcall("call", &[k(*verb as usize), k(p), k(pl), t, tl, b, bl, k(*expect as usize)]);
                 if *expect { format!("(global.set $ticket {call})") } else { format!("(drop {call})") }
             }
-            Act::Reply { status: Status::Ok, body, done } => {
+            Act::Reply { status, body, done } if status.is_ok() => {
                 let [t, tl, b, bl] = self.body(body);
                 wcall("reply", &[g("req"), t, tl, b, bl, k(*done as usize)])
             }
-            Act::Reply { status, .. } => self.act(&Act::Fail(*status, "")),
+            Act::Reply { status, .. } => self.act(&Act::Fail(status.clone(), "")),
             Act::Fail(status, why) => {
+                let (c, cl) = self.put(status.code.as_bytes());
                 let (d, dl) = self.put(why.as_bytes());
-                wcall("fail", &[g("req"), k(*status as usize), k(d), k(dl)])
+                wcall("fail", &[g("req"), k(status.errno as usize), k(c), k(cl), k(d), k(dl)])
             }
             Act::ReplyTo(req) => wcall("reply", &[k(*req as usize), k(0), k(0), k(0), k(0), k(1)]),
             Act::Forward(path) => {
@@ -179,7 +181,7 @@ impl Wat {
                         let msg = if done { format!("{status}") } else { format!("{status} (more)") };
                         let write = self.act(&write(path, text(&msg)));
                         let is = |var: &str, v: usize| format!("(i32.eq {} {})", g(var), k(v));
-                        let cond = format!("(i32.and {} {})", is("status", status as usize), is("done", done as usize));
+                        let cond = format!("(i32.and {} {})", is("status", status.errno as usize), is("done", done as usize));
                         code.push_str(&format!("(if {cond} (then {write}))\n"));
                     }
                 }
@@ -199,7 +201,9 @@ impl Wat {
             Act::Show(path) | Act::ShowText(path) => {
                 let echo = if matches!(act, Act::Show(_)) { Act::Echo(path) } else { Act::EchoText(path) };
                 let (echo, report) = (self.act(&echo), self.act(&Act::Report(path)));
-                format!("(if (i32.gt_u (global.get $tlen) (i32.const 0)) (then {echo}) (else {report}))")
+                // An error's code takes the place of a payload's type, so only an ok answer has one.
+                let payload = "(i32.and (i32.eqz (global.get $status)) (i32.gt_u (global.get $tlen) (i32.const 0)))";
+                format!("(if {payload} (then {echo}) (else {report}))")
             }
         }
     }
@@ -241,7 +245,7 @@ fn script_wat(s: &Script) -> String {
         r#"(module
           (import "othismo" "call" (func $call (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
           (import "othismo" "reply" (func $reply (param i32 i32 i32 i32 i32 i32)))
-          (import "othismo" "fail" (func $fail (param i32 i32 i32 i32)))
+          (import "othismo" "fail" (func $fail (param i32 i32 i32 i32 i32 i32)))
           (import "othismo" "forward" (func $forward (param i32 i32 i32)))
           (import "othismo" "cancel" (func $cancel (param i32)))
           (import "othismo" "bind" (func $bind (param i32 i32 i32 i32 i32) (result i32)))
@@ -285,7 +289,7 @@ fn script_wat(s: &Script) -> String {
 /// with anything: what a scripted module serves, and what it needs of
 /// another.
 fn anything(safe_only: bool) -> String {
-    let verbs = othismo::ns::VERBS.iter().filter(|v| !safe_only || v.is_safe());
+    let verbs = othismo::verb::VERBS.iter().filter(|v| !safe_only || v.is_safe());
     let reqs: Vec<String> = verbs
         .flat_map(|v| match v {
             Verb::Stat | Verb::List => vec![v.to_string()],
@@ -406,7 +410,7 @@ fn read_only_mounts_refuse_unsafe_verbs() {
         ..Default::default()
     };
     let b = Script {
-        serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
+        serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
     let f = fixture("readonly", &[("a", &a, "mount /b b readonly  mount /out cons"), ("b", &b, "mount /out cons")], "");
@@ -426,7 +430,7 @@ fn only_the_image_makes_operator_requests() {
         ..Default::default()
     };
     let b = Script {
-        serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::Ok, body: None, done: true }])),
+        serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
     let a_header = "object A { needs /out { / write */* }  needs /raw/** { /** write */* } }";
@@ -445,9 +449,9 @@ fn replies_stream_until_done() {
         answer: Some(Steps::Each(vec![Act::Report("/out")])),
         ..Default::default()
     };
-    let more = |s| Act::Reply { status: Status::Ok, body: Some(text(s)), done: false };
+    let more = |s| Act::Reply { status: Status::OK, body: Some(text(s)), done: false };
     let b = Script {
-        serve: Some(Steps::Each(vec![more("1"), more("2"), Act::Reply { status: Status::Ok, body: None, done: true }])),
+        serve: Some(Steps::Each(vec![more("1"), more("2"), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
     let f = fixture("stream", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")], "");
@@ -614,7 +618,14 @@ fn unknown_request_ids_stop_the_run() {
 
 #[test]
 fn errors_say_why() {
-    let a = Script { serve: Some(Steps::Nth(vec![vec![Act::Fail(Status::NotFound, "no such greeting")], vec![Act::Fail(Status::Ok, "")]])), ..Default::default() };
+    let over_quota = Status::error(42, "over_quota").unwrap();
+    let not_snake_case = Status { errno: 43, code: "Over Quota".into() };
+    let fails = vec![
+        vec![Act::Fail(Status::NOT_FOUND, "no such greeting")],
+        vec![Act::Fail(over_quota.clone(), "")],
+        vec![Act::Fail(not_snake_case, "")],
+    ];
+    let a = Script { serve: Some(Steps::Nth(fails)), ..Default::default() };
     let f = fixture("why", &[("a", &a, "")], "");
     let pack = othismo::pack::load(&f.image()).unwrap();
     let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(std::io::sink()) };
@@ -623,9 +634,21 @@ fn errors_say_why() {
     let a = pack.program.instances.iter().position(|i| i.name == "a").unwrap();
     let answers = rt.ask(a, Verb::Read, "/x", None).unwrap();
     assert_eq!(answers.len(), 1);
-    assert_eq!((answers[0].status, answers[0].detail.as_str(), answers[0].done), (Status::NotFound, "no such greeting", true));
+    assert_eq!((&answers[0].status, answers[0].detail.as_str(), answers[0].done), (&Status::NOT_FOUND, "no such greeting", true));
+    let answers = rt.ask(a, Verb::Read, "/x", None).unwrap();
+    assert_eq!(answers[0].status, over_quota, "a server's own errno and code reach the caller");
     let e = format!("{:#}", rt.ask(a, Verb::Read, "/x", None).unwrap_err());
-    assert!(e.contains("fail with errno 0, which isn't an error"), "{e}");
+    assert!(e.contains("fail with errno 43's code `Over Quota` isn't snake_case"), "{e}");
+
+    let a = Script { serve: Some(Steps::Each(vec![Act::Fail(Status { errno: 0, code: "ok".into() }, "")])), ..Default::default() };
+    let f = fixture("why_ok", &[("a", &a, "")], "");
+    let pack = othismo::pack::load(&f.image()).unwrap();
+    let io = othismo::runtime::Io { input: Box::new(std::io::empty()), output: Box::new(std::io::sink()) };
+    let mut rt = othismo::runtime::Runtime::new(&pack, io, Options::default()).unwrap();
+    rt.start().unwrap();
+    let a = pack.program.instances.iter().position(|i| i.name == "a").unwrap();
+    let e = format!("{:#}", rt.ask(a, Verb::Read, "/x", None).unwrap_err());
+    assert!(e.contains("fail with errno 0 is ok, not an error"), "{e}");
 }
 
 #[test]
@@ -710,14 +733,14 @@ fn only_a_stream_is_answered_more_than_once() {
     assert!(run(&fix("answer_type", &b, " -> application/bson")).is_ok());
     assert!(run(&fix("answer_none", &b, "")).is_ok());
 
-    let more = Act::Reply { status: Status::Ok, body: Some(text("1")), done: false };
+    let more = Act::Reply { status: Status::OK, body: Some(text("1")), done: false };
     let b = Script { serve: Some(Steps::Each(vec![more, reply(text("2"))])), ..Default::default() };
     let e = run_err(&fix("answer_twice", &b, " -> text/plain"));
     assert!(e.contains("answered `read /x` more than once, but its interface promises one answer"), "{e}");
     assert!(run(&fix("answer_stream", &b, " -> text/plain*")).is_ok());
 
     // A failure needs no payload, whatever was promised.
-    let fail = Act::Reply { status: Status::NotFound, body: None, done: true };
+    let fail = Act::Reply { status: Status::NOT_FOUND, body: None, done: true };
     let b = Script { serve: Some(Steps::Each(vec![fail])), ..Default::default() };
     assert!(run(&fix("answer_fail", &b, " -> text/plain")).is_ok());
 }

@@ -1,6 +1,6 @@
 // Generated from HttpServer.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 import { ListenerClient } from "othismo/env"
 
 /**
@@ -9,7 +9,7 @@ import { ListenerClient } from "othismo/env"
  */
 export class HttpServerServer extends Server {
   /** `/hosts/ list` */
-  listHostsIndex(req: Request): void { req.fail(Errno.NotSupported) }
+  listHostsIndex(req: Request): void { req.fail(Status.NotSupported) }
 
   /**
    * Write a path in its view to serve the host from there, or remove it
@@ -17,7 +17,7 @@ export class HttpServerServer extends Server {
    *
    * `/hosts/{name} operator write text/plain`
    */
-  writeHosts(req: Request, name: string, body: string): void { req.fail(Errno.NotSupported) }
+  writeHosts(req: Request, name: string, body: string): void { req.fail(Status.NotSupported) }
 
   /**
    * Write a path in its view to serve the host from there, or remove it
@@ -25,7 +25,7 @@ export class HttpServerServer extends Server {
    *
    * `/hosts/{name} operator remove`
    */
-  removeHosts(req: Request, name: string): void { req.fail(Errno.NotSupported) }
+  removeHosts(req: Request, name: string): void { req.fail(Status.NotSupported) }
 
   /**
    * Write a path in its view to serve the host from there, or remove it
@@ -33,20 +33,20 @@ export class HttpServerServer extends Server {
    *
    * `/hosts/{name} read -> text/plain`
    */
-  readHosts(req: Request, name: string): void { req.fail(Errno.NotSupported) }
+  readHosts(req: Request, name: string): void { req.fail(Status.NotSupported) }
 
   /**
    * The hosts it serves.
    *
    * `/hosts list`
    */
-  listHosts(req: Request): void { req.fail(Errno.NotSupported) }
+  listHosts(req: Request): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/hosts/", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.List) { this.listHostsIndex(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m1 = route("/hosts/{name}", req.path)
@@ -54,16 +54,16 @@ export class HttpServerServer extends Server {
       if (req.verb == Verb.Write) { const body = textOf(req, "text/plain"); if (body !== null) this.writeHosts(req, m1![0], body!); return }
       if (req.verb == Verb.Remove) { this.removeHosts(req, m1![0]); return }
       if (req.verb == Verb.Read) { this.readHosts(req, m1![0]); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
     const m2 = route("/hosts", req.path)
     if (m2 !== null) {
       if (req.verb == Verb.List) { this.listHosts(req); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 

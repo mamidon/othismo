@@ -10,7 +10,7 @@ use crate::world::{Hop, Viewpoint, World};
 use anyhow::{Result, anyhow, bail};
 use format::Formats;
 use image::pack::Pack;
-use protocol::ns::Verb;
+use protocol::{path::PathName, verb::Verb};
 use protocol::payload::Payload;
 use runtime::operator::{self, Command, Notice, Operator};
 use runtime::{Answered, Io, Options, Runtime};
@@ -251,8 +251,8 @@ impl Session {
             Builtin::Look(target) => {
                 let at = match (target.starts_with('/') && target != "/", self.here) {
                     (true, Some(here)) => {
-                        let r = self.world.resolve(here, &target).map_err(|s| anyhow!("{target}: {}", s.name()))?;
-                        Viewpoint::Instance(r.inst)
+                        let r = self.world.resolve(here, &target).map_err(|s| anyhow!("{target}: {}", s.code))?;
+                        Viewpoint::Instance(r.instance)
                     }
                     (true, None) => bail!("look from a root first; paths resolve in a view"),
                     (false, _) => self.world.find(&target).ok_or_else(|| anyhow!("there's no instance called {target}"))?,
@@ -310,13 +310,13 @@ impl Session {
         let w = &self.world;
         let mut lines = vec![format!("{}'s view:", w.name(here))];
         for l in w.view(here) {
-            let t = l.target.inst;
+            let t = l.target.instance;
             let how = match l.how {
                 runtime::operator::How::Mount => "mount",
                 runtime::operator::How::Bind => "bind",
                 runtime::operator::How::Runtime => "+ run time",
             };
-            let path = if l.target.path == "/" { String::new() } else { format!(":{}", l.target.path) };
+            let path = if l.target.path == PathName::root() { String::new() } else { format!(":{}", l.target.path) };
             let ro = if l.target.read_only { " ro" } else { "" };
             lines.push(format!("  {:<14} {how:<10} → {}{path}  {} · {}{ro}", l.at, w.instance(t).name, w.instance(t).type_name, w.class(t).name()));
         }

@@ -9,7 +9,7 @@
 //! from a root.
 
 use image::program::Kind;
-use protocol::ns::{Namespace, Resolved, Status, Verb};
+use protocol::{namespace::{Namespace, Resolved}, path::PathName, status::Status, verb::Verb};
 use runtime::operator::{How, InstanceInfo, Link, Snapshot};
 use std::collections::VecDeque;
 
@@ -181,7 +181,7 @@ impl World {
         let mut out = vec![];
         let all = std::iter::once(Viewpoint::Root).chain((0..self.snapshot.instances.len()).map(Viewpoint::Instance));
         for at in all {
-            for l in self.holds(at).filter(|l| l.target.inst == i) {
+            for l in self.holds(at).filter(|l| l.target.instance == i) {
                 out.push((at, l.at.as_str()));
             }
         }
@@ -202,9 +202,9 @@ impl World {
         let (mut seen, mut queue) = (vec![], VecDeque::from([root]));
         while let Some(at) = queue.pop_front() {
             for l in self.holds(at) {
-                if !seen.contains(&l.target.inst) {
-                    seen.push(l.target.inst);
-                    queue.push_back(Viewpoint::Instance(l.target.inst));
+                if !seen.contains(&l.target.instance) {
+                    seen.push(l.target.instance);
+                    queue.push_back(Viewpoint::Instance(l.target.instance));
                 }
             }
         }
@@ -220,7 +220,7 @@ impl World {
                 break;
             }
             for l in self.holds(at) {
-                let next = Viewpoint::Instance(l.target.inst);
+                let next = Viewpoint::Instance(l.target.instance);
                 if !prev.iter().any(|(v, _)| *v == next) {
                     prev.push((next, Some((at, l))));
                     queue.push_back(next);
@@ -237,7 +237,7 @@ impl World {
                     break;
                 }
                 Some((from, l)) => {
-                    hops.push(Hop { at, via: Some(l.at.clone()), read_only: l.target.read_only });
+                    hops.push(Hop { at, via: Some(l.at.to_string()), read_only: l.target.read_only });
                     at = *from;
                 }
             }
@@ -256,6 +256,10 @@ impl World {
 
     /// Where `path` in `at`'s view leads, as the runtime would resolve it.
     pub fn resolve(&self, at: Viewpoint, path: &str) -> Result<Resolved, Status> {
+        self.resolve_path(at, &PathName::parse(path)?)
+    }
+
+    fn resolve_path(&self, at: Viewpoint, path: &PathName) -> Result<Resolved, Status> {
         let view = at.instance().unwrap_or(self.snapshot.instances.len());
         self.ns.resolve(view, path)
     }
@@ -265,19 +269,20 @@ impl World {
     /// object's against its needs, and everyone's against the server's
     /// interface. A server may still refuse what this lets through.
     pub fn check(&self, at: Viewpoint, verb: Verb, path: &str) -> Result<Resolved, Status> {
-        let r = self.resolve(at, path)?;
+        let path = PathName::parse(path)?;
+        let r = self.resolve_path(at, &path)?;
         if r.read_only && !verb.is_safe() {
-            return Err(Status::ReadOnly);
+            return Err(Status::READ_ONLY);
         }
         let operator = self.is_operator(at);
         if let (Viewpoint::Instance(i), false) = (at, operator) {
-            let (mount, rest) = self.ns.mount_of(i, path).ok_or(Status::NotFound)?;
-            let need = self.instance(i).interface.need(&mount).ok_or(Status::NotFound)?;
-            need.entry(&rest).ok_or(Status::NotFound)?.takes_verb(verb, false)?;
+            let (mount, rest) = self.ns.mount_of(i, &path).ok_or(Status::NOT_FOUND)?;
+            let need = self.instance(i).interface.need(mount).ok_or(Status::NOT_FOUND)?;
+            need.entry(&rest).ok_or(Status::NOT_FOUND)?.takes_verb(verb, false)?;
         }
-        let entry = self.instance(r.inst).interface.serving(&r.path).ok_or(Status::NotFound)?;
-        if !operator && entry.takes_verb(verb, false) == Err(Status::Forbidden) {
-            return Err(Status::Forbidden);
+        let entry = self.instance(r.instance).interface.serving(&r.path).ok_or(Status::NOT_FOUND)?;
+        if !operator && entry.takes_verb(verb, false) == Err(Status::FORBIDDEN) {
+            return Err(Status::FORBIDDEN);
         }
         entry.takes_verb(verb, operator)?;
         Ok(r)
@@ -289,7 +294,7 @@ impl World {
         let dir: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
         let mut out: Vec<(String, bool)> = vec![];
         for l in self.view(at) {
-            let segs: Vec<&str> = l.at.split('/').filter(|s| !s.is_empty()).collect();
+            let segs: Vec<&str> = l.at.as_str().split('/').filter(|s| !s.is_empty()).collect();
             if segs.len() > dir.len() && segs[..dir.len()] == dir[..] {
                 let (name, mount) = (segs[dir.len()].to_string(), segs.len() == dir.len() + 1);
                 match out.iter_mut().find(|(n, _)| *n == name) {
@@ -305,16 +310,16 @@ impl World {
     /// What instance `inst` serves directly under `path` that is known
     /// without asking it: what it has exposed there, and what its header
     /// says it serves, the patterns apart.
-    pub fn known_under(&self, inst: usize, path: &str) -> (Vec<Known>, Vec<Pattern>) {
+    pub fn known_under(&self, inst: usize, path: &PathName) -> (Vec<Known>, Vec<Pattern>) {
         let i = self.instance(inst);
         let mut known: Vec<Known> = vec![];
         let mut add = |name: &str, dir: bool, from: Source| match known.iter_mut().find(|k| k.name == name) {
             Some(k) => k.dir |= dir,
             None => known.push(Known { name: name.to_string(), dir, from }),
         };
-        let dir = path.trim_end_matches('/');
+        let dir = path.as_str().trim_end_matches('/');
         for l in &i.exposed {
-            if let Some((parent, name)) = l.at.rsplit_once('/')
+            if let Some((parent, name)) = l.at.as_str().rsplit_once('/')
                 && parent == dir
             {
                 add(name, true, Source::Exposed);

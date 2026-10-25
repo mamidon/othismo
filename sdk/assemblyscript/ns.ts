@@ -24,7 +24,7 @@ declare function host_reply(req: u32, type: usize, typeLen: i32, body: usize, bo
 
 // @ts-ignore: decorator
 @external("othismo", "fail")
-declare function host_fail(req: u32, errno: i32, desc: usize, descLen: i32): void;
+declare function host_fail(req: u32, errno: i32, code: usize, codeLen: i32, desc: usize, descLen: i32): void;
 
 // @ts-ignore: decorator
 @external("othismo", "forward")
@@ -47,7 +47,7 @@ declare function host_unmount(at: usize, atLen: i32): i32;
 declare function host_expose(at: usize, atLen: i32, src: usize, srcLen: i32, flags: i32): i32;
 
 // ---------------------------------------------------------------------------
-// Verbs, errors, flags (numbered as in crates/protocol/src/ns.rs)
+// Verbs, errors, flags (numbered as in crates/protocol/src/verb.rs and status.rs)
 
 export enum Verb { Read, Stat, List, Watch, Write, Create, Remove }
 
@@ -56,8 +56,44 @@ export function isSafe(v: Verb): bool {
   return v < Verb.Write;
 }
 
-/** How a request went: Ok, or an error. Each error's number is its errno. */
-export enum Errno { Ok, NotFound, ReadOnly, NotSupported, IsDirectory, NotDirectory, Exists, Invalid, Io, Forbidden, UnsupportedType }
+/**
+ * How a request went: ok, or an error. An error's errno is what a program
+ * compares and its code (`snake_case`) names it; both are up to whoever
+ * answers, who should give an errno the same code every time. The runtime's
+ * own statuses are below, and servers may reuse them.
+ */
+export class Status {
+  constructor(public errno: i32, public code: string) {}
+
+  get ok(): bool { return this.errno == 0; }
+
+  /** Whether it is the same status as `other`: compare these, not the objects. */
+  is(other: Status): bool { return this.errno == other.errno; }
+
+  static readonly Ok: Status = new Status(0, "ok");
+  static readonly NotFound: Status = new Status(1, "not_found");
+  static readonly ReadOnly: Status = new Status(2, "read_only");
+  static readonly NotSupported: Status = new Status(3, "not_supported");
+  static readonly IsDirectory: Status = new Status(4, "is_directory");
+  static readonly NotDirectory: Status = new Status(5, "not_directory");
+  static readonly Exists: Status = new Status(6, "exists");
+  static readonly Invalid: Status = new Status(7, "invalid");
+  static readonly Io: Status = new Status(8, "io");
+  static readonly Forbidden: Status = new Status(9, "forbidden");
+  static readonly UnsupportedType: Status = new Status(10, "unsupported_type");
+
+  /** One of the runtime's own statuses, by its errno, as `bind` and the like return them. */
+  static of(errno: i32): Status {
+    const known = [
+      Status.Ok, Status.NotFound, Status.ReadOnly, Status.NotSupported, Status.IsDirectory, Status.NotDirectory,
+      Status.Exists, Status.Invalid, Status.Io, Status.Forbidden, Status.UnsupportedType,
+    ];
+    for (let i = 0; i < known.length; i++) {
+      if (known[i].errno == errno) return known[i];
+    }
+    return new Status(errno, "unknown");
+  }
+}
 
 export enum Flag { None = 0, ReadOnly = 1 }
 
@@ -96,11 +132,12 @@ export class Request {
   end(): void { this.send(null, true); }
 
   /** An error, with a description for people; the last reply. */
-  fail(errno: Errno, description: string = ""): void {
-    if (errno == Errno.Ok) abort("fail needs an error, not Ok");
+  fail(status: Status, description: string = ""): void {
+    if (status.ok) abort("fail needs an error, not Ok");
     this.finish();
+    const c = String.UTF8.encode(status.code);
     const d = String.UTF8.encode(description);
-    host_fail(this.id, errno, changetype<usize>(d), d.byteLength);
+    host_fail(this.id, status.errno, changetype<usize>(c), c.byteLength, changetype<usize>(d), d.byteLength);
   }
 
   /** Hands the request to `path` in our view; its answer goes straight to the caller. */
@@ -131,7 +168,7 @@ export class Server {
   start(): void {}
 
   /** A request made of our served tree. */
-  serve(req: Request): void { req.fail(Errno.NotSupported); }
+  serve(req: Request): void { req.fail(Status.NotSupported); }
 
   /** The caller gave up on `req` (a stream, usually). It is ended for us afterwards. */
   cancel(req: Request): void {}
@@ -184,11 +221,11 @@ export function route(pattern: string, path: string): string[] | null {
 export function payloadOf(req: Request, type: string): Payload | null {
   const body = req.body
   if (body === null) {
-    req.fail(Errno.Invalid, "expected a " + type + " payload")
+    req.fail(Status.Invalid, "expected a " + type + " payload")
     return null
   }
   if (!fits(type, body.type)) {
-    req.fail(Errno.UnsupportedType, "takes " + type + ", not " + body.type)
+    req.fail(Status.UnsupportedType, "takes " + type + ", not " + body.type)
     return null
   }
   return body
@@ -212,7 +249,7 @@ export function under(at: string, rel: string): string {
 /** An answer to one of our calls. */
 export class Response {
   constructor(
-    public status: Errno,
+    public status: Status,
     public body: Payload | null,
     /** False while a stream is still open. */
     public done: bool,
@@ -220,7 +257,7 @@ export class Response {
     public description: string = "",
   ) {}
 
-  get ok(): bool { return this.status == Errno.Ok; }
+  get ok(): bool { return this.status.ok; }
 }
 
 /**
@@ -313,22 +350,22 @@ export namespace ns {
   export function remove(path: string, then: Then | null = null): Call { return call(Verb.Remove, path, null, then); }
 
   /** Makes what `source` names in our view also appear at `at`. */
-  export function bind(source: string, at: string, flags: Flag = Flag.None): Errno {
+  export function bind(source: string, at: string, flags: Flag = Flag.None): Status {
     const s = String.UTF8.encode(source);
     const a = String.UTF8.encode(at);
-    return <Errno>host_bind(changetype<usize>(s), s.byteLength, changetype<usize>(a), a.byteLength, flags);
+    return Status.of(host_bind(changetype<usize>(s), s.byteLength, changetype<usize>(a), a.byteLength, flags));
   }
 
-  export function unmount(at: string): Errno {
+  export function unmount(at: string): Status {
     const a = String.UTF8.encode(at);
-    return <Errno>host_unmount(changetype<usize>(a), a.byteLength);
+    return Status.of(host_unmount(changetype<usize>(a), a.byteLength));
   }
 
   /** Splices `source` (in our view) into our served tree at `at`; requests there skip our serve(). */
-  export function expose(at: string, source: string, flags: Flag = Flag.None): Errno {
+  export function expose(at: string, source: string, flags: Flag = Flag.None): Status {
     const a = String.UTF8.encode(at);
     const s = String.UTF8.encode(source);
-    return <Errno>host_expose(changetype<usize>(a), a.byteLength, changetype<usize>(s), s.byteLength, flags);
+    return Status.of(host_expose(changetype<usize>(a), a.byteLength, changetype<usize>(s), s.byteLength, flags));
   }
 
   /** `root` followed by `path`, or null unless `path` is absolute with no `..` segment. */
@@ -379,19 +416,20 @@ export function rt_serve(id: u32, verb: i32, flags: i32, pathLen: i32, typeLen: 
 }
 
 /**
- * An answer to one of our calls. For Ok, the inbox holds the payload's type,
- * then its bytes; for an error, its description.
+ * An answer to one of our calls. With errno 0, the inbox holds the payload's
+ * type, then its bytes; for an error, its code, then its description.
  */
 export function rt_answer(ticket: u32, errno: i32, typeLen: i32, bodyLen: i32, done: i32): void {
   if (!calls.has(ticket)) return;
   const then = calls.get(ticket);
   if (done != 0) calls.delete(ticket);
-  if (errno != Errno.Ok) {
-    const description = String.UTF8.decodeUnsafe(changetype<usize>(inbox), <usize>bodyLen);
-    then.answer(new Response(<Errno>errno, null, true, description));
+  if (errno != 0) {
+    const code = String.UTF8.decodeUnsafe(changetype<usize>(inbox), <usize>typeLen);
+    const description = String.UTF8.decodeUnsafe(changetype<usize>(inbox) + <usize>typeLen, <usize>bodyLen);
+    then.answer(new Response(new Status(errno, code), null, true, description));
     return;
   }
-  then.answer(new Response(Errno.Ok, inboxPayload(0, typeLen, bodyLen), done != 0));
+  then.answer(new Response(Status.Ok, inboxPayload(0, typeLen, bodyLen), done != 0));
 }
 
 export function rt_start(): void {

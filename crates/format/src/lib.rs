@@ -1,16 +1,17 @@
 //! Payload formats: everything Othismo does with the bytes of payloads of
 //! one content type. It does all of it when a module or an image is built,
 //! and when a built image's slots are given values; the runtime uses none
-//! of it (see `docs/protocol.md`).
+//! of it, beyond [`json_string`] as it prints (see `docs/protocol.md`).
 //!
 //! A format is a [`Format`]. Each is found by its content type in a
 //! [`Formats`] registry, which whoever builds images fills: this crate
 //! knows of no format itself.
 
 use anyhow::Result;
-use protocol::payload;
+use protocol::content_type::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::sync::Arc;
 use syntax::image_definition::Value;
 
@@ -115,8 +116,8 @@ impl Formats {
     }
 
     /// The format whose payloads are of content type `ty`.
-    pub fn for_type(&self, ty: &str) -> Option<&dyn Format> {
-        self.0.iter().map(|f| f.as_ref()).find(|f| payload::fits(f.content_type(), ty))
+    pub fn for_type(&self, ty: &ContentType) -> Option<&dyn Format> {
+        self.0.iter().map(|f| f.as_ref()).find(|f| ty.fits(&ContentType::from_static(f.content_type())))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &dyn Format> {
@@ -126,13 +127,32 @@ impl Formats {
     /// Encodes `value`, of message type `ty`, as a payload of content type
     /// `content_type`, with `schemas` as the formats' schemas. Only a format
     /// can encode a structured literal.
-    pub fn encode(&self, content_type: &str, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
+    pub fn encode(&self, content_type: &ContentType, ty: &str, schemas: &AllSchemas, value: &Value) -> Result<Vec<u8>, String> {
         let Some(f) = self.for_type(content_type) else {
             let have: Vec<&str> = self.iter().map(|f| f.content_type()).collect();
             return Err(format!("no format writes `{content_type}`; a structured literal needs one, and the image has {}", list(&have)));
         };
         f.encode(schemas.get(f.content_type()).unwrap_or(&Schemas::default()), ty, value)
     }
+}
+
+/// `text` as a JSON string.
+pub fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn list(names: &[&str]) -> String {

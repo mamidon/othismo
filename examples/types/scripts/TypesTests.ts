@@ -1,4 +1,4 @@
-import { Errno, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Status, Request, Response, Stat, Then, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { Box, Message, Reader, Uuid, Writer, decodeMessage, encodeMessage } from "othismo/bson"
 import { Color, Note, Person, Record, TypesTestsServer, nameOfColor, store } from "./TypesTests.oth"
 
@@ -147,13 +147,13 @@ class TypesTests extends TypesTestsServer {
       else store.readRecord(new Check(req, STARTUP))
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 
 function finish(req: Request, problem: string): void {
   if (problem == "") req.end()
-  else req.fail(Errno.Invalid, problem)
+  else req.fail(Status.Invalid, problem)
 }
 
 /** Once the sample is written, reads it back. */
@@ -163,7 +163,7 @@ class Written extends Then {
   }
 
   answer(res: Response): void {
-    if (!res.ok) finish(this.req, "writing failed with errno " + res.status.toString())
+    if (!res.ok) finish(this.req, "writing failed with " + res.status.code)
     else store.readRecord(new Check(this.req, describe(sample())))
   }
 }
@@ -176,7 +176,7 @@ class Check extends Then {
 
   answer(res: Response): void {
     const r = Record.fromPayload(res.body)
-    if (!res.ok) finish(this.req, "reading failed with errno " + res.status.toString())
+    if (!res.ok) finish(this.req, "reading failed with " + res.status.code)
     else if (r === null) finish(this.req, "the store's answer is not a Record")
     else finish(this.req, same(describe(r), this.want))
   }

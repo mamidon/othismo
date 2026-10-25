@@ -290,6 +290,13 @@ it refuses an unsafe verb through a read-only mount.</p>
 runtime&#39;s own objects are configured: an operator <code>write</code> of their root.</p>
 <h3 id="errors">Errors</h3>
 <p>A failed request is answered with an error, and that is its last answer.</p>
+<p>An error&#39;s <code>errno</code> is any number but 0, and what a program compares. Its
+<code>code</code> names it, in <code>snake_case</code>, so a log or another transport can be read
+without knowing the server. <code>description</code> is free text for people, such as
+why a test failed. All three are up to whoever answers: the protocol fixes
+no list of errors, and it is for the caller to make sense of the ones it
+gets. An instance should give the same errno the same code every time.</p>
+<p>The runtime answers with these itself, and servers may reuse them:</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -349,12 +356,10 @@ runtime&#39;s own objects are configured: an operator <code>write</code> of thei
 <td>the server doesn&#39;t take payloads of that content type</td>
 </tr>
 </tbody></table></div>
-<p><code>errno</code> is what a program compares. <code>code</code> is its name, and must be the name
-the table gives it, so a log or another transport can be read without the
-table. <code>description</code> is free text for people, such as why a test failed.</p>
 <p>The runtime itself answers <code>not_found</code>, <code>not_supported</code>, <code>read_only</code>,
-<code>invalid</code> (for a malformed path) and <code>forbidden</code>. Everything else, including
-<code>unsupported_type</code>, comes from servers.</p>
+<code>invalid</code> (for a malformed path) and <code>forbidden</code>. The rest of the table,
+including <code>unsupported_type</code>, comes from servers, as does any error that
+isn&#39;t in it: a store might answer <code>42 over_quota</code>.</p>
 <h3 id="stat-records">Stat records</h3>
 <p><code>stat</code> answers one stat record, <code>list</code> streams one per entry, and <code>create</code>
 conventionally answers one. A stat record is a payload of the content type
@@ -366,7 +371,9 @@ are, little-endian:</p>
 <li><code>name</code>: the last segment of its path.</li>
 <li><code>kind</code>: 0 for something read whole, 1 for a directory.</li>
 <li><code>length</code>: in bytes, or 0 for a directory or if it isn&#39;t known.</li>
-<li><code>type</code>: the content type a <code>read</code> would answer with, or empty.</li>
+<li><code>type</code>: the content type a <code>read</code> of the entry would answer with, or
+empty. It isn&#39;t the record&#39;s own content type, which is always the stat
+record&#39;s: it is how a <code>list</code> says what each entry holds without reading it.</li>
 <li><code>version</code>: changes whenever what a <code>read</code> would answer changes, or 0 if
 the server doesn&#39;t keep track. It is what an HTTP ETag would be made from.</li>
 </ul>
@@ -406,6 +413,10 @@ that takes <code>write */*</code> meets a need to write <code>text/plain</code>;
 Types and subtypes compare without regard to case. A parameter a header
 writes, such as <code>charset=utf-8</code>, must be present and equal; one it leaves
 out constrains nothing.</p>
+<p>Any text can be a payload&#39;s content type: the runtime carries it as it is,
+and a server may answer with one nobody else has heard of. Headers and
+images must write well-formed ones, <code>type/subtype</code> with optional
+parameters; one that isn&#39;t well-formed fits nothing.</p>
 <h3 id="formats">Formats</h3>
 <p>A format is identified by its media type, and supplies everything Othismo
 does with payloads of that type. It does all of it when a module or an image
@@ -603,8 +614,8 @@ are UTF-8; a length of 0 for both a type and its bytes means no payload.</p>
 <td>answer a request being served, successfully</td>
 </tr>
 <tr>
-<td><code>fail(req, errno, desc, desc_len)</code></td>
-<td>answer it with an error, the last answer</td>
+<td><code>fail(req, errno, code, code_len, desc, desc_len)</code></td>
+<td>answer it with an error, the last answer. <code>errno</code> isn&#39;t 0, and <code>code</code> is <code>snake_case</code></td>
 </tr>
 <tr>
 <td><code>forward(req, path, path_len)</code></td>
@@ -616,7 +627,7 @@ are UTF-8; a length of 0 for both a type and its bytes means no payload.</p>
 </tr>
 <tr>
 <td><code>bind(src, src_len, at, at_len, flags) -&gt; errno</code></td>
-<td></td>
+<td>the runtime&#39;s own errno, from the table in <a href="#errors">Errors</a>; 0 if it worked</td>
 </tr>
 <tr>
 <td><code>unmount(at, at_len) -&gt; errno</code></td>
@@ -645,7 +656,7 @@ are UTF-8; a length of 0 for both a type and its bytes means no payload.</p>
 </tr>
 <tr>
 <td><code>rt_answer(ticket, errno, type_len, body_len, done)</code></td>
-<td>an answer. With <code>errno</code> 0, the inbox holds the type then the bytes; otherwise it holds the description</td>
+<td>an answer. With <code>errno</code> 0, the inbox holds the type then the bytes; otherwise it holds the code then the description, with their lengths in <code>type_len</code> and <code>body_len</code></td>
 </tr>
 <tr>
 <td><code>rt_start()</code></td>
@@ -671,7 +682,7 @@ them:</p>
 </thead>
 <tbody><tr>
 <td><code>&quot;othismo&quot;</code></td>
-<td><code>Server</code>, <code>Request</code>, <code>Response</code>, <code>Call</code>, <code>Verb</code>, <code>Errno</code>, <code>Payload</code>, <code>Stat</code>, <code>ns</code> for requests and the view, and continuations such as <code>OnPayload</code> and <code>OnText</code></td>
+<td><code>Server</code>, <code>Request</code>, <code>Response</code>, <code>Call</code>, <code>Verb</code>, <code>Status</code>, <code>Payload</code>, <code>Stat</code>, <code>ns</code> for requests and the view, and continuations such as <code>OnPayload</code> and <code>OnText</code></td>
 <td>the library</td>
 </tr>
 <tr>
@@ -696,6 +707,10 @@ header in <code>sdk/env/</code>, and reusable objects in <code>sdk/objects/</cod
 <code>import { HttpServer } from &quot;../../sdk/objects/http/HttpServer.oth&quot;</code>.</p>
 <p>A <code>Payload</code> is a content type and an <code>ArrayBuffer</code>. One whose type the
 module doesn&#39;t understand can be passed on unchanged.</p>
+<p>A <code>Status</code> is an errno and a code. A server fails a request with one of the
+runtime&#39;s, <code>req.fail(Status.NotFound)</code>, or one of its own,
+<code>req.fail(new Status(42, &quot;over_quota&quot;), &quot;no room for another&quot;)</code>. Statuses
+are compared with <code>is</code>, which compares errnos: <code>res.status.is(Status.NotFound)</code>.</p>
 <p><strong>Generated from the header</strong>, a server base class has a method for each
 request its <code>serves</code> lists, named for the verb and the path&#39;s literal
 segments, with the path&#39;s <code>{name}</code> segments as arguments. It routes each

@@ -139,6 +139,15 @@ runtime's own objects are configured: an operator `write` of their root.
 
 A failed request is answered with an error, and that is its last answer.
 
+An error's `errno` is any number but 0, and what a program compares. Its
+`code` names it, in `snake_case`, so a log or another transport can be read
+without knowing the server. `description` is free text for people, such as
+why a test failed. All three are up to whoever answers: the protocol fixes
+no list of errors, and it is for the caller to make sense of the ones it
+gets. An instance should give the same errno the same code every time.
+
+The runtime answers with these itself, and servers may reuse them:
+
 | errno | code | Meaning |
 |---|---|---|
 | 1 | `not_found` | nothing is at the path, or the sender's view doesn't reach it |
@@ -152,13 +161,10 @@ A failed request is answered with an error, and that is its last answer.
 | 9 | `forbidden` | a request only the operator may make, from an object |
 | 10 | `unsupported_type` | the server doesn't take payloads of that content type |
 
-`errno` is what a program compares. `code` is its name, and must be the name
-the table gives it, so a log or another transport can be read without the
-table. `description` is free text for people, such as why a test failed.
-
 The runtime itself answers `not_found`, `not_supported`, `read_only`,
-`invalid` (for a malformed path) and `forbidden`. Everything else, including
-`unsupported_type`, comes from servers.
+`invalid` (for a malformed path) and `forbidden`. The rest of the table,
+including `unsupported_type`, comes from servers, as does any error that
+isn't in it: a store might answer `42 over_quota`.
 
 ### Stat records
 
@@ -174,7 +180,9 @@ name[s] kind[1] length[8] type[s] version[8]
 - `name`: the last segment of its path.
 - `kind`: 0 for something read whole, 1 for a directory.
 - `length`: in bytes, or 0 for a directory or if it isn't known.
-- `type`: the content type a `read` would answer with, or empty.
+- `type`: the content type a `read` of the entry would answer with, or
+  empty. It isn't the record's own content type, which is always the stat
+  record's: it is how a `list` says what each entry holds without reading it.
 - `version`: changes whenever what a `read` would answer changes, or 0 if
   the server doesn't keep track. It is what an HTTP ETag would be made from.
 
@@ -224,6 +232,11 @@ that takes `write */*` meets a need to write `text/plain`; a need to
 Types and subtypes compare without regard to case. A parameter a header
 writes, such as `charset=utf-8`, must be present and equal; one it leaves
 out constrains nothing.
+
+Any text can be a payload's content type: the runtime carries it as it is,
+and a server may answer with one nobody else has heard of. Headers and
+images must write well-formed ones, `type/subtype` with optional
+parameters; one that isn't well-formed fits nothing.
 
 ### Formats
 
@@ -357,10 +370,10 @@ Imports, from module `othismo`, plus `env.abort`:
 |---|---|
 | `call(verb, path, path_len, type, type_len, body, body_len, expect) -> ticket` | make a request. With `expect` 0, the ticket is 0 and answers are dropped |
 | `reply(req, type, type_len, body, body_len, done)` | answer a request being served, successfully |
-| `fail(req, errno, desc, desc_len)` | answer it with an error, the last answer |
+| `fail(req, errno, code, code_len, desc, desc_len)` | answer it with an error, the last answer. `errno` isn't 0, and `code` is `snake_case` |
 | `forward(req, path, path_len)` | hand it to a path in our view |
 | `cancel(ticket)` | give up on a call; later answers are dropped |
-| `bind(src, src_len, at, at_len, flags) -> errno` | |
+| `bind(src, src_len, at, at_len, flags) -> errno` | the runtime's own errno, from the table in [Errors](#errors); 0 if it worked |
 | `unmount(at, at_len) -> errno` | |
 | `expose(at, at_len, src, src_len, flags) -> errno` | |
 
@@ -370,7 +383,7 @@ Exports: `memory`, and
 |---|---|
 | `rt_inbox(len) -> ptr` | a buffer for the host to write into |
 | `rt_serve(req, verb, flags, path_len, type_len, body_len)` | a request; the inbox holds the path, the type, then the bytes |
-| `rt_answer(ticket, errno, type_len, body_len, done)` | an answer. With `errno` 0, the inbox holds the type then the bytes; otherwise it holds the description |
+| `rt_answer(ticket, errno, type_len, body_len, done)` | an answer. With `errno` 0, the inbox holds the type then the bytes; otherwise it holds the code then the description, with their lengths in `type_len` and `body_len` |
 | `rt_start()` | once the image is set up |
 | `rt_cancel(req)` | optional. Without it, a cancelled request's answers are dropped until the module ends it |
 
@@ -384,7 +397,7 @@ them:
 
 | Part | What it has | Where it comes from |
 |---|---|---|
-| `"othismo"` | `Server`, `Request`, `Response`, `Call`, `Verb`, `Errno`, `Payload`, `Stat`, `ns` for requests and the view, and continuations such as `OnPayload` and `OnText` | the library |
+| `"othismo"` | `Server`, `Request`, `Response`, `Call`, `Verb`, `Status`, `Payload`, `Stat`, `ns` for requests and the view, and continuations such as `OnPayload` and `OnText` | the library |
 | `"othismo/bson"` | `Message`, `Writer`, `Reader`, `registerMessage`, `bson.payload(msg)` and `bson.decode(payload)`, and `Box` and `Uuid` for fields | the library |
 | `"othismo/env"` | clients and server bases for the runtime's traits: `ConsoleClient`, `ListenerClient`, `TestSuiteServer`, ... | generated from `env` |
 | `./Greeter.oth` | `GreeterServer`, a client for each of its needs, and `Greeting`, registered with `"othismo/bson"` | generated from `Greeter.oth`, the classes by each type's format |
@@ -396,6 +409,11 @@ header in `sdk/env/`, and reusable objects in `sdk/objects/`, such as
 
 A `Payload` is a content type and an `ArrayBuffer`. One whose type the
 module doesn't understand can be passed on unchanged.
+
+A `Status` is an errno and a code. A server fails a request with one of the
+runtime's, `req.fail(Status.NotFound)`, or one of its own,
+`req.fail(new Status(42, "over_quota"), "no room for another")`. Statuses
+are compared with `is`, which compares errnos: `res.status.is(Status.NotFound)`.
 
 **Generated from the header**, a server base class has a method for each
 request its `serves` lists, named for the verb and the path's literal

@@ -13,8 +13,8 @@ use syntax::image_definition::{self, Ident, ImageDefinition, Pos, Source};
 pub use image::header::*;
 pub use syntax::decl::*;
 use format::{Format, Formats, Schemas};
-use protocol::pattern::Pattern;
-use protocol::payload::{self, STAT, STAT_NAME};
+use protocol::pattern::PathPattern;
+use protocol::content_type::ContentType;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -486,12 +486,12 @@ impl Shapes<'_> {
 
     /// The content type `id` names, and the message type if it names one:
     /// a message type, `Stat`, or a content type that has no schemas.
-    fn payload_type(&self, id: &Ident) -> Result<(String, Option<String>)> {
+    fn payload_type(&self, id: &Ident) -> Result<(ContentType, Option<String>)> {
         if let Some(ty) = self.messages.get(&id.name) {
-            return Ok((ty.clone(), Some(id.name.clone())));
+            return Ok((ty.as_str().into(), Some(id.name.clone())));
         }
         let ty = content_type(id)?;
-        if self.structured.contains(&ty) {
+        if self.structured.iter().any(|structured| structured == ty.as_str()) {
             bail!(err_at(id, format!("`{ty}` payloads are named by their message type, declared in a `schemas {ty}` block, such as `write Greeting`")));
         }
         Ok((ty, None))
@@ -526,7 +526,7 @@ impl Shapes<'_> {
 
     /// The entries `decls` stand for, with each trait's tree put at its path.
     fn entries(&mut self, decls: &[EntryDecl]) -> Result<Vec<Entry>> {
-        let mut written: Vec<Pattern> = vec![];
+        let mut written: Vec<PathPattern> = vec![];
         let mut out: Vec<Entry> = vec![];
         for e in decls {
             let path = pattern(&e.path)?;
@@ -573,7 +573,7 @@ fn merge(entries: &mut Vec<Entry>, entry: Entry, pos: Pos) -> Result<()> {
 
 /// `inner`, a pattern in a trait's tree, as a pattern under `at`, where the
 /// trait is put.
-fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
+fn rebase(at: &PathPattern, inner: &PathPattern, pos: Pos) -> Result<PathPattern> {
     if at.as_str().ends_with("**") {
         bail!("{pos}: a trait can't be put under `{at}`; `**` only comes last");
     }
@@ -582,22 +582,23 @@ fn rebase(at: &Pattern, inner: &Pattern, pos: Pos) -> Result<Pattern> {
         ("/", inner) => inner.to_string(),
         (at, inner) => format!("{}{inner}", at.trim_end_matches('/')),
     };
-    Pattern::parse(&text).map_err(|e| anyhow::anyhow!("{pos}: {e}"))
+    PathPattern::parse(&text).map_err(|e| anyhow::anyhow!("{pos}: {e}"))
 }
 
 fn reserve(name: &Ident) -> Result<()> {
-    if name.name == STAT_NAME {
-        bail!(err_at(name, format!("`{STAT_NAME}` is reserved: it stands for a stat record's content type, {STAT}")));
+    if name.name == ContentType::STAT_NAME {
+        bail!(err_at(name, format!("`{}` is reserved: it stands for a stat record's content type, {}", ContentType::STAT_NAME, ContentType::STAT)));
     }
     Ok(())
 }
 
 /// The content type `id` writes: as it is, or `Stat` for a stat record's.
-fn content_type(id: &Ident) -> Result<String> {
-    if id.name == STAT_NAME {
-        return Ok(STAT.into());
+fn content_type(id: &Ident) -> Result<ContentType> {
+    if id.name == ContentType::STAT_NAME {
+        return Ok(ContentType::STAT);
     }
-    if !payload::valid(&id.name) {
+    let content_type = ContentType::from(id.name.as_str());
+    if !content_type.is_well_formed() {
         let hint = if id.name.contains('/') {
             "it isn't a well-formed content type"
         } else {
@@ -605,15 +606,15 @@ fn content_type(id: &Ident) -> Result<String> {
         };
         bail!(err_at(id, format!("`{}`: {hint}", id.name)));
     }
-    Ok(id.name.clone())
+    Ok(content_type)
 }
 
-fn pattern(p: &image_definition::Path) -> Result<Pattern> {
-    Pattern::parse(&p.path).map_err(|e| anyhow::anyhow!("{}: {e}", p.pos))
+fn pattern(p: &image_definition::Path) -> Result<PathPattern> {
+    PathPattern::parse(&p.path).map_err(|e| anyhow::anyhow!("{}: {e}", p.pos))
 }
 
 /// Two patterns that match exactly the same paths.
-fn same(a: &Pattern, b: &Pattern) -> bool {
+fn same(a: &PathPattern, b: &PathPattern) -> bool {
     a.specificity(b) == Ordering::Equal && a.covers(b) && b.covers(a)
 }
 
@@ -788,8 +789,7 @@ impl Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::ns::{Status, Verb};
-    use protocol::payload::ANY;
+    use protocol::{status::Status, verb::Verb};
 
     const GREETER: &str = r#"
         ## Greets every name typed on the console.
@@ -962,7 +962,7 @@ mod tests {
         )])
         .unwrap();
         let r = &h.objects[0].serves[0].requests;
-        assert_eq!((r[0].body.as_deref(), r[0].message.as_deref()), (Some("application/bson"), Some("Greeting")));
+        assert_eq!((r[0].body.as_ref().map(ContentType::as_str), r[0].message.as_deref()), (Some("application/bson"), Some("Greeting")));
         assert_eq!(r[1].answer.as_ref().and_then(|a| a.message.as_deref()), Some("Greeting"));
         assert_eq!(r[0].to_string(), "write Greeting");
         assert_eq!(h.types["Greeting"], "application/bson");
@@ -1026,17 +1026,17 @@ mod tests {
     fn requests_take_payloads_by_content_type() {
         let h = resolve_str("object A { serves { /h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat } }").unwrap();
         let e = &h.objects[0].serves[0];
-        assert_eq!(e.takes(Verb::Remove, Some("text/plain")).unwrap().body.as_deref(), Some("text/plain"));
+        assert_eq!(e.takes(Verb::Remove, Some(&ContentType::from("text/plain"))).unwrap().body, Some(ContentType::TEXT));
         assert_eq!(e.takes(Verb::Remove, None).unwrap().body, None);
-        assert_eq!(e.takes(Verb::Remove, Some("application/bson")), Err(Status::Invalid));
-        assert_eq!(e.takes(Verb::Write, Some("image/png")).unwrap().body.as_deref(), Some(ANY));
-        assert_eq!(e.takes(Verb::Write, None), Err(Status::Invalid));
-        assert_eq!(e.takes(Verb::Create, Some("text/html")).unwrap().answer.as_ref().unwrap().ty, STAT);
-        assert_eq!(e.takes(Verb::Stat, None), Err(Status::NotSupported));
+        assert_eq!(e.takes(Verb::Remove, Some(&ContentType::from("application/bson"))), Err(Status::INVALID));
+        assert_eq!(e.takes(Verb::Write, Some(&ContentType::from("image/png"))).unwrap().body, Some(ContentType::ANY));
+        assert_eq!(e.takes(Verb::Write, None), Err(Status::INVALID));
+        assert_eq!(e.takes(Verb::Create, Some(&ContentType::from("text/html"))).unwrap().answer.as_ref().unwrap().ty, ContentType::STAT);
+        assert_eq!(e.takes(Verb::Stat, None), Err(Status::NOT_SUPPORTED));
         assert_eq!(e.takes_verb(Verb::Read, false), Ok(()));
-        assert_eq!(e.takes_verb(Verb::Remove, false), Err(Status::Forbidden), "only the operator may remove");
+        assert_eq!(e.takes_verb(Verb::Remove, false), Err(Status::FORBIDDEN), "only the operator may remove");
         assert_eq!(e.takes_verb(Verb::Remove, true), Ok(()));
-        assert_eq!(e.takes_verb(Verb::Stat, true), Err(Status::NotSupported));
+        assert_eq!(e.takes_verb(Verb::Stat, true), Err(Status::NOT_SUPPORTED));
         assert!(e.streams(Verb::Read) && !e.streams(Verb::Write));
         assert_eq!(e.to_string(), "/h operator remove text/plain, operator remove, read -> */**, write */*, create text/* -> Stat");
         assert!(err("object A { serves { /h control text/plain } }").contains("`control` is gone"));
@@ -1075,11 +1075,13 @@ mod tests {
         )
         .unwrap();
         let o = &h.objects[0];
-        assert_eq!(o.serving("/hits").unwrap().path.as_str(), "/hits");
-        assert_eq!(o.serving("/").unwrap().path.as_str(), "/**");
-        assert_eq!(o.need("/net/tcp").unwrap().at.as_str(), "/net/tcp");
-        assert_eq!(o.need("/www").unwrap().at.as_str(), "/**");
-        assert!(o.need("/net/tcp").unwrap().entry("/").is_none(), "`{{conn}}` is never empty");
+        let path = |text| protocol::path::PathName::parse(text).unwrap();
+        let at = |text| protocol::path::MountPoint::parse(text).unwrap();
+        assert_eq!(o.serving(&path("/hits")).unwrap().path.as_str(), "/hits");
+        assert_eq!(o.serving(&path("/")).unwrap().path.as_str(), "/**");
+        assert_eq!(o.need(&at("/net/tcp")).unwrap().at.as_str(), "/net/tcp");
+        assert_eq!(o.need(&at("/www")).unwrap().at.as_str(), "/**");
+        assert!(o.need(&at("/net/tcp")).unwrap().entry(&path("/")).is_none(), "`{{conn}}` is never empty");
     }
 
     #[test]

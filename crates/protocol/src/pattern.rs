@@ -4,56 +4,57 @@
 //! segment, and `**` (last only) matches the rest of the path, zero or more
 //! segments. A trailing `/` is an empty last segment, so it counts, as it
 //! does everywhere else. Where several patterns match, the most specific
-//! wins: see [`Pattern::specificity`].
+//! wins: see [`PathPattern::specificity`].
 
+use crate::path::{MountPoint, PathName};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Seg {
-    Lit(String),
+enum Segment {
+    Literal(String),
     Name,
     Rest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct Pattern {
+pub struct PathPattern {
     text: String,
-    segs: Vec<Seg>,
+    segments: Vec<Segment>,
 }
 
-impl Pattern {
-    pub fn parse(text: &str) -> Result<Pattern, String> {
+impl PathPattern {
+    pub fn parse(text: &str) -> Result<PathPattern, String> {
         let Some(rest) = text.strip_prefix('/') else {
             return Err(format!("`{text}` is not a path pattern; it must start with `/`"));
         };
         let parts: Vec<&str> = rest.split('/').collect();
-        let mut segs = vec![];
-        for (i, part) in parts.iter().enumerate() {
-            let last = i + 1 == parts.len();
-            let seg = match *part {
-                "**" if last => Seg::Rest,
+        let mut segments = vec![];
+        for (index, part) in parts.iter().enumerate() {
+            let last = index + 1 == parts.len();
+            let segment = match *part {
+                "**" if last => Segment::Rest,
                 "**" => return Err(format!("`{text}`: `**` can only come last")),
-                "" if last => Seg::Lit(String::new()),
+                "" if last => Segment::Literal(String::new()),
                 "" => return Err(format!("`{text}` has an empty segment")),
                 "." | ".." => return Err(format!("`{text}` has a `{part}` segment")),
-                p if p.starts_with('{') && p.ends_with('}') => {
-                    let name = &p[1..p.len() - 1];
+                part if part.starts_with('{') && part.ends_with('}') => {
+                    let name = &part[1..part.len() - 1];
                     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                        return Err(format!("`{text}`: `{p}` should be `{{name}}`"));
+                        return Err(format!("`{text}`: `{part}` should be `{{name}}`"));
                     }
-                    Seg::Name
+                    Segment::Name
                 }
-                p if p.contains(['{', '}']) || p.contains("**") => {
-                    return Err(format!("`{text}`: `{p}` mixes a literal with `{{name}}` or `**`"));
+                part if part.contains(['{', '}']) || part.contains("**") => {
+                    return Err(format!("`{text}`: `{part}` mixes a literal with `{{name}}` or `**`"));
                 }
-                p => Seg::Lit(p.to_string()),
+                part => Segment::Literal(part.to_string()),
             };
-            segs.push(seg);
+            segments.push(segment);
         }
-        Ok(Pattern { text: text.to_string(), segs })
+        Ok(PathPattern { text: text.to_string(), segments })
     }
 
     pub fn as_str(&self) -> &str {
@@ -62,144 +63,134 @@ impl Pattern {
 
     /// Whether the pattern names one path only: no `{name}` and no `**`.
     pub fn is_literal(&self) -> bool {
-        self.segs.iter().all(|s| matches!(s, Seg::Lit(_)))
+        self.segments.iter().all(|segment| matches!(segment, Segment::Literal(_)))
     }
 
-    /// Whether the clean path `path` matches.
-    pub fn matches(&self, path: &str) -> bool {
-        let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
-        fn go(p: &[Seg], s: &[&str]) -> bool {
-            match (p.first(), s.first()) {
-                (Some(Seg::Rest), _) => true,
+    pub fn matches(&self, path: &PathName) -> bool {
+        let path: Vec<&str> = path.as_str()[1..].split('/').collect();
+        fn matches(pattern: &[Segment], path: &[&str]) -> bool {
+            match (pattern.first(), path.first()) {
+                (Some(Segment::Rest), _) => true,
                 (None, None) => true,
-                (Some(Seg::Lit(l)), Some(seg)) => l == seg && go(&p[1..], &s[1..]),
-                (Some(Seg::Name), Some(seg)) => !seg.is_empty() && go(&p[1..], &s[1..]),
+                (Some(Segment::Literal(literal)), Some(segment)) => literal == segment && matches(&pattern[1..], &path[1..]),
+                (Some(Segment::Name), Some(segment)) => !segment.is_empty() && matches(&pattern[1..], &path[1..]),
                 _ => false,
             }
         }
-        go(&self.segs, &path)
+        matches(&self.segments, &path)
     }
 
     /// Which of two patterns wins where both match: a literal over
     /// `{name}`, `{name}` over `**`, and longer over shorter, so `/www`
     /// wins over `/www/**`. `Equal` only for patterns of the same shape.
-    pub fn specificity(&self, other: &Pattern) -> Ordering {
+    pub fn specificity(&self, other: &PathPattern) -> Ordering {
         // Running out where the other has `**` is the more specific of the two.
-        fn rank(s: Option<&Seg>) -> u8 {
-            match s {
-                Some(Seg::Lit(_)) => 3,
-                Some(Seg::Name) => 2,
+        fn rank(segment: Option<&Segment>) -> u8 {
+            match segment {
+                Some(Segment::Literal(_)) => 3,
+                Some(Segment::Name) => 2,
                 None => 1,
-                Some(Seg::Rest) => 0,
+                Some(Segment::Rest) => 0,
             }
         }
-        for i in 0..self.segs.len().max(other.segs.len()) {
-            let (a, b) = (self.segs.get(i), other.segs.get(i));
-            match rank(a).cmp(&rank(b)) {
+        for index in 0..self.segments.len().max(other.segments.len()) {
+            match rank(self.segments.get(index)).cmp(&rank(other.segments.get(index))) {
                 Ordering::Equal => {}
-                o => return o,
+                ordering => return ordering,
             }
         }
         Ordering::Equal
     }
 
     /// Whether every path `other` matches, this one matches too.
-    pub fn covers(&self, other: &Pattern) -> bool {
-        fn go(p: &[Seg], q: &[Seg]) -> bool {
-            match (p.first(), q.first()) {
-                (Some(Seg::Rest), _) => true,
+    pub fn covers(&self, other: &PathPattern) -> bool {
+        fn covers(pattern: &[Segment], other: &[Segment]) -> bool {
+            match (pattern.first(), other.first()) {
+                (Some(Segment::Rest), _) => true,
                 (None, None) => true,
-                (Some(Seg::Lit(a)), Some(Seg::Lit(b))) => a == b && go(&p[1..], &q[1..]),
-                (Some(Seg::Name), Some(Seg::Lit(b))) => !b.is_empty() && go(&p[1..], &q[1..]),
-                (Some(Seg::Name), Some(Seg::Name)) => go(&p[1..], &q[1..]),
+                (Some(Segment::Literal(a)), Some(Segment::Literal(b))) => a == b && covers(&pattern[1..], &other[1..]),
+                (Some(Segment::Name), Some(Segment::Literal(b))) => !b.is_empty() && covers(&pattern[1..], &other[1..]),
+                (Some(Segment::Name), Some(Segment::Name)) => covers(&pattern[1..], &other[1..]),
                 _ => false,
             }
         }
-        go(&self.segs, &other.segs)
+        covers(&self.segments, &other.segments)
     }
 
-    /// What this pattern matches below the clean path `path`, relative to
+    /// What this pattern matches below `path`, relative to
     /// it: `/{name}` for `/hosts/{name}` below `/hosts`, `""` for the path
     /// itself, and `/**` wherever a `**` takes over. `None` if it matches
     /// nothing below `path`.
-    pub fn below(&self, path: &str) -> Option<String> {
-        let path: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').filter(|s| !s.is_empty()).collect();
+    pub fn below(&self, path: &PathName) -> Option<String> {
+        let path: Vec<&str> = path.as_str()[1..].split('/').filter(|segment| !segment.is_empty()).collect();
         if path.is_empty() && self.text == "/" {
             return Some(String::new());
         }
-        let mut segs = &self.segs[..];
-        for seg in &path {
-            match segs.first() {
-                Some(Seg::Rest) => return Some("/**".into()),
-                Some(Seg::Lit(l)) if l == seg => segs = &segs[1..],
-                Some(Seg::Name) => segs = &segs[1..],
+        let mut segments = &self.segments[..];
+        for segment in &path {
+            match segments.first() {
+                Some(Segment::Rest) => return Some("/**".into()),
+                Some(Segment::Literal(literal)) if literal == segment => segments = &segments[1..],
+                Some(Segment::Name) => segments = &segments[1..],
                 _ => return None,
             }
         }
-        let rest: Vec<String> = segs
-            .iter()
-            .map(|s| match s {
-                Seg::Lit(l) => l.clone(),
-                Seg::Name => "{x}".into(),
-                Seg::Rest => "**".into(),
-            })
-            .collect();
-        // Keep the names as written, which the text has and the segments don't.
+        // The rest as written, which keeps the names that the segments don't.
         let written: Vec<&str> = self.text.strip_prefix('/').unwrap_or(&self.text).split('/').collect();
-        let rest: Vec<String> = rest.iter().zip(&written[written.len() - rest.len()..]).map(|(_, w)| w.to_string()).collect();
+        let rest = &written[written.len() - segments.len()..];
         Some(if rest.is_empty() { String::new() } else { format!("/{}", rest.join("/")) })
     }
 
-    /// `rel`, a pattern [`below`](Pattern::below) another path, put under
-    /// the mount point `at` instead.
-    pub fn under(at: &str, rel: &str) -> Pattern {
-        let text = match (at, rel) {
+    /// `relative`, a pattern [`below`](PathPattern::below) another path, put
+    /// under the mount point `at` instead.
+    pub fn under(at: &MountPoint, relative: &str) -> PathPattern {
+        let text = match (at.as_str(), relative) {
             ("/", "") => "/".to_string(),
-            ("/", rel) => rel.to_string(),
-            (at, rel) => format!("{}{rel}", at.trim_end_matches('/')),
+            ("/", relative) => relative.to_string(),
+            (at, relative) => format!("{at}{relative}"),
         };
-        Pattern::parse(&text).expect("a pattern under a mount point is a pattern")
+        PathPattern::parse(&text).expect("a pattern under a mount point is a pattern")
+    }
+
+    /// The most specific of `items` whose pattern matches `path`.
+    pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &PathPattern, path: &PathName) -> Option<&'a T> {
+        items.iter().filter(|item| pattern(item).matches(path)).max_by(|a, b| pattern(a).specificity(pattern(b)))
     }
 
     /// Whether some path matches both.
-    pub fn overlaps(&self, other: &Pattern) -> bool {
-        fn go(p: &[Seg], q: &[Seg]) -> bool {
-            match (p.first(), q.first()) {
-                (Some(Seg::Rest), _) | (_, Some(Seg::Rest)) => true,
+    pub fn overlaps(&self, other: &PathPattern) -> bool {
+        fn overlaps(pattern: &[Segment], other: &[Segment]) -> bool {
+            match (pattern.first(), other.first()) {
+                (Some(Segment::Rest), _) | (_, Some(Segment::Rest)) => true,
                 (None, None) => true,
-                (Some(Seg::Lit(a)), Some(Seg::Lit(b))) => a == b && go(&p[1..], &q[1..]),
-                (Some(Seg::Lit(a)), Some(Seg::Name)) | (Some(Seg::Name), Some(Seg::Lit(a))) => {
-                    !a.is_empty() && go(&p[1..], &q[1..])
+                (Some(Segment::Literal(a)), Some(Segment::Literal(b))) => a == b && overlaps(&pattern[1..], &other[1..]),
+                (Some(Segment::Literal(literal)), Some(Segment::Name)) | (Some(Segment::Name), Some(Segment::Literal(literal))) => {
+                    !literal.is_empty() && overlaps(&pattern[1..], &other[1..])
                 }
-                (Some(Seg::Name), Some(Seg::Name)) => go(&p[1..], &q[1..]),
+                (Some(Segment::Name), Some(Segment::Name)) => overlaps(&pattern[1..], &other[1..]),
                 _ => false,
             }
         }
-        go(&self.segs, &other.segs)
+        overlaps(&self.segments, &other.segments)
     }
 }
 
-/// The most specific of `items` whose pattern matches `path`.
-pub fn best<'a, T>(items: &'a [T], pattern: impl Fn(&T) -> &Pattern, path: &str) -> Option<&'a T> {
-    items.iter().filter(|i| pattern(i).matches(path)).max_by(|a, b| pattern(a).specificity(pattern(b)))
-}
-
-impl fmt::Display for Pattern {
+impl fmt::Display for PathPattern {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.text)
     }
 }
 
-impl TryFrom<String> for Pattern {
+impl TryFrom<String> for PathPattern {
     type Error = String;
-    fn try_from(s: String) -> Result<Pattern, String> {
-        Pattern::parse(&s)
+    fn try_from(text: String) -> Result<PathPattern, String> {
+        PathPattern::parse(&text)
     }
 }
 
-impl From<Pattern> for String {
-    fn from(p: Pattern) -> String {
-        p.text
+impl From<PathPattern> for String {
+    fn from(pattern: PathPattern) -> String {
+        pattern.text
     }
 }
 
@@ -207,9 +198,17 @@ impl From<Pattern> for String {
 mod tests {
     use super::*;
 
+    fn path(text: &str) -> PathName {
+        PathName::parse(text).unwrap()
+    }
+
+    fn at(text: &str) -> MountPoint {
+        MountPoint::parse(text).unwrap()
+    }
+
     #[test]
     fn patterns_move_below_one_path_and_under_another() {
-        let below = |p: &str, path: &str| Pattern::parse(p).unwrap().below(path);
+        let below = |pattern: &str, path: &str| PathPattern::parse(pattern).unwrap().below(&self::path(path));
         assert_eq!(below("/hosts/{name}", "/hosts").as_deref(), Some("/{name}"));
         assert_eq!(below("/hosts", "/hosts").as_deref(), Some(""));
         assert_eq!(below("/hosts/", "/hosts").as_deref(), Some("/"));
@@ -218,59 +217,59 @@ mod tests {
         assert_eq!(below("/x", "/"), Some("/x".into()));
         assert_eq!(below("/", "/").as_deref(), Some(""));
         assert_eq!(below("/hits", "/hosts"), None);
-        assert_eq!(Pattern::under("/web", "/{name}").as_str(), "/web/{name}");
-        assert_eq!(Pattern::under("/web", "").as_str(), "/web");
-        assert_eq!(Pattern::under("/web/", "/").as_str(), "/web/");
-        assert_eq!(Pattern::under("/", "").as_str(), "/");
-        assert_eq!(Pattern::under("/", "/x").as_str(), "/x");
+        assert_eq!(PathPattern::under(&at("/web"), "/{name}").as_str(), "/web/{name}");
+        assert_eq!(PathPattern::under(&at("/web"), "").as_str(), "/web");
+        assert_eq!(PathPattern::under(&at("/web/"), "/").as_str(), "/web/");
+        assert_eq!(PathPattern::under(&at("/"), "").as_str(), "/");
+        assert_eq!(PathPattern::under(&at("/"), "/x").as_str(), "/x");
     }
 
-    fn p(s: &str) -> Pattern {
-        Pattern::parse(s).unwrap()
+    fn pattern(text: &str) -> PathPattern {
+        PathPattern::parse(text).unwrap()
     }
 
     #[test]
     fn matches_literals_names_and_rest() {
-        assert!(p("/hits").matches("/hits"));
-        assert!(!p("/hits").matches("/hits/"), "a trailing `/` counts");
-        assert!(p("/").matches("/"));
-        assert!(!p("/").matches("/a"));
-        assert!(p("/hosts/{name}").matches("/hosts/a"));
-        assert!(!p("/hosts/{name}").matches("/hosts/"), "`{{name}}` is never empty");
-        assert!(!p("/hosts/{name}").matches("/hosts/a/b"));
-        assert!(p("/www/**").matches("/www"), "`**` matches zero segments");
-        assert!(p("/www/**").matches("/www/"));
-        assert!(p("/www/**").matches("/www/a/b/"));
-        assert!(!p("/www/**").matches("/wwwx"));
-        assert!(p("/**").matches("/"));
-        assert!(p("/{a}/x/**").matches("/q/x"));
+        assert!(pattern("/hits").matches(&path("/hits")));
+        assert!(!pattern("/hits").matches(&path("/hits/")), "a trailing `/` counts");
+        assert!(pattern("/").matches(&path("/")));
+        assert!(!pattern("/").matches(&path("/a")));
+        assert!(pattern("/hosts/{name}").matches(&path("/hosts/a")));
+        assert!(!pattern("/hosts/{name}").matches(&path("/hosts/")), "`{{name}}` is never empty");
+        assert!(!pattern("/hosts/{name}").matches(&path("/hosts/a/b")));
+        assert!(pattern("/www/**").matches(&path("/www")), "`**` matches zero segments");
+        assert!(pattern("/www/**").matches(&path("/www/")));
+        assert!(pattern("/www/**").matches(&path("/www/a/b/")));
+        assert!(!pattern("/www/**").matches(&path("/wwwx")));
+        assert!(pattern("/**").matches(&path("/")));
+        assert!(pattern("/{a}/x/**").matches(&path("/q/x")));
     }
 
     #[test]
     fn literals_name_one_path() {
-        assert!(p("/net/tcp").is_literal());
-        assert!(p("/").is_literal());
-        assert!(!p("/{x}").is_literal());
-        assert!(!p("/a/**").is_literal());
+        assert!(pattern("/net/tcp").is_literal());
+        assert!(pattern("/").is_literal());
+        assert!(!pattern("/{x}").is_literal());
+        assert!(!pattern("/a/**").is_literal());
     }
 
     #[test]
     fn rejects_malformed_patterns() {
         for bad in ["hits", "/a/**/b", "/a//b", "/a/../b", "/{}", "/{a-b}", "/a{b}", "/a**"] {
-            assert!(Pattern::parse(bad).is_err(), "{bad}");
+            assert!(PathPattern::parse(bad).is_err(), "{bad}");
         }
     }
 
     #[test]
     fn the_most_specific_wins() {
-        let order = |a: &str, b: &str| p(a).specificity(&p(b));
+        let order = |a: &str, b: &str| pattern(a).specificity(&pattern(b));
         assert_eq!(order("/hits", "/**"), Ordering::Greater);
         assert_eq!(order("/www", "/www/**"), Ordering::Greater);
         assert_eq!(order("/a/{x}", "/a/**"), Ordering::Greater);
         assert_eq!(order("/a/b/**", "/a/**"), Ordering::Greater);
         assert_eq!(order("/{x}", "/{y}"), Ordering::Equal);
-        let items = [p("/**"), p("/hits"), p("/{x}")];
-        let best = |path| best(&items, |i| i, path).map(Pattern::as_str);
+        let items = [pattern("/**"), pattern("/hits"), pattern("/{x}")];
+        let best = |path| PathPattern::best(&items, |item| item, &self::path(path)).map(PathPattern::as_str);
         assert_eq!(best("/hits"), Some("/hits"));
         assert_eq!(best("/other"), Some("/{x}"));
         assert_eq!(best("/a/b"), Some("/**"));
@@ -278,15 +277,15 @@ mod tests {
 
     #[test]
     fn covers_and_overlaps() {
-        assert!(p("/**").covers(&p("/a/{x}")));
-        assert!(p("/a/**").covers(&p("/a")));
-        assert!(p("/{x}").covers(&p("/a")));
-        assert!(!p("/{x}").covers(&p("/")), "`/` is an empty segment");
-        assert!(!p("/a/{x}").covers(&p("/a/**")));
-        assert!(!p("/a").covers(&p("/{x}")));
-        assert!(p("/a/{x}").overlaps(&p("/a/**")));
-        assert!(p("/{x}").overlaps(&p("/hits")));
-        assert!(!p("/a").overlaps(&p("/b/**")));
-        assert!(!p("/{x}").overlaps(&p("/")));
+        assert!(pattern("/**").covers(&pattern("/a/{x}")));
+        assert!(pattern("/a/**").covers(&pattern("/a")));
+        assert!(pattern("/{x}").covers(&pattern("/a")));
+        assert!(!pattern("/{x}").covers(&pattern("/")), "`/` is an empty segment");
+        assert!(!pattern("/a/{x}").covers(&pattern("/a/**")));
+        assert!(!pattern("/a").covers(&pattern("/{x}")));
+        assert!(pattern("/a/{x}").overlaps(&pattern("/a/**")));
+        assert!(pattern("/{x}").overlaps(&pattern("/hits")));
+        assert!(!pattern("/a").overlaps(&pattern("/b/**")));
+        assert!(!pattern("/{x}").overlaps(&pattern("/")));
     }
 }

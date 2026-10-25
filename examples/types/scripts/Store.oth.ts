@@ -1,6 +1,6 @@
 // Generated from Store.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 import { Payload } from "othismo"
 import { Box, Message, Reader, Uuid, Writer, bson, registerMessage } from "othismo/bson"
 
@@ -255,24 +255,24 @@ export class StoreServer extends Server {
    *
    * `/record write Record`
    */
-  writeRecord(req: Request, body: Record): void { req.fail(Errno.NotSupported) }
+  writeRecord(req: Request, body: Record): void { req.fail(Status.NotSupported) }
 
   /**
    * The last record written.
    *
    * `/record read -> Record`
    */
-  readRecord(req: Request): void { req.fail(Errno.NotSupported) }
+  readRecord(req: Request): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/record", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { const body = Record.fromPayload(req.body); if (body !== null) { this.writeRecord(req, body); return } }
       if (req.verb == Verb.Read) { this.readRecord(req); return }
-      if (req.verb == Verb.Write) { req.fail(Errno.Invalid, "expected a Record"); return }
-      req.fail(Errno.NotSupported)
+      if (req.verb == Verb.Write) { req.fail(Status.Invalid, "expected a Record"); return }
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }

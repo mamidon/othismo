@@ -1,6 +1,6 @@
 // Generated from Greeter.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 import { Payload } from "othismo"
 import { Message, Reader, Writer, bson, registerMessage } from "othismo/bson"
 
@@ -44,17 +44,17 @@ export class GreeterServer extends Server {
    *
    * `/greeting write Greeting`
    */
-  writeGreeting(req: Request, body: Greeting): void { req.fail(Errno.NotSupported) }
+  writeGreeting(req: Request, body: Greeting): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/greeting", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { const body = Greeting.fromPayload(req.body); if (body !== null) { this.writeGreeting(req, body); return } }
-      if (req.verb == Verb.Write) { req.fail(Errno.Invalid, "expected a Greeting"); return }
-      req.fail(Errno.NotSupported)
+      if (req.verb == Verb.Write) { req.fail(Status.Invalid, "expected a Greeting"); return }
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 

@@ -3,9 +3,10 @@
 //! header stands on its own, so it can travel inside a module and inside a
 //! built image; the compiler resolves them from `.oth` files.
 
-use protocol::ns::{Status, Verb};
-use protocol::pattern::{self, Pattern};
-use protocol::payload::{self, ANY, STAT, STAT_NAME};
+use protocol::{status::Status, verb::Verb};
+use protocol::path::{MountPoint, PathName};
+use protocol::pattern::PathPattern;
+use protocol::content_type::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -76,7 +77,7 @@ pub struct Object {
 /// `needs <mount point pattern> { entries }`, or `needs <mount point> <Trait>`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Need {
-    pub at: Pattern,
+    pub at: PathPattern,
     pub doc: String,
     pub entries: Vec<Entry>,
     /// The trait it names, if it is a trait's whole tree.
@@ -87,7 +88,7 @@ pub struct Need {
 /// A path pattern and the requests it takes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
-    pub path: Pattern,
+    pub path: PathPattern,
     pub doc: String,
     pub requests: Vec<Request>,
 }
@@ -100,7 +101,7 @@ pub struct Request {
     pub operator: bool,
     pub verb: Verb,
     /// The content type of the payload it takes, if it takes one.
-    pub body: Option<String>,
+    pub body: Option<ContentType>,
     /// The message type it names for that payload, if it names one: its
     /// format's to read. The runtime goes by the content type alone.
     #[serde(default)]
@@ -113,7 +114,7 @@ pub struct Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Answer {
     /// The answer's content type.
-    pub ty: String,
+    pub ty: ContentType,
     /// The message type it names, if it names one.
     #[serde(default)]
     pub message: Option<String>,
@@ -150,9 +151,9 @@ impl Trait {
 }
 
 impl Object {
-    /// The entry serving `path`, a clean path in the object's served tree.
-    pub fn serving(&self, path: &str) -> Option<&Entry> {
-        pattern::best(&self.serves, |e| &e.path, path)
+    /// The entry serving `path`, a path in the object's served tree.
+    pub fn serving(&self, path: &PathName) -> Option<&Entry> {
+        PathPattern::best(&self.serves, |e| &e.path, path)
     }
 
     /// Whether `other` has the same shape: what it serves, needs and declares.
@@ -161,14 +162,14 @@ impl Object {
     }
 
     /// The `needs` block for the mount point `at`.
-    pub fn need(&self, at: &str) -> Option<&Need> {
-        pattern::best(&self.needs, |n| &n.at, at)
+    pub fn need(&self, at: &MountPoint) -> Option<&Need> {
+        PathPattern::best(&self.needs, |n| &n.at, at.path())
     }
 }
 
 impl Need {
-    pub fn entry(&self, path: &str) -> Option<&Entry> {
-        pattern::best(&self.entries, |e| &e.path, path)
+    pub fn entry(&self, path: &PathName) -> Option<&Entry> {
+        PathPattern::best(&self.entries, |e| &e.path, path)
     }
 }
 
@@ -176,12 +177,12 @@ impl Entry {
     /// The request a `verb` with a payload of content type `body` fits, as
     /// the checker sees it: `NotSupported` if the entry doesn't take the
     /// verb, and `Invalid` if it does but not with that payload.
-    pub fn takes(&self, verb: Verb, body: Option<&str>) -> Result<&Request, Status> {
+    pub fn takes(&self, verb: Verb, body: Option<&ContentType>) -> Result<&Request, Status> {
         let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
         if with_verb.peek().is_none() {
-            return Err(Status::NotSupported);
+            return Err(Status::NOT_SUPPORTED);
         }
-        with_verb.find(|r| body_fits(r.body.as_deref(), body)).ok_or(Status::Invalid)
+        with_verb.find(|r| body_fits(r.body.as_ref(), body)).ok_or(Status::INVALID)
     }
 
     /// Whether the entry takes `verb` from a sender that is the operator or
@@ -190,9 +191,9 @@ impl Entry {
     pub fn takes_verb(&self, verb: Verb, operator: bool) -> Result<(), Status> {
         let mut with_verb = self.requests.iter().filter(|r| r.verb == verb).peekable();
         if with_verb.peek().is_none() {
-            return Err(Status::NotSupported);
+            return Err(Status::NOT_SUPPORTED);
         }
-        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::Forbidden) }
+        if operator || with_verb.any(|r| !r.operator) { Ok(()) } else { Err(Status::FORBIDDEN) }
     }
 
     /// Whether `verb` may be answered more than once here.
@@ -202,10 +203,10 @@ impl Entry {
 }
 
 /// Whether a payload of content type `given` fits where `want` is declared.
-pub fn body_fits(want: Option<&str>, given: Option<&str>) -> bool {
+pub fn body_fits(want: Option<&ContentType>, given: Option<&ContentType>) -> bool {
     match (want, given) {
         (None, None) => true,
-        (Some(w), Some(g)) => payload::fits(w, g),
+        (Some(w), Some(g)) => g.fits(w),
         _ => false,
     }
 }
@@ -223,24 +224,24 @@ impl Request {
     /// content type.
     pub fn meets(&self, need: &Request) -> bool {
         let answer = match (&self.answer, &need.answer) {
-            (_, Some(n)) if n.ty == ANY && self.answer.as_ref().is_none_or(|s| s.stream == n.stream) => true,
+            (_, Some(n)) if n.ty == ContentType::ANY && self.answer.as_ref().is_none_or(|s| s.stream == n.stream) => true,
             (None, None) => true,
             (Some(s), Some(n)) => {
-                payload::fits(&n.ty, &s.ty) && s.stream == n.stream && (n.message.is_none() || n.message == s.message)
+                s.ty.fits(&n.ty) && s.stream == n.stream && (n.message.is_none() || n.message == s.message)
             }
             _ => false,
         };
         let operator = !self.operator || need.operator;
         let message = self.message.is_none() || self.message == need.message;
-        self.verb == need.verb && operator && body_fits(self.body.as_deref(), need.body.as_deref()) && message && answer
+        self.verb == need.verb && operator && body_fits(self.body.as_ref(), need.body.as_ref()) && message && answer
     }
 
     /// Whether the verb's answer is set by the protocol: `stat` and `list`
     /// answer stat records, and are written bare.
     pub fn implied(verb: Verb) -> Option<Answer> {
         match verb {
-            Verb::Stat => Some(Answer { ty: STAT.into(), message: None, stream: false }),
-            Verb::List => Some(Answer { ty: STAT.into(), message: None, stream: true }),
+            Verb::Stat => Some(Answer { ty: ContentType::STAT, message: None, stream: false }),
+            Verb::List => Some(Answer { ty: ContentType::STAT, message: None, stream: true }),
             _ => None,
         }
     }
@@ -260,12 +261,12 @@ impl fmt::Display for Request {
         }
         write!(f, "{}", self.verb)?;
         if let Some(b) = &self.body {
-            write!(f, " {}", self.message.as_ref().unwrap_or(b))?;
+            write!(f, " {}", self.message.as_deref().unwrap_or(b.as_str()))?;
         }
         if let Some(a) = &self.answer
             && Request::implied(self.verb).is_none()
         {
-            let ty = a.message.as_deref().unwrap_or(if a.ty == STAT { STAT_NAME } else { &a.ty });
+            let ty = a.message.as_deref().unwrap_or(if a.ty == ContentType::STAT { ContentType::STAT_NAME } else { a.ty.as_str() });
             write!(f, " -> {ty}{}", if a.stream { "*" } else { "" })?;
         }
         Ok(())

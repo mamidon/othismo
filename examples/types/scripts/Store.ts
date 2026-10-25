@@ -1,4 +1,4 @@
-import { Errno, Request, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
+import { Status, Request, run, rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel } from "othismo"
 import { Record, StoreServer } from "./Store.oth"
 
 export { rt_inbox, rt_serve, rt_answer, rt_start, rt_cancel }
@@ -14,7 +14,7 @@ class Store extends StoreServer {
 
   readRecord(req: Request): void {
     const r = this.record
-    if (r === null) req.fail(Errno.NotFound, "no record has been written")
+    if (r === null) req.fail(Status.NotFound, "no record has been written")
     else req.reply(r.toPayload())
   }
 }

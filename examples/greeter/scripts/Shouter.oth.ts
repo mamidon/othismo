@@ -1,20 +1,20 @@
 // Generated from Shouter.oth by `othismo bindings`. Edit the header, not this file.
 
-import { Call, Errno, Payload, Request, Server, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
+import { Call, Payload, Request, Server, Status, Then, Verb, ns, payloadOf, route, textOf, under } from "othismo"
 
 /** Writes each line it is given to the console, in capitals. */
 export class ShouterServer extends Server {
   /** `/ write text/plain` */
-  write(req: Request, body: string): void { req.fail(Errno.NotSupported) }
+  write(req: Request, body: string): void { req.fail(Status.NotSupported) }
 
   serve(req: Request): void {
     const m0 = route("/", req.path)
     if (m0 !== null) {
       if (req.verb == Verb.Write) { const body = textOf(req, "text/plain"); if (body !== null) this.write(req, body!); return }
-      req.fail(Errno.NotSupported)
+      req.fail(Status.NotSupported)
       return
     }
-    req.fail(Errno.NotFound)
+    req.fail(Status.NotFound)
   }
 }
 

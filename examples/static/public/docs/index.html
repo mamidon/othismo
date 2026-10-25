@@ -152,7 +152,7 @@ many times it is bound or exposed again.</li>
 </ul>
 <p>Every view is built by an image and none is inherited: there is no
 equivalent of Plan 9&#39;s <code>rfork</code>, since objects don&#39;t make other objects.</p>
-<pre><code class="language-ts">import { Server, Request, Verb, Errno, Flag, ns, run } from &quot;othismo&quot;
+<pre><code class="language-ts">import { Server, Request, Verb, Flag, ns, run } from &quot;othismo&quot;
 
 class Site extends Server {
   start(): void {
