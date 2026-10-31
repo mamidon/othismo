@@ -7,18 +7,13 @@ decides where each path leads.
 
 ## The model
 
-Every instance has two trees.
-
-- **Its view** is the set of paths it can send requests to. The image builds
-  the initial view with `mount` and `bind`. The instance can rearrange its
-  view at run time, but only using names it can already see.
-- **Its served tree** is the set of paths it answers for. Nothing in it has to
-  exist ahead of time. A served tree is whatever the instance's `serve` code
-  says it is, like a Plan 9 file server.
+Every object has it's own view into the namespace, this view combines paths
+that the object itself serves and paths served by other objects bound into it's 
+view.
 
 Mounting instance `pages` at `/www` in `http`'s view means that when `http`
 sends a request to `/www/index.html`, `pages` receives it as a request for
-`/index.html` in its own served tree.
+`/index.html` in its own tree.
 
 ```text
 http's view                         pages' view
