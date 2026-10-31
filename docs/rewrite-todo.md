@@ -24,10 +24,7 @@ Drafted in `docs/tour.md`.
 - [x] `site.oth`: needs, the three instances, `mount /http`, the hosts, `export`
 - [x] `site.oth`: the imports
 - [x] `static.oth`: running it for real, and its needs
-- [ ] A header: what you read instead of StaticSite's code
-- [ ] `--check`: what we can promise without reading the code
-- [ ] `static.test.oth`: testing it with in-memory stand-ins
-- [ ] Where to go next
+- [x] HttpServer's header: what you read instead of its code
 
 ## 3. Objects
 
