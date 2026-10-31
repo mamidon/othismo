@@ -388,7 +388,7 @@ the bookkeeping, for streams and cancels too, and makes a promise the other
 way can&#39;t: StaticSite never sees the bytes it serves.</p>
 <h3 id="what-the-runtime-checks">What the runtime checks</h3>
 <p>On every request it checks the path and verb against the sender&#39;s <code>needs</code>
-and the receiver&#39;s <code>serves</code> (see <a href="objects.md#enforcement">Objects</a>), the
+and the receiver&#39;s <code>serves</code> (see <a href="/objects/#enforcement">Objects</a>), the
 read-only rule and the operator rule, and that only a stream gets more than
 one answer. It never checks a payload. The checker compares content types,
 and message types where headers name them, between needs and what is

@@ -94,8 +94,9 @@ const LINKS = {
   "protocol.md": "/protocol/",
 }
 
+/** A heading's id, as GitHub makes it, so links work in both places. */
 function slug(text) {
-  return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+  return text.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[#a-z0-9]+;/g, "").replace(/[^a-z0-9 _-]/g, "").trim().replace(/ /g, "-")
 }
 
 function escape(s) {
@@ -119,7 +120,8 @@ function render(markdown) {
       },
       link({ href, title, tokens }) {
         const text = this.parser.parseInline(tokens)
-        const target = LINKS[href] ?? href
+        const [path, fragment] = href.split("#")
+        const target = path in LINKS ? LINKS[path] + (fragment ? `#${fragment}` : "") : href
         return `<a href="${escape(target)}"${title ? ` title="${escape(title)}"` : ""}>${text}</a>`
       },
     },

@@ -54,18 +54,12 @@ decides where each path leads.</p>
 
     <article class="prose">
 <h2 id="the-model">The model</h2>
-<p>Every instance has two trees.</p>
-<ul>
-<li><strong>Its view</strong> is the set of paths it can send requests to. The image builds
-the initial view with <code>mount</code> and <code>bind</code>. The instance can rearrange its
-view at run time, but only using names it can already see.</li>
-<li><strong>Its served tree</strong> is the set of paths it answers for. Nothing in it has to
-exist ahead of time. A served tree is whatever the instance&#39;s <code>serve</code> code
-says it is, like a Plan 9 file server.</li>
-</ul>
+<p>Every object has it&#39;s own view into the namespace, this view combines paths
+that the object itself serves and paths served by other objects bound into it&#39;s 
+view.</p>
 <p>Mounting instance <code>pages</code> at <code>/www</code> in <code>http</code>&#39;s view means that when <code>http</code>
 sends a request to <code>/www/index.html</code>, <code>pages</code> receives it as a request for
-<code>/index.html</code> in its own served tree.</p>
+<code>/index.html</code> in its own tree.</p>
 <pre><code class="language-text">http&#39;s view                         pages&#39; view
   /net/tcp  → the listener            /files → files (read-only)
   /www      → pages
@@ -101,7 +95,7 @@ A read-only mount or exposure anywhere along the way makes the result
 read-only.</p>
 <h2 id="building-views">Building views</h2>
 <p>An image builds each view from three lines (see
-<a href="images.md#views">Building images</a>):</p>
+<a href="/images/#views">Building images</a>):</p>
 <ul>
 <li><code>mount &lt;at&gt; &lt;instance&gt; [readonly]</code> puts an instance&#39;s whole served tree at
 <code>&lt;at&gt;</code>.</li>
@@ -232,7 +226,7 @@ and any image can declare them and pass them to what it instantiates:</p>
 </tr>
 <tr>
 <td><code>PackedFiles</code></td>
-<td><code>FileTree</code>, from files copied into the image when it was built (see <a href="images.md#packed-files">Building images</a>)</td>
+<td><code>FileTree</code>, from files copied into the image when it was built (see <a href="/images/#packed-files">Building images</a>)</td>
 </tr>
 </tbody></table></div>
 <p>This is how an image is tested: the test image is a root with no needs, and
