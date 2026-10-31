@@ -24,17 +24,14 @@ Drafted in `docs/tour.md`.
 - [x] `site.oth`: needs, the three instances, `mount /http`, the hosts, `export`
 - [x] `site.oth`: the imports
 - [x] `static.oth`: running it for real, and its needs
-- [ ] A header: what you read instead of StaticSite's code
-- [ ] `--check`: what we can promise without reading the code
-- [ ] `static.test.oth`: testing it with in-memory stand-ins
-- [ ] Where to go next
+- [x] HttpServer's header: what you read instead of its code
 
 ## 3. Objects
 
-- [ ] What an object is: a WebAssembly module in a sandbox
-- [ ] No ambient access: no files, clock, network or randomness
-- [ ] Server and client at once
-- [ ] Single-threaded, sharing nothing
+- [x] What an object is: a WebAssembly module in a sandbox
+- [x] No ambient access: no files, clock, network or randomness
+- [x] Server and client at once
+- [x] Single-threaded, sharing nothing
 
 ## 4. Namespaces
 

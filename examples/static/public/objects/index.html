@@ -27,10 +27,9 @@
       <div class="hero-body">
         <div class="eyebrow">Objects</div>
         <h1>Objects</h1>
-        <p class="lede">An object is a WebAssembly module, running in a sandbox whose only way out is
-its namespace, and it comes with a header that says exactly what it serves
-and what it needs. The header is what you review; the runtime holds the code
-to it.</p>
+        <p class="lede">An object is a WebAssembly module running in a sandbox. The only thing it can
+reach is its namespace: the paths it has been given. Whatever it does, it does
+by answering requests and making them.</p>
       </div>
     </div>
   </header>
@@ -41,403 +40,72 @@ to it.</p>
         <div class="eyebrow">Contents</div>
         <ol>
           <li><a href="#what-an-object-is">What an object is</a></li>
-          <li><a href="#the-interface">The interface</a></li>
-          <li><a href="#messages">Messages</a></li>
-          <li><a href="#the-sandbox">The sandbox</a></li>
-          <li><a href="#the-contract-with-the-runtime">The contract with the runtime</a></li>
-          <li><a href="#building-a-module">Building a module</a></li>
-          <li><a href="#assemblyscript">AssemblyScript</a></li>
-          <li><a href="#failure">Failure</a></li>
-          <li><a href="#where-it-stands">Where it stands</a></li>
+          <li><a href="#server-and-client-at-once">Server and client at once</a></li>
+          <li><a href="#no-ambient-access">No ambient access</a></li>
+          <li><a href="#single-threaded-sharing-nothing">Single-threaded, sharing nothing</a></li>
+          <li><a href="#protocols-and-traits">Protocols and traits</a></li>
         </ol>
       </nav>
     </aside>
 
     <article class="prose">
 <h2 id="what-an-object-is">What an object is</h2>
-<p>A <strong>module</strong> is a compiled <code>.wasm</code> file. An <strong>object</strong> is one running
-instance of a module, declared in an image:</p>
-<pre><code class="language-text">import { StaticSite } from &quot;../../sdk/objects/site/StaticSite.oth&quot;
-
-instance pages : StaticSite {
-  mount /files files readonly
-}
-</code></pre>
-<p>Two instances of the same type share code and nothing else. Each has its own
-memory, its own view and its own served tree.</p>
-<p>Every object is two things at once. It is a <strong>server</strong>, answering requests made
-of its served tree, and a <strong>client</strong>, making requests of the paths in its view.
-Nothing else about it is visible from outside: not its memory, not its
+<p>A module is a compiled <code>.wasm</code> file, with a header describing it. An object is
+one running instance of a module, declared in an image. In the
+<a href="/tour/#siteoth">tour</a>, <code>site.oth</code> makes three of them: <code>http</code>, <code>pages</code> and
+<code>files</code>.</p>
+<p>Two instances of the same module share code and nothing else. Each has its
+own memory and its own namespace.</p>
+<h2 id="server-and-client-at-once">Server and client at once</h2>
+<p>Every object is both a server and a client. It serves a tree of paths, and
+answers the requests made of them. It also has a view, the paths it has been
+given, and it makes requests of those.</p>
+<p>Its header says both: what it <code>serves</code>, and what it <code>needs</code> in its view. The
+tour walks through <a href="/tour/#httpservers-header">HttpServer&#39;s header</a>. Nothing
+else about an object is visible from outside: not its memory, not its
 functions, not the language it was written in.</p>
-<h2 id="the-interface">The interface</h2>
-<p>Each module has a header next to its source, <code>StaticSite.oth</code>,
-written in the same language as images. It declares the module&#39;s object: what
-it serves, what it needs, and its documentation. The module itself is the
-<code>.wasm</code> with the same name beside it, <code>StaticSite.wasm</code>.</p>
-<pre><code class="language-text">import { FileTree } from env
-
-## Serves a static site from a files tree it is given read-only.
-##
-## Requests for paths ending in `/` get `index.html` added. It forwards each
-## safe request to `/files` and never sees the bytes it serves.
-export object StaticSite : FileTree {
-  ## The site&#39;s files. Nothing is ever written here.
-  needs /files FileTree
-
-  serves {
-    ## How many requests it has forwarded, as decimal text.
-    /hits   read -&gt; text/plain
-  }
-}
-</code></pre>
-<p><code>FileTree</code> is a trait, the shape of a tree of files, from the runtime&#39;s own
-header (see <a href="#protocols-and-traits">Protocols and traits</a>). An object must be
-<code>export</code>ed for an image to import it.</p>
-<p>A header describes paths, verbs and content types, never what is inside a
-payload. What a module&#39;s payloads hold is described by its schemas, in its
-payload format&#39;s own language (see <a href="#payloads">Payloads</a>).</p>
-<h3 id="serves-and-needs">Serves and needs</h3>
-<p><code>serves</code> lists the paths an object answers for. <code>needs</code> lists, for each mount
-point in its view, what it expects to find there. They use one grammar: a
-path pattern followed by the requests it takes.</p>
-<pre><code class="language-text">needs /net/tcp {
-  /address        read -&gt; text/plain
-  /accept         watch -&gt; text/plain*
-  /{conn}/data    watch -&gt; application/octet-stream*, write application/octet-stream
-  /{conn}         remove
-}
-</code></pre>
-<p>Each request is:</p>
-<ul>
-<li>optionally <code>operator</code>, for a request only whoever runs the image may make;</li>
-<li>a verb;</li>
-<li>the type of its payload, if it takes one: a message type, such as
-<code>Greeting</code> (see <a href="#messages">Messages</a>), or a content type with no
-schemas, such as <code>text/plain</code>;</li>
-<li>after <code>-&gt;</code>, the type its answer carries in the same way, with <code>*</code> if the
-answer is a stream.</li>
-</ul>
-<p>A request with no arrow, such as <code>remove</code>, is answered with a status alone.
-<code>stat</code> and <code>list</code> are written bare: they always answer stat records. <code>Stat</code>
-names a stat record&#39;s content type wherever another answer carries one, as
-<code>create</code> conventionally does.</p>
-<p>Content types can be wildcards: <code>*/*</code> is any payload and <code>text/*</code> any text.
-A server that takes <code>write */*</code> meets a need to <code>write text/plain</code>, and a
-need for <code>read -&gt; */*</code> is met by a server that answers anything. The reverse
-doesn&#39;t hold: a need to send <code>*/*</code> is met only by a server that takes
-<code>*/*</code>, and a need for <code>-&gt; text/plain</code> isn&#39;t met by a server that promises
-only <code>-&gt; */*</code>.</p>
-<p>Paths are patterns:</p>
-<ul>
-<li>A literal, such as <code>/hits</code> or <code>/hosts/</code>, matches exactly that path. A
-trailing <code>/</code> counts, as it does everywhere else.</li>
-<li><code>{name}</code> matches exactly one segment. The name is for the documentation and
-for generated code, where it becomes an argument.</li>
-<li><code>**</code> matches the rest of the path, zero or more segments, and only comes
-last. <code>/www/**</code> matches <code>/www</code> itself as well as everything below it, and
-<code>/**</code> matches every path, <code>/</code> included.</li>
-</ul>
-<p>Where several patterns match, the most specific wins, whatever their order: a
-literal over <code>{name}</code>, <code>{name}</code> over <code>**</code>, and longer over shorter. It is the
-same rule that picks a mount point.</p>
-<p>A <code>needs</code> block&#39;s own path is a pattern too, for objects that are told at run
-time which mount points to use. <code>needs /sites/{name}</code> covers every mount point
-directly under <code>/sites/</code>, and <code>needs /sites/**</code> covers <code>/sites</code> and any mount
-point below it. HttpServer is configured with a mount point for each host,
-which can be anywhere, so it needs every mount it isn&#39;t given a more specific
-need for:</p>
-<pre><code class="language-text">needs /net/tcp Listener
-needs /dev/cons { / write text/plain }
-
-## The sites, at whichever mount points the hosts are configured with.
-needs /** {
-  /**     read -&gt; */*, stat
-}
-
-serves {
-  ## The hosts it serves.
-  /hosts           list
-  ## Write a path in its view to serve the host from there, or remove it to
-  ## stop. `*` stands for any host not listed.
-  /hosts/{name}    operator write text/plain, operator remove, read -&gt; text/plain
-}
-</code></pre>
-<p>Every mount the pattern matches must provide what the block lists. Where
-several blocks match a mount point, the most specific applies, so <code>/net/tcp</code>
-is held to its own block and not to <code>/**</code>.</p>
-<h3 id="protocols-and-traits">Protocols and traits</h3>
-<p>The same requests and the same trees come up again and again: everything that
-serves files answers <code>read</code>, <code>stat</code> and <code>list</code> the same way. A header can name
-them once.</p>
-<p>A <strong>protocol</strong> names the requests one path takes:</p>
+<h2 id="no-ambient-access">No ambient access</h2>
+<p>An object has no files, no network, no clock and no randomness and so on.</p>
+<p>Objects can only interact with other objects through the namespace. 
+If it has a socket, it&#39;s because something put one in its view, and
+you can see where in the image. In the tour, that&#39;s the <code>needs</code> lines in 
+<a href="/tour/#staticoth"><code>static.oth</code></a>: the socket and the console come 
+from the environment, and are passed down from there as needed.</p>
+<h2 id="single-threaded-sharing-nothing">Single-threaded, sharing nothing</h2>
+<p>Objects share no memory. What passes between them is copied bytes.</p>
+<p>Othismo currently runs as a single threaded message queue.</p>
+<h2 id="protocols-and-traits">Protocols and traits</h2>
+<p>To enable code re-use and shared behaviors, Othismo supports <code>protocols</code> and <code>traits</code>.</p>
+<p>A <strong>protocol</strong> describes the requests a single path takes:</p>
 <pre><code class="language-text">## Something read whole.
 protocol File { read -&gt; */*, stat }
 
-## Something listed.
-protocol Dir { list, stat }
+## A stream of bytes each way.
+protocol Connection { watch -&gt; application/octet-stream*, write application/octet-stream }
 </code></pre>
-<p>A <strong>trait</strong> names the shape of a whole tree, in the grammar of <code>serves</code>:</p>
-<pre><code class="language-text">## A tree of files, read-only.
-export trait FileTree {
-  /**   File, Dir
-}
-
-## A listener, and the connections it accepts.
-export trait Listener {
-  /               operator write text/plain
-  /address        read -&gt; text/plain
-  /accept         watch -&gt; text/plain*
-  /{conn}/data    Connection
-  /{conn}/remote  read -&gt; text/plain
-  /{conn}         remove
+<p>A <strong>trait</strong> describes the shape of a whole tree, in the same grammar as <code>serves</code>,
+and can use protocols for its paths:</p>
+<pre><code class="language-text">## A listener, and the connections it accepts.
+trait Listener {
+  /                operator write text/plain
+  /address         read -&gt; text/plain
+  /accept          watch -&gt; text/plain*
+  /{conn}/data     Connection
+  /{conn}/remote   read -&gt; text/plain
+  /{conn}          remove
 }
 </code></pre>
-<p>They stand in for what they name:</p>
-<ul>
-<li>A protocol&#39;s name goes wherever requests do, alone or among them:
-<code>/{conn}/data Connection</code>, or <code>/x File, write text/plain</code>. Two protocols
-that list the same request must agree on its answer.</li>
-<li>A trait&#39;s name stands alone at a path, and puts its whole tree there:
-<code>/static FileTree</code> in a trait or a <code>serves</code> block covers <code>/static/**</code>.
-It can&#39;t go under <code>**</code>, which only comes last.</li>
-<li><code>needs /net/tcp Listener</code> needs the trait&#39;s whole tree at that mount point.</li>
-<li><code>object StaticSite : FileTree</code> declares that StaticSite serves FileTree:
-the trait&#39;s entries are among what it serves, alongside its own.</li>
-</ul>
-<p>Where two traits, or a trait and an object&#39;s own <code>serves</code>, give the same
-pattern, they must take exactly the same requests. Anything else is an
-error, rather than one silently winning.</p>
-<p>Protocols and traits are exported and imported like objects, <code>import { FileTree } from env</code>, and can be declared in any order. One name means one
-thing in a file. A trait that is exported may use a protocol that isn&#39;t:
-the protocol&#39;s requests are written out into the trait, and importers never
-see its name.</p>
-<p>They change nothing about how mounts are checked. Matching stays structural:
-a mount meets <code>needs /files FileTree</code> if what is mounted serves the trait&#39;s
-entries, whether or not its header says <code>: FileTree</code>.</p>
-<h3 id="shapes-not-behaviour">Shapes, not behaviour</h3>
-<p>A header describes shapes: which paths exist, which verbs they take, and which
-content types go in and come out. It can&#39;t describe behaviour, such as
-whether a <code>read</code> really changes nothing, or when an object answers
-<code>not_found</code>. Nor does it say which message is inside an <code>application/bson</code>
-payload; that is the payload format&#39;s business, and the entry&#39;s
-documentation should say.</p>
-<p>Headers don&#39;t list the errors a request can return. Any request may fail
-with any error. Declaring them would be checked exceptions by another name,
-and would promise something nothing can enforce.</p>
-<h3 id="checking-the-wiring">Checking the wiring</h3>
-<p>The checker reads every object&#39;s header and checks the images against them:</p>
-<ul>
-<li>Each mount must provide what the object needs there. Whatever is mounted at
-<code>/files</code> must serve everything <code>needs /files</code> lists, and a mount that is
-read-only can&#39;t provide a need to change anything.</li>
-<li>A need for one mount point in particular, such as <code>needs /files</code>, must have
-something mounted there. One under a pattern, such as <code>needs /**</code>, may
-match no mount at all.</li>
-<li>Each startup request must match an entry in what it reaches.</li>
-</ul>
-<p>Matching is structural. A mount satisfies a need if the mounted object serves
-each listed request, with the same verb, a content type that fits, and an
-answer whose content type fits, under a pattern at least as wide. What the
-object is called doesn&#39;t matter. Anything that serves the right paths can
-stand in, which is also how an object is tested: against a fake that serves
-what it needs.</p>
-<p>These are errors in the image, reported when it is checked or built.</p>
-<h3 id="enforcement">Enforcement</h3>
-<p>TypeScript&#39;s types are gone by the time its code runs. Othismo&#39;s don&#39;t have to
-be: every request crosses a boundary the runtime controls, so it can hold
-objects to their headers while they run, without trusting their code.</p>
-<ul>
-<li>A request that reaches an object must match its <code>serves</code>.</li>
-<li>A request an object sends must match its <code>needs</code>: the block for the mount
-point it goes through, and an entry there. A mount point the object binds
-for itself needs a block too.</li>
-<li>An operator request must come from an image, and a request an entry marks
-<code>operator</code> must be one.</li>
-<li>Only a stream may have more than one answer.</li>
-</ul>
-<p>A request that doesn&#39;t fit is refused before it arrives: <code>not_found</code> if no
-pattern matches, <code>not_supported</code> if the pattern doesn&#39;t take that verb, and
-<code>forbidden</code> if it breaks the operator rule. An answer that breaks the rules is
-the answering object&#39;s fault, and stops the run.</p>
-<p>The runtime never looks inside a payload, and doesn&#39;t hold one to the content
-types a header gives. A server that is sent a content type it doesn&#39;t take
-answers <code>unsupported_type</code>, and the code generated from its header does that
-for it.</p>
-<p>The <code>needs</code> side is the stronger promise. Mounts say what an object has been
-given; its <code>needs</code> say the most it can ask of each. An object given the
-console to write a log can&#39;t watch it for input unless its header says so.</p>
-<p>Enforcement is on by default; <code>--no-checks</code> turns it off. The operator rule
-stays on, as the read-only rule does: they decide what an object can reach,
-not just what its header says.</p>
-<h3 id="documentation">Documentation</h3>
-<p>Headers carry their documentation, so it travels with the module and can be
-read or generated from it.</p>
-<ul>
-<li>A <code>##</code> comment documents the declaration after it: an object, a trait, a
-<code>needs</code> block or a <code>serves</code> entry. It is Markdown, and its first sentence
-is the summary. A plain <code>#</code> comment is just a comment.</li>
-<li>An object&#39;s <strong>guide</strong>, its man page, is the file named by
-<code>guide &quot;./StaticSite.md&quot;</code> in the object block. Without one, the object&#39;s
-own <code>##</code> comment is the guide. Small objects need only the comment; large
-ones keep a paragraph there and the rest in Markdown.</li>
-</ul>
-<p><code>othismo doc</code> prints a module&#39;s guide followed by a reference generated from
-its declarations and its schemas, and the project&#39;s reference pages are built
-the same way.</p>
-<h3 id="built-in-objects">Built-in objects</h3>
-<p>The runtime&#39;s traits (<code>Console</code>, <code>Listener</code>, <code>Files</code>, <code>FileTree</code>, <code>Terminal</code>,
-<code>Dialer</code>, <code>TestSuite</code>) and its objects (<code>MemoryConsole</code>, <code>MemoryListener</code>,
-<code>PackedFiles</code>) are declared in its own header, <code>env</code>, like any other. The
-checker treats them the same way, and their reference documentation comes
-from that header.</p>
-<h2 id="messages">Messages</h2>
-<p>What a module sends and receives in its payloads is described by its
-<strong>schemas</strong>, in a <code>schemas</code> block of its header for the payload&#39;s content
-type. The block&#39;s body is in that format&#39;s own language; Othismo reads only
-as far as its closing brace. For BSON it declares message types, and enums:</p>
-<pre><code class="language-text">## Greets every name typed on the console…
-export object Greeter {
-  needs /dev/cons { /  watch -&gt; text/plain*, write text/plain }
-  needs /shouter  { /  write text/plain }
-  serves {
-    ## How to greet.
-    /greeting  write Greeting
-  }
-}
-
-export schemas application/bson {
-  ## Configures a Greeter; sent once at startup by the image.
-  message Greeting {
-    ## Put before each name.
-    prefix: string
-    ## End with `!` rather than `.`.
-    excited: bool
-  }
-}
-</code></pre>
-<p>The types a block declares are names in the file, beside its protocols,
-traits and objects, and a header names a payload by its type: <code>/greeting</code>
-takes a <code>Greeting</code>, which is an <code>application/bson</code> payload. The content type
-is what the runtime goes by; the type is for the checker and for codegen.</p>
-<ul>
-<li>A content type whose format has schemas, such as <code>application/bson</code>, can&#39;t
-be written bare where a payload goes: name the message type. Content types
-without schemas, <code>text/plain</code> or <code>image/png</code>, are written as they are, and
-each means any payload of that type.</li>
-<li>A file has one block per content type, and only exported blocks&#39; types can
-be imported: <code>import { Greeting } from &quot;./Greeter.oth&quot;</code>. A message type is
-named on the wire, so it can&#39;t be renamed with <code>as</code>.</li>
-<li>An exported object that names a type from a block that isn&#39;t exported is an
-error, since whoever imports the object couldn&#39;t name what it takes.</li>
-<li>A server that names a type takes only that type, so the needs it meets name
-it too.</li>
-</ul>
-<p><a href="protocol.md#layer-2-payload-formats">The protocol</a> covers formats, BSON&#39;s
-field types, and when two modules&#39; schemas for one type agree.</p>
-<h2 id="the-sandbox">The sandbox</h2>
-<p>A module may import the runtime&#39;s own functions and nothing else, apart from
-<code>env.abort</code>, which AssemblyScript always emits. A module that imports
-anything more, such as WASI, a clock, or the source of randomness behind
-<code>Math.random</code>, is refused before it runs.</p>
-<p>So an object has no files, no sockets, no clock, no randomness and no
-threads. It can&#39;t find out anything except by asking through its view, and it
-can&#39;t affect anything except by answering or asking. What it does depends
-only on the requests and answers it receives.</p>
-<p>Each object has its own Wasmtime store and its own linear memory. Objects
-share nothing; what passes between them is copied bytes.</p>
-<p>CPU time and memory aren&#39;t limited yet. An object can loop forever or grow
-until the host runs out.</p>
-<h2 id="the-contract-with-the-runtime">The contract with the runtime</h2>
-<p>The interface between a module and the runtime is small, and the same for
-every language: <a href="protocol.md#the-host-abi">the host ABI</a>.</p>
-<p>A module can <strong>call out</strong> to make a request of a path in its view, to answer
-a request it is serving, to forward a request elsewhere, to give up on one of
-its own, and to rearrange its view. The runtime <strong>calls in</strong> to deliver a
-request, to deliver an answer, to start the object, and to tell it a caller
-gave up.</p>
-<p>Nothing is serialized by the runtime. The verb, path, flags, status and the
-numbers that tie answers to requests travel as plain arguments, and a
-payload&#39;s content type and bytes are copied as they are. The runtime reads
-only the bytes a module points it at, and writes only into a buffer the
-module hands it.</p>
-<h3 id="one-thing-at-a-time">One thing at a time</h3>
-<p>Othismo is currently single-threaded, with one queue delivering requests and
-answers for the whole image. Each delivery runs to completion, and the next
-starts only when it returns. An object never has to think about concurrency,
-and nothing it does can be interrupted by another object.</p>
-<p>A call returns at once with a ticket. Its answer arrives later, as its own
-delivery, and the ticket says which call it answers. A request can be
-answered several times, as a <strong>stream</strong>; each answer says whether it is the
-last. A caller can cancel, and later answers are dropped.</p>
-<p>An object can also <strong>forward</strong> a request it is serving to a path in its own
-view. The answer then goes straight to the original caller, and the object
-never sees it. That is how StaticSite serves files without touching their
-bytes.</p>
-<h2 id="building-a-module">Building a module</h2>
-<p>A module is built from its header, with its schemas, and its source:</p>
-<ol>
-<li>Bindings are generated for the module&#39;s language, one file,
-<code>scripts/Greeter.oth.ts</code>, with <code>othismo bindings scripts/Greeter.oth</code>:<ul>
-<li>a class for each message type the header declares, and each one its
-object takes or answers, imported ones too, generated by each type&#39;s
-format, with its encoder and decoder;</li>
-<li>a server base class for what it serves, whose methods take each
-message decoded, <code>writeGreeting(req: Request, body: Greeting)</code>;</li>
-<li>and a client for each of its needs, whose methods take messages and
-encode them.</li>
-</ul>
-</li>
-<li>The source is compiled to <code>.wasm</code>.</li>
-<li>The header and its schemas are appended to the module, as custom
-sections: <code>othismo embed scripts/Greeter.oth scripts/Greeter.wasm</code>.</li>
-</ol>
-<p><code>task</code> does all three for the examples. The generated bindings are ordinary
-files, committed next to the source, so editors and compilers see them like
-any other source without a build first. Generating them means a path, a
-verb or a type is written once and the code can&#39;t drift from it; a build
-regenerates them, so a stale binding shows up as a diff, and the tests fail
-on one.</p>
-<p>Because the header and the schemas are inside the module, a compiled object
-describes itself. It can be published as one file, and another module&#39;s
-build can generate clients and payload classes for it from the <code>.wasm</code>
-alone.</p>
-<h2 id="assemblyscript">AssemblyScript</h2>
-<p>Modules are written in AssemblyScript today. It reads like TypeScript,
-compiles to small modules and needs no runtime of its own. Nothing in the
-contract above depends on it, so any language that compiles to WebAssembly
-and has bindings generators can be used. A Rust module would generate its
-bindings from the same header and schemas.</p>
-<p>The library has three parts, covered in <a href="protocol.md#the-sdk">the SDK</a>:</p>
-<ul>
-<li><code>othismo</code>: <code>Server</code>, <code>Request</code>, <code>Response</code> and <code>Payload</code>, and <code>ns</code>, which
-makes requests and rearranges the view.</li>
-<li><code>othismo/bson</code>: BSON messages and their encoding.</li>
-<li><code>othismo/env</code>: clients and server bases for the runtime&#39;s traits, generated
-from <code>env</code>&#39;s header.</li>
-</ul>
-<p>Some of its shape comes from AssemblyScript&#39;s limits. There are no closures
-that capture variables, so an answer is delivered to a <code>Then</code> object that
-holds whatever state it needs in its fields. There are no union types, so a
-message is told apart with <code>instanceof</code>, which the generated server bases
-do for you. A module that receives a
-BSON message it has no class for gets an <code>Unknown</code> one, which it can&#39;t read
-but can pass on unchanged, as it can any payload.</p>
-<h2 id="failure">Failure</h2>
-<p>A trap or abort in any object stops the whole run, with an error naming the
-object. Whether a failing object should be contained, so that only its
-callers notice, is open.</p>
-<p>Calls never time out. A request whose server never answers waits for as long
-as the image runs.</p>
-<h2 id="where-it-stands">Where it stands</h2>
-<p>Headers, schemas and bindings work as described here. Every example object
-has a header and is written against the bindings generated from it, the
-checker holds images to their objects&#39; headers, and the runtime holds the
-objects to them while they run.</p>
-<p>AssemblyScript is the only language with bindings generators so far, and
-BSON the only payload format. The checker doesn&#39;t model an object&#39;s own
-exposures: a mount is checked against what its target serves, not what the
-target might expose there at run time, so only the runtime catches a
-mismatch behind one.</p>
+<p>A trait can be used in two places. <code>needs /net/tcp Listener</code> says the object
+needs a whole Listener at <code>/net/tcp</code>. <code>object StaticSite : FileTree</code> says
+StaticSite serves a FileTree, alongside whatever else it serves.</p>
+<p>Traits are names for shapes, not types to inherit from. HttpServer&#39;s
+console need is written out in its header rather than named as <code>Console</code>, and
+the real console still fits it.</p>
+<p>This is also how stand-ins work. The runtime&#39;s console is a <code>Console</code>, and so
+is <code>MemoryConsole</code>, which touches nothing on the host. An image that needs a
+Console can be given either. That&#39;s how an image is tested.</p>
+<p>The runtime&#39;s own traits, <code>Console</code>, <code>Listener</code>, <code>Files</code>, <code>FileTree</code> and the
+rest, are declared in its header, <code>env</code>.</p>
 
     </article>
   </main>

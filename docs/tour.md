@@ -135,3 +135,63 @@ export /http/hosts at /hosts
 > - `readonly` will probably go too, once the Othismo protocol has real auth.
 > - The syntax of `needs` and `export` could be better, compared with how
 >   instances are mounted.
+
+## HttpServer's header
+
+The interface for the HttpServer is described by `HttpServer.oth`. 
+The image is checked against the header when it's built, so a `bind` or
+`mount` that doesn't fit fails to build.
+
+```text
+import { Listener } from env
+
+export object HttpServer {
+  guide "./HttpServer.md"
+```
+
+`guide` points at longer documentation. `##` comments (left out here) are
+the short in-line version.
+
+```text
+  needs /net/tcp Listener
+```
+
+It needs a TCP listener at `/net/tcp`. `Listener` is a trait: a named set of
+paths and the requests they accept, defined once in `env` so that every object
+needing a socket asks for the same thing.
+
+```text
+  needs /dev/cons {
+    /  write text/plain
+  }
+```
+
+It needs a console too, but it only ever writes lines to it, so that's all it
+asks for. Anything that accepts a `write` of text at its root will do, and
+`site.oth`'s Console does.
+
+```text
+  needs /** {
+    /**  read -> */*, stat
+  }
+```
+
+This is how `mount /www pages` is allowed. HttpServer doesn't know about
+`/www`. It says that whatever else is in its view, it will `read` and `stat`
+it, any response is acceptable.
+
+```text
+  serves {
+    /hosts          list
+    /hosts/         list
+    /hosts/{name}   operator write text/plain, operator remove, read -> text/plain
+  }
+}
+```
+
+These paths are what HttpServer makes available to clients.
+
+Every acceptable host domain has it's own file, `/hosts/{name}`. 
+`operator` means only the image can write or remove a host.
+You can see this in the actual image definition at `write /http/hosts/*
+"/www"`.

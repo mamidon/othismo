@@ -70,7 +70,7 @@ declare:</p>
 </thead>
 <tbody><tr>
 <td><code>protocol</code>, <code>trait</code></td>
-<td>named shapes (see <a href="objects.md#protocols-and-traits">Objects</a>)</td>
+<td>named shapes (see <a href="/objects/#protocols-and-traits">Objects</a>)</td>
 </tr>
 <tr>
 <td><code>object</code></td>
@@ -208,7 +208,7 @@ leaks out.</li>
 <code>web.files</code>, so they never collide with anything outside, and nothing
 outside can reach them except through what is exported.</li>
 <li><strong>Its startup requests</strong> are made in its own view, before those of the
-image that instantiates it (see <a href="namespace.md#startup-order">Startup order</a>).</li>
+image that instantiates it (see <a href="/docs/#startup-order">Startup order</a>).</li>
 <li><strong>It is the operator of its own instances.</strong> Its startup requests carry
 the operator flag, and so do those its parent makes of it through its
 exports. No object can make one.</li>
@@ -218,7 +218,7 @@ others, and <code>--check</code> prints them by their full names.</p>
 <h2 id="the-root-image">The root image</h2>
 <p>The image being run is the <strong>root</strong>. Its <code>needs</code> are filled by the runtime
 with environment objects, chosen by the trait each one names (see
-<a href="namespace.md#environment-objects">Environment objects</a>):</p>
+<a href="/docs/#environment-objects">Environment objects</a>):</p>
 <pre><code class="language-text"># static.oth: deploying the site
 import Site from &quot;./site.oth&quot;
 import { Listener, Console } from env
@@ -259,7 +259,7 @@ except that an error is printed to stderr as a warning.</p>
 <li><code>&lt;type&gt; from &quot;./file&quot;</code>: the file&#39;s bytes, read when the image is built.</li>
 <li><code>&lt;message type&gt; { ... }</code>: a message, <code>Greeting { prefix: &quot;Hi&quot; }</code>. The
 type is one the file declares in a schemas block or imports, as headers
-name them (see <a href="objects.md#messages">Objects</a>), and the format of the
+name them (see <a href="/objects/#messages">Objects</a>), and the format of the
 block that declares it encodes the literal. The literal&#39;s syntax is one
 for every format: strings, numbers, <code>true</code> and <code>false</code>, and nested
 <code>{ name: value }</code>, <code>[ ... ]</code> and <code>Name { ... }</code>, a value that names its
@@ -295,7 +295,7 @@ built and <code>--check</code> stays a true upper bound.</li>
 </code></pre>
 <p>A slot the block leaves out keeps its default, and one with no default must
 be given. Only the root&#39;s slots are left to whoever runs it.</p>
-<h3 id="giving-the-root-39-s-slots">Giving the root&#39;s slots</h3>
+<h3 id="giving-the-roots-slots">Giving the root&#39;s slots</h3>
 <p>The host gives values in layers, and a later layer wins, field by field for
 a message slot:</p>
 <ol>
