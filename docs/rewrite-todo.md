@@ -28,10 +28,10 @@ Drafted in `docs/tour.md`.
 
 ## 3. Objects
 
-- [ ] What an object is: a WebAssembly module in a sandbox
-- [ ] No ambient access: no files, clock, network or randomness
-- [ ] Server and client at once
-- [ ] Single-threaded, sharing nothing
+- [x] What an object is: a WebAssembly module in a sandbox
+- [x] No ambient access: no files, clock, network or randomness
+- [x] Server and client at once
+- [x] Single-threaded, sharing nothing
 
 ## 4. Namespaces
 
