@@ -112,7 +112,7 @@ fn an_image_sends_as_the_operator_and_an_object_as_itself() {
     let read = ask(&mut s, "read /http/hosts/a.example");
     assert_eq!(last(&read).body.as_ref().map(|p| p.bytes.clone()), Some(b"/www".to_vec()));
     let listed = ask(&mut s, "list /http/hosts");
-    assert_eq!(listed.len(), 4, "three hosts, then done");
+    assert_eq!(listed.len(), 3, "two hosts, then done");
     said(&mut s, ":look /http");
     assert_eq!(s.prompt(), "web.http $ ");
     assert_eq!(last(&ask(&mut s, r#"write /net/tcp "x""#)).status, Status::NOT_FOUND, "an object can't configure a listener");
@@ -153,10 +153,10 @@ fn the_plain_shell_reads_commands_a_line_at_a_time() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(b":look web\nread /http/hosts/files.localhost\n:quit\n").unwrap();
+    child.stdin.take().unwrap().write_all(b":look web\nread /http/hosts/*\n:quit\n").unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let out = String::from_utf8(out.stdout).unwrap();
     assert!(out.contains("web # "), "{out}");
-    assert!(out.contains("ok done · text/plain\n  /www/static"), "{out}");
+    assert!(out.contains("ok done · text/plain\n  /www\n"), "{out}");
 }

@@ -1,7 +1,3 @@
-# A static site, which touches nothing of its own: whoever instantiates it
-# gives it a listener and a console for the access log. Its files are packed
-# into the image when it is built.
-
 import { HttpServer } from "../../sdk/objects/http/HttpServer.oth"
 import { StaticSite } from "../../sdk/objects/site/StaticSite.oth"
 import { Console, Listener, PackedFiles } from env
@@ -9,24 +5,27 @@ import { Console, Listener, PackedFiles } from env
 needs /net/tcp  Listener
 needs /dev/cons Console
 
-# HTTP in, namespace requests out. It reaches the files only through pages.
+# Turns HTTP requests from the socket into requests for pathnames in its view
+# and logs to the console
 instance http : HttpServer {
   bind  /net/tcp  /net/tcp
   bind  /dev/cons /dev/cons
   mount /www pages
 }
 
-# The pages can read the files and nothing else.
+# Responds to messages with static content
 instance pages : StaticSite {
   mount /files files readonly
 }
 
+# Said static content is found at image build time in the specified relative folder
 instance files : PackedFiles { include "./public/" }
 
+# Put http in the image's own view, so the requests below can configure it
 mount /http http
 
+# configure how the HTTP server routes hosts
 write /http/hosts/* "/www"
-write /http/hosts/files.localhost "/www/static"
 
-# Whoever instantiates the site can add hosts, and nothing else.
+# If another image imports this image, expose /hosts in the namespace this image serves
 export /http/hosts at /hosts

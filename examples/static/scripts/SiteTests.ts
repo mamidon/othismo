@@ -14,7 +14,6 @@ const CASES: Case[] = [
   new Case("missing_pages_are_not_found", "localhost", "GET /nope.html HTTP/1.1", "HTTP/1.1 404 "),
   new Case("directories_redirect_to_a_slash", "localhost", "GET /docs HTTP/1.1", "HTTP/1.1 301 "),
   new Case("writes_are_refused", "localhost", "POST / HTTP/1.1", "HTTP/1.1 405 "),
-  new Case("the_files_host_serves_static_files", "files.localhost", "GET /style.css HTTP/1.1", "HTTP/1.1 200 OK"),
 ]
 
 /**

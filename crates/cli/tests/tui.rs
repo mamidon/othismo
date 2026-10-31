@@ -96,7 +96,7 @@ fn it_steps_into_views_and_opens_served_trees() {
     until(&mut app, "the listing of /http", |a| has_row(a, "hosts/"));
     assert!(app.select_path("/http/hosts"));
     press(&mut app, KeyCode::Right);
-    until(&mut app, "the hosts", |a| has_row(a, "files.localhost"));
+    until(&mut app, "the hosts", |a| has_row(a, "*"));
     // Look from web.http, then open what web.pages serves: it won't list
     // its root, but what it exposes is known.
     assert!(app.select_path("/http"));
@@ -132,9 +132,9 @@ fn requests_are_typed_on_the_command_line() {
     let mut app = app("static/static.test.oth");
     type_line(&mut app, ":look web");
     assert_eq!(app.focus, Focus::Command);
-    type_line(&mut app, "read /http/hosts/files.localhost");
-    until(&mut app, "the answer", |a| a.log_text().iter().any(|l| l.contains("/www/static")));
-    assert!(app.log_text().iter().any(|l| l.contains("web # read /http/hosts/files.localhost")), "{:#?}", app.log_text());
+    type_line(&mut app, "read /http/hosts/*");
+    until(&mut app, "the answer", |a| a.log_text().iter().any(|l| l.trim() == "/www"));
+    assert!(app.log_text().iter().any(|l| l.contains("web # read /http/hosts/*")), "{:#?}", app.log_text());
     // Esc goes back to the table, once the choices are closed.
     leave_command_line(&mut app);
     assert_eq!(app.session.here, Some(Viewpoint::Instance(app.session.world.find("web").unwrap().instance().unwrap())));

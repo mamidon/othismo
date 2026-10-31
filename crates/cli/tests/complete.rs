@@ -124,18 +124,18 @@ fn tab_puts_the_choice_in_and_carries_on() {
     }
     // The hosts arrive once they have been listed.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !app.completion.items.iter().any(|i| i.label == "files.localhost") {
+    while !app.completion.items.iter().any(|i| i.label == "*") {
         assert!(Instant::now() < deadline, "{:#?}", app.completion);
         app.pump(Duration::from_millis(50));
     }
-    let i = app.completion.items.iter().position(|i| i.label == "files.localhost").unwrap();
+    let i = app.completion.items.iter().position(|i| i.label == "*").unwrap();
     for _ in 0..i {
         press(&mut app, KeyCode::Down);
     }
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.input, "write /http/hosts/files.localhost ");
+    assert_eq!(app.input, "write /http/hosts/* ");
     press(&mut app, KeyCode::Tab);
-    assert_eq!(app.input, r#"write /http/hosts/files.localhost """#, "then a text literal, the cursor inside it");
+    assert_eq!(app.input, r#"write /http/hosts/* """#, "then a text literal, the cursor inside it");
     // Esc closes the choices, then goes back to the table.
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);

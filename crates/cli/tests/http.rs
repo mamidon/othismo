@@ -183,8 +183,8 @@ fn cannot_climb_out_of_the_files_root() {
 }
 
 #[test]
-fn synthetic_files_exposures_and_virtual_hosts() {
-    let mut srv = Server::start("vhosts");
+fn synthetic_files_and_exposures() {
+    let mut srv = Server::start("exposures");
     assert_eq!(srv.get("/index.html").status, 200);
     assert_eq!(srv.get("/style.css").status, 200);
     let r = srv.get("/hits");
@@ -196,15 +196,9 @@ fn synthetic_files_exposures_and_virtual_hosts() {
     assert_eq!(srv.get("/hits").body, b"2\n");
     assert_eq!(srv.request(b"PUT /static/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").status, 405, "read-only all the way");
 
-    // files.localhost is rooted at /www/static: the files themselves, no site.
-    let r = srv.get_from("files.localhost:8080", "/style.css");
-    assert_eq!((r.status, r.body), (200, public("style.css")));
-    assert_eq!(srv.get_from("FILES.localhost", "/hits").status, 404);
-    assert_eq!(srv.get_from("files.localhost", "/").status, 404, "a directory, but no index.html rewriting here");
-
-    let log: Vec<String> = (0..9).map(|_| srv.log_line()).collect();
+    let log: Vec<String> = (0..6).map(|_| srv.log_line()).collect();
     assert_eq!(log[0], "GET /index.html 200");
-    assert_eq!(log[8], "GET / 404");
+    assert_eq!(log[5], "PUT /static/x 405");
 }
 
 #[test]
