@@ -14,7 +14,7 @@ One screen. Done: `docs/overview.md`, its image copied into `examples/static/sit
 - [x] Why, in two or three sentences
 - [x] The image serving this site (`examples/static/site.oth`), unchanged
 - [x] The promise: nothing reaches what it wasn't given, host included
-- [x] Link to the tour (no `--check` output, no other links)
+- [x] Link to the tour, then the other main pages (no `--check` output)
 
 ## 2. A tour by example
 

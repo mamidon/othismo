@@ -49,3 +49,11 @@ export /http/hosts at /hosts
 ```
 
 [Take the tour](tour.md) to see how it works.
+
+Or read about the pieces on their own:
+
+- [Objects](objects.md): the sandboxed modules, and the interfaces you read instead of their code.
+- [The protocol](protocol.md): how objects reach each other, in three layers.
+- [Namespaces](namespace.md): how objects in an image find each other, and what they're given.
+- [Building images](images.md): the `.oth` language images are written in.
+- [Reference](/reference/): the runtime's objects, generated from its header.

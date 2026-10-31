@@ -1,6 +1,7 @@
 // Renders the project's docs into the static example's site:
 //
 //   docs/overview.md   -> public/overview/index.html
+//   docs/tour.md       -> public/tour/index.html
 //   docs/objects.md    -> public/objects/index.html
 //   docs/protocol.md   -> public/protocol/index.html
 //   docs/namespace.md  -> public/docs/index.html
@@ -31,6 +32,13 @@ const PAGES = [
     nav: "/overview/",
     eyebrow: "Overview",
     description: "What Othismo is and why: sandboxed objects, namespaces and images you can review instead of the code.",
+  },
+  {
+    source: "docs/tour.md",
+    out: "tour/index.html",
+    nav: "/tour/",
+    eyebrow: "Tour",
+    description: "A tour of the image serving this site, file by file.",
   },
   {
     source: "docs/objects.md",
@@ -78,6 +86,8 @@ const LINKS = {
   "images.md": "/images/",
   "docs/overview.md": "/overview/",
   "overview.md": "/overview/",
+  "docs/tour.md": "/tour/",
+  "tour.md": "/tour/",
   "docs/objects.md": "/objects/",
   "objects.md": "/objects/",
   "docs/protocol.md": "/protocol/",
@@ -163,10 +173,6 @@ function page(p, doc) {
         <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
         <div class="nav-links">
           ${navLink("/overview/", "Overview")}
-          ${navLink("/objects/", "Objects")}
-          ${navLink("/protocol/", "Protocol")}
-          ${navLink("/docs/", "Namespaces")}
-          ${navLink("/images/", "Building")}
           ${navLink("/reference/", "Reference")}
         </div>
       </nav>

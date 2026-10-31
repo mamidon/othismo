@@ -1,0 +1,150 @@
+<!doctype html>
+<!-- Generated from docs/tour.md by examples/static/site.mjs (task build:docs). Edit the source, not this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A tour — Tour — othismo</title>
+  <meta name="description" content="A tour of the image serving this site, file by file.">
+  <link rel="icon" type="image/svg+xml" href="/assets/mark-orange.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;600;700;800&family=Asap:ital,wght@0,400;0,500;0,600;1,600&family=Antonio:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <header class="hero doc">
+    <div class="wrap">
+      <nav class="nav">
+        <a href="/"><img src="/assets/logo-full-orange.svg" alt="Othismo — home"></a>
+        <div class="nav-links">
+          <a class="nav-link" href="/overview/">Overview</a>
+          <a class="nav-link" href="/reference/">Reference</a>
+        </div>
+      </nav>
+
+      <div class="hero-body">
+        <div class="eyebrow">Tour</div>
+        <h1>A tour</h1>
+        <p class="lede">The site is defined in two files. <code>site.oth</code> describes how the site itself is
+put together: the HTTP server and what it serves. <code>static.oth</code> is a wrapper
+that wires it up with the runtime configuration.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap doc-layout">
+    <aside class="toc">
+      <nav aria-label="Contents">
+        <div class="eyebrow">Contents</div>
+        <ol>
+          <li><a href="#static-oth">static.oth</a></li>
+          <li><a href="#site-oth">site.oth</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="prose">
+<h2 id="static-oth">static.oth</h2>
+<p>The imports bring in the site from <code>site.oth</code>, and <code>Listener</code> and
+<code>Console</code>, whose implementations come from the environment itself: the TCP
+connection and the console.</p>
+<pre><code class="language-text">import Site from &quot;./site.oth&quot;
+import { Console, Listener } from env
+</code></pre>
+<p><code>require listen</code> gives the default address the server listens on. It can be
+overridden when the image is run, from the command line:
+<code>--set listen=0.0.0.0:80</code>.</p>
+<pre><code class="language-text">require listen : text/plain = &quot;127.0.0.1:8080&quot;
+</code></pre>
+<p>The needs say where in the image&#39;s namespace the implementations of the TCP
+listener and the console will be available.</p>
+<pre><code class="language-text">needs /net/tcp  Listener
+needs /dev/cons Console
+</code></pre>
+<p>This declares the instance of the site and how its namespace is populated.</p>
+<pre><code class="language-text">instance web : Site {
+  bind /net/tcp  /net/tcp
+  bind /dev/cons /dev/cons
+}
+</code></pre>
+<p>And finally, we tell the socket where to listen.</p>
+<pre><code class="language-text">write /net/tcp listen
+</code></pre>
+<h2 id="site-oth">site.oth</h2>
+<p>This site is made of three objects: HttpServer, StaticSite and PackedFiles.
+<code>site.oth</code> is the image that puts them together.</p>
+<p>The imports bring in <code>HttpServer</code> and <code>StaticSite</code> from what passes for a
+standard library, and <code>Console</code>, <code>Listener</code> and <code>PackedFiles</code> from the
+runtime itself.</p>
+<pre><code class="language-text">import { HttpServer } from &quot;../../sdk/objects/http/HttpServer.oth&quot;
+import { StaticSite } from &quot;../../sdk/objects/site/StaticSite.oth&quot;
+import { Console, Listener, PackedFiles } from env
+</code></pre>
+<p>These are the same needs as in <code>static.oth</code>, but here they&#39;re filled by
+whoever uses the site: <code>static.oth</code>, which passes on the real socket and
+console it got from the environment.</p>
+<pre><code class="language-text">needs /net/tcp  Listener
+needs /dev/cons Console
+</code></pre>
+<p>HttpServer is the only object with substantial logic inside it. It parses HTTP requests off
+a socket and turns them into Othismo requests, addressed to paths in its
+namespace. It routes each request by its host name, to the path that host is
+configured with.</p>
+<p>The <code>bind</code> lines give it the TCP socket and the console that this image was
+given. <code>mount</code> puts a different object, one this image
+defines, into its namespace: StaticSite, at <code>/www</code>.</p>
+<pre><code class="language-text">instance http : HttpServer {
+  bind  /net/tcp  /net/tcp
+  bind  /dev/cons /dev/cons
+  mount /www pages
+}
+</code></pre>
+<p>StaticSite receives requests from clients and, if they&#39;re appropriate,
+answers them with the content of the files it has been given.</p>
+<p><code>readonly</code> means that requests to this path have to be read-only, as far as
+the Othismo protocol is concerned.</p>
+<pre><code class="language-text">instance pages : StaticSite {
+  mount /files files readonly
+}
+</code></pre>
+<p>PackedFiles is the simplest. It&#39;s a set of files, baked into the image when
+the image is built.</p>
+<pre><code class="language-text">instance files : PackedFiles { include &quot;./public/&quot; }
+</code></pre>
+<p>This puts HttpServer into the image&#39;s own namespace, so that the requests
+after it can configure it.</p>
+<pre><code class="language-text">mount /http http
+</code></pre>
+<p>This configures how HttpServer routes hosts: every host goes to <code>/www</code>, where
+StaticSite is, so a <code>GET</code> for <code>/foo</code> becomes a <code>read</code> of <code>/www/foo</code>.</p>
+<pre><code class="language-text">write /http/hosts/* &quot;/www&quot;
+</code></pre>
+<p>When another image imports this one and makes an instance of it, that
+instance serves the hosts at <code>/hosts</code>, so the other image can configure the
+server there.</p>
+<pre><code class="language-text">export /http/hosts at /hosts
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> some of this syntax is likely to change.</p>
+<ul>
+<li><code>bind</code> will probably go, in favour of mounting everything, whether it&#39;s an
+instance of an object or a path mounted at a different location.</li>
+<li><code>readonly</code> will probably go too, once the Othismo protocol has real auth.</li>
+<li>The syntax of <code>needs</code> and <code>export</code> could be better, compared with how
+instances are mounted.</li>
+</ul>
+</blockquote>
+
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <a href="/"><img src="/assets/logo.png" alt="Othismo — home"></a>
+      <small>othismo &middot; served by othismo</small>
+    </div>
+  </footer>
+</body>
+</html>
