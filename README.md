@@ -27,6 +27,12 @@ task build:example:static
 target/debug/othismo shell examples/static/static.rti
 ```
 
+## CI and container image
+
+GitHub Actions runs `task test` on pull requests and on `master`, and publishes
+the docs-site image from `_fly_io/Dockerfile` to `ghcr.io/mamidon/othismo` on
+`master` and on semver tags. See [docs/deploy.md](docs/deploy.md).
+
 ## An example
 
 [othismo.com](https://othismo.com) is served by Othismo, from this image,
