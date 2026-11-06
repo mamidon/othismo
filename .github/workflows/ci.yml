@@ -43,7 +43,9 @@ jobs:
       - name: Install Task
         uses: go-task/setup-task@v2
         with:
-          version: latest
+          # Pin exact release; "latest" fails discovery ("unable to get latest version").
+          # Format without "v", per go-task/setup-task docs (tag on go-task/task is v3.54.0).
+          version: 3.54.0
 
       - name: Install npm dependencies
         run: npm ci
