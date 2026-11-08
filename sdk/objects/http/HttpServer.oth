@@ -11,15 +11,15 @@ export object HttpServer {
   guide "./HttpServer.md"
 
   ## The listener it serves HTTP on.
-  needs /net/tcp Listener
+  needs Listener at /net/tcp
   ## The access log.
-  needs /dev/cons {
+  needs {
     /  write text/plain
-  }
+  } at /dev/cons
   ## The sites, at whichever mount points the hosts are configured with.
-  needs /** {
+  needs {
     /**  read -> */*, stat
-  }
+  } at /**
 
   serves {
     ## The hosts it serves.

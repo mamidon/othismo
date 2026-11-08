@@ -1,8 +1,8 @@
 ## Writes each line it is given to the console, in capitals.
 export object Shouter {
-  needs /dev/cons {
+  needs {
     /  write text/plain
-  }
+  } at /dev/cons
 
   serves {
     /  write text/plain

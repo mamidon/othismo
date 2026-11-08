@@ -6,9 +6,9 @@ import { Record } from "./Store.oth"
 ## store, which the image wrote one to at startup.
 export object TypesTests : TestSuite {
   ## The store to write records to and read them back from.
-  needs /store {
+  needs {
     /record  write Record, read -> Record
-  }
+  } at /store
 }
 
 schemas application/bson {

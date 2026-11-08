@@ -524,7 +524,7 @@ impl Builder<'_> {
                 bail!(err_at(
                     ty,
                     format!(
-                        "no image declares the runtime's {}: the image being run gets one by needing it, e.g. `needs /dev/cons Console`, \
+                        "no image declares the runtime's {}: the image being run gets one by needing it, e.g. `needs Console at /dev/cons`, \
                          and gives it to what it instantiates",
                         t.name
                     )
@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     const HEADER: &str = r#"
-        instance cons : MemoryConsole
+        instance cons of MemoryConsole
     "#;
 
     /// The message in a BSON payload.
@@ -1146,7 +1146,7 @@ mod tests {
 
     #[test]
     fn accepts_hello_world() {
-        let p = check_src("needs /dev/cons Console  instance echo : Echo { bind /dev/cons /dev/cons }").unwrap();
+        let p = check_src("needs Console at /dev/cons  instance echo of Echo { bind /dev/cons }").unwrap();
         assert_eq!(names(&p), ["/dev/cons", "echo"], "the root's needs come first, named for their mount points");
         assert_eq!(p.instances[0].kind, Kind::Console);
         assert_eq!(p.instances[1].kind, Kind::Wasm { type_name: "Echo".into(), module: "Echo.wasm".into() });
@@ -1156,23 +1156,23 @@ mod tests {
 
     #[test]
     fn mounts_are_checked() {
-        assert!(err(&format!("{HEADER} instance a : A {{ mount /g ghost }}")).contains("unknown instance `ghost`"));
-        let e = err(&format!("{HEADER} instance a : A {{ mount /x/../y cons }}"));
+        assert!(err(&format!("{HEADER} instance a of A {{ mount /g from ghost }}")).contains("unknown instance `ghost`"));
+        let e = err(&format!("{HEADER} instance a of A {{ mount /x/../y from cons }}"));
         assert!(e.contains("`/x/../y` is not a clean absolute path"), "{e}");
-        let e = err(&format!("{HEADER} instance a : A {{ mount /c cons mount /c/ cons }}"));
+        let e = err(&format!("{HEADER} instance a of A {{ mount /c from cons mount /c/ from cons }}"));
         assert!(e.contains("`/c` is already mounted"), "{e}");
-        let e = err(&format!("{HEADER} instance m : MemoryConsole {{ mount /c cons }}"));
+        let e = err(&format!("{HEADER} instance m of MemoryConsole {{ mount /c from cons }}"));
         assert!(e.contains("MemoryConsole has no view to mount into; it only serves"), "{e}");
         // Forward references are fine: views are built once every instance exists.
-        let p = check_src(&format!("{HEADER} instance a : A {{ mount /b b readonly }} instance b : B")).unwrap();
+        let p = check_src(&format!("{HEADER} instance a of A {{ mount /b from b readonly }} instance b of B")).unwrap();
         assert_eq!(p.instances[1].mounts[0], mount("/b", 2, true));
-        let e = err(&format!("{HEADER} instance a : A {{ bind /x /nowhere }}"));
+        let e = err(&format!("{HEADER} instance a of A {{ bind /nowhere into /x }}"));
         assert!(e.contains("nothing is at `/nowhere` in the image's view"), "{e}");
     }
 
     #[test]
     fn binds_give_what_a_path_means_in_the_images_view() {
-        let p = check_src(&format!("{HEADER} instance b : B  mount /b b  instance a : A {{ bind /x /b/sub readonly  mount /c cons }}")).unwrap();
+        let p = check_src(&format!("{HEADER} instance b of B  mount /b from b  instance a of A {{ bind /b/sub into /x readonly  mount /c from cons }}")).unwrap();
         assert_eq!(p.instances[2].mounts, [MountDecl { at: at("/x"), target: 1, path: path("/sub"), read_only: true, bound: true }, mount("/c", 0, false)]);
         let d = describe(&p, &|_| None, &|_| false);
         assert!(d.contains("a     sees /x → b/sub ro, /c → cons\n"), "{d}");
@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn startup_requests_are_typed() {
-        let inst = |req: &str| format!("{HEADER} instance e : Echo mount /e e {req}");
+        let inst = |req: &str| format!("{HEADER} instance e of Echo mount /e from e {req}");
         let p = check_src(&inst(
             r#"write /e/config Config { name: "x", count: 3, ratio: 2, on: true }
                create /e Ping {}  remove /e/a//b/"#,
@@ -1212,7 +1212,7 @@ mod tests {
         assert!(err(&inst("read /e/../x")).contains("not a clean absolute path"));
         assert!(err(&inst("read /x")).contains("nothing is mounted at `/x` in the image's view"));
         assert!(err(&inst("read /")).contains("nothing is mounted at `/` in the image's view"));
-        assert!(err(&format!("{HEADER} write /e \"x\" instance e : Echo")).contains("nothing is mounted at `/e`"));
+        assert!(err(&format!("{HEADER} write /e \"x\" instance e of Echo")).contains("nothing is mounted at `/e`"));
     }
 
     #[test]
@@ -1223,7 +1223,7 @@ mod tests {
 
     #[test]
     fn a_payload_can_be_a_file() {
-        let img = format!(r#"{HEADER} instance e : Echo mount /e e write /e/page text/html from "./page.html""#);
+        let img = format!(r#"{HEADER} instance e of Echo mount /e from e write /e/page text/html from "./page.html""#);
         let p = check_all(&img, &[], &[("page.html", "<p>hi</p>")]).unwrap();
         assert_eq!(p.startup[0].body, Some(Arg::Payload(Payload::new("text/html", "<p>hi</p>"))));
         let e = format!("{:#}", check_all(&img, &[], &[]).unwrap_err());
@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn startup_requests_keep_the_order_they_are_written_in() {
-        let p = check_src(&format!(r#"{HEADER} write /b "1" instance a : A mount /a a write /a "2" instance b : B mount /b b write /b/x "3""#))
+        let p = check_src(&format!(r#"{HEADER} write /b "1" instance a of A mount /a from a write /a "2" instance b of B mount /b from b write /b/x "3""#))
             .unwrap();
         let order: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(order, ["/b", "/a", "/b/x"]);
@@ -1240,23 +1240,23 @@ mod tests {
 
     #[test]
     fn requests_resolve_in_the_images_view() {
-        let p = check_src(&format!("{HEADER} mount / e  mount /e/out cons  instance e : Echo  write /x \"x\"  write /e/out \"hi\"")).unwrap();
+        let p = check_src(&format!("{HEADER} mount / from e  mount /e/out from cons  instance e of Echo  write /x \"x\"  write /e/out \"hi\"")).unwrap();
         assert_eq!(p.view, [mount("/", 1, false), mount("/e/out", 0, false)]);
         let paths: Vec<&str> = p.startup.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, ["/x", "/e/out"], "kept as written, and resolved again when the image runs");
 
-        let e = err(&format!("{HEADER} mount /e e readonly  instance e : Echo  write /e \"x\""));
+        let e = err(&format!("{HEADER} mount /e from e readonly  instance e of Echo  write /e \"x\""));
         assert!(e.contains("`/e` is read-only in the image's view, so it can't take `write`"), "{e}");
-        assert!(check_src(&format!("{HEADER} mount /e e readonly  instance e : Echo  read /e")).is_ok());
-        let e = err(&format!("{HEADER} mount /c cons  mount /c/ cons"));
+        assert!(check_src(&format!("{HEADER} mount /e from e readonly  instance e of Echo  read /e")).is_ok());
+        let e = err(&format!("{HEADER} mount /c from cons  mount /c/ from cons"));
         assert!(e.contains("`/c` is already mounted in the image's view"), "{e}");
-        let e = err(&format!("{HEADER} mount /g ghost"));
+        let e = err(&format!("{HEADER} mount /g from ghost"));
         assert!(e.contains("unknown instance `ghost`"), "{e}");
     }
 
     #[test]
     fn bytes_fields_take_string_literals_as_utf8() {
-        let p = check_src(&format!(r#"{HEADER} instance e : Echo mount /e e write /e Blob {{ data: "hé" }}"#)).unwrap();
+        let p = check_src(&format!(r#"{HEADER} instance e of Echo mount /e from e write /e Blob {{ data: "hé" }}"#)).unwrap();
         let body = message(p.startup[0].body.as_ref().unwrap());
         let data = body.fields.get_binary_generic("data").unwrap();
         assert_eq!(data, "hé".as_bytes());
@@ -1264,35 +1264,35 @@ mod tests {
 
     #[test]
     fn the_root_needs_the_runtimes_objects_and_configures_them() {
-        let p = check_src(r#"needs /net Listener  write /net "127.0.0.1:0"  needs /fs Files  write /fs "public""#).unwrap();
+        let p = check_src(r#"needs Listener at /net  write /net "127.0.0.1:0"  needs Files at /fs  write /fs "public""#).unwrap();
         assert_eq!(names(&p), ["/net", "/fs"]);
         assert_eq!(p.instances[0].kind, Kind::Tcp);
         assert_eq!(p.instances[0].config.as_ref().unwrap().text().unwrap(), "127.0.0.1:0");
         assert_eq!(p.instances[1].kind, Kind::Files);
         assert!(p.startup.is_empty(), "config isn't a request");
 
-        let e = err("needs /net Listener");
+        let e = err("needs Listener at /net");
         assert!(e.contains("/net needs exactly one config: `write` its root with the address to listen on, e.g. `\"127.0.0.1:8080\"`"), "{e}");
-        let e = err(r#"needs /net Listener  write /net "a"  write /net "b""#);
+        let e = err(r#"needs Listener at /net  write /net "a"  write /net "b""#);
         assert!(e.contains("exactly one"), "{e}");
-        let e = err(&format!(r#"{HEADER} instance e : Echo  needs /net Listener  write /net Ping {{}}"#));
+        let e = err(&format!(r#"{HEADER} instance e of Echo  needs Listener at /net  write /net Ping {{}}"#));
         assert!(e.contains("exactly one config"), "it takes text: {e}");
-        let p = check_src(r#"needs /c Console  write /c "printed""#).unwrap();
+        let p = check_src(r#"needs Console at /c  write /c "printed""#).unwrap();
         assert_eq!(p.startup.len(), 1, "a Console takes no config, so writing it prints");
-        let e = err(r#"needs /net Listener  write /net "a"  write /net/x "b""#);
+        let e = err(r#"needs Listener at /net  write /net "a"  write /net/x "b""#);
         assert!(e.contains("`/net` doesn't take `write` at `/x`"), "{e}");
 
-        let e = err("needs /x FileTree");
+        let e = err("needs FileTree at /x");
         assert!(e.contains("each names one of its traits: Console, Listener, Files"), "{e}");
-        let e = err("needs /x { / read }");
+        let e = err("needs { / read } at /x");
         assert!(e.contains("each names one of its traits"), "{e}");
-        let e = err("instance c : Console");
+        let e = err("instance c of Console");
         assert!(e.contains("no image declares the runtime's Console: the image being run gets one by needing it"), "{e}");
-        let e = err("instance c : Environment.Stdin");
+        let e = err("instance c of Environment.Stdin");
         assert!(e.contains("unknown object `Environment.Stdin`"), "{e}");
-        let e = err("instance net : Environment.Tcp");
+        let e = err("instance net of Environment.Tcp");
         assert!(e.contains("the runtime's objects have new names: `Listener`, imported from env"), "{e}");
-        let e = err("instance t : FileTree");
+        let e = err("instance t of FileTree");
         assert!(e.contains("`FileTree` is a shape, not an object; of the runtime's, an image can declare PackedFiles, MemoryConsole, MemoryListener"), "{e}");
     }
 
@@ -1315,8 +1315,8 @@ mod tests {
     #[test]
     fn packed_files_take_includes_and_nothing_else() {
         let p = check_src(
-            r#"instance files : PackedFiles { include "public/" include "a.txt" at /b//c/ }
-            instance site : Site { mount /files files }"#,
+            r#"instance files of PackedFiles { include "public/" include "a.txt" at /b//c/ }
+            instance site of Site { mount /files from files }"#,
         )
         .unwrap();
         let want = [
@@ -1325,13 +1325,13 @@ mod tests {
         ];
         assert_eq!(p.instances[0].kind, Kind::Packed { includes: want.to_vec() });
 
-        let e = err(r#"instance s : Site { include "x" }"#);
+        let e = err(r#"instance s of Site { include "x" }"#);
         assert!(e.contains("`include` packs files into a PackedFiles instance, and `s` is a Site"), "{e}");
-        let e = err(r#"instance f : PackedFiles { include "x" at /../y }"#);
+        let e = err(r#"instance f of PackedFiles { include "x" at /../y }"#);
         assert!(e.contains("not a clean absolute path"), "{e}");
-        let e = err(r#"instance f : PackedFiles mount /f f write /f ".""#);
+        let e = err(r#"instance f of PackedFiles mount /f from f write /f ".""#);
         assert!(e.contains("`f` doesn't take `write` at `/`"), "it takes no config: {e}");
-        let e = err(r#"instance f : Packed.Files"#);
+        let e = err(r#"instance f of Packed.Files"#);
         assert!(e.contains("the runtime's objects have new names: `PackedFiles`"), "{e}");
     }
 
@@ -1341,8 +1341,8 @@ mod tests {
             r#"{HEADER}
             require listen : text/plain
             require config : Config = {{ name: "x", count: 3 }}
-            needs /net Listener  write /net listen
-            instance e : Echo mount /e e write /e/config config"#
+            needs Listener at /net  write /net listen
+            instance e of Echo mount /e from e write /e/config config"#
         ))
         .unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["listen", "config"]);
@@ -1352,7 +1352,7 @@ mod tests {
         assert_eq!(p.instances[0].config, Some(Arg::Slot(0)));
         assert_eq!(p.startup[0].body, Some(Arg::Slot(1)));
 
-        let inst = |decls: &str| format!("{HEADER} {decls} instance e : Echo mount /e e");
+        let inst = |decls: &str| format!("{HEADER} {decls} instance e of Echo mount /e from e");
         let e = err(&inst("require g : text/plain require g : text/html"));
         assert!(e.contains("slot `g` is declared twice"), "{e}");
         let e = err(&inst(r#"require g : Greeting = { text: 1 }"#));
@@ -1365,7 +1365,7 @@ mod tests {
         assert!(e.contains("slot `g`'s default is text, a quoted string"), "{e}");
         let e = err(&inst(r#"require g : Greeting = "x""#));
         assert!(e.contains("slot `g`'s default is a `Greeting`: `Greeting { ... }`, or `{ ... }`"), "{e}");
-        let e = err(&format!("{HEADER} require t : Ping needs /net Listener write /net t instance e : Echo"));
+        let e = err(&format!("{HEADER} require t : Ping needs Listener at /net write /net t instance e of Echo"));
         assert!(e.contains("needs exactly one config"), "{e}");
     }
 
@@ -1373,25 +1373,25 @@ mod tests {
     fn types_are_imported_from_headers() {
         let greeter = "message Hello { prefix: string } object Greeter { serves { /greeting write Hello } }";
         let p = check_with(
-            r#"instance g : Greeter mount /g g write /g/greeting Hello { prefix: "hi" }"#,
+            r#"instance g of Greeter mount /g from g write /g/greeting Hello { prefix: "hi" }"#,
             &[("Greeter", greeter)],
         )
         .unwrap();
         let types = Bson::messages(&p.messages[format_bson::BSON]).types;
         assert!(types.contains_key("Hello"), "a module's message types are the image's to write");
         assert_eq!(p.interfaces["Greeter"].serves[0].path.as_str(), "/greeting");
-        let e = err(r#"needs /c Console  write /c Hello {}"#);
+        let e = err(r#"needs Console at /c  write /c Hello {}"#);
         assert!(e.contains("`Hello` is neither a content type nor a message type declared in or imported into this file"), "only what it imports: {e}");
 
         let e = err(r#"import { Ping } from "./messages.ts""#);
         assert!(e.contains("/check/messages.ts is neither a `.oth` file nor a module (`.wasm`)"), "{e}");
-        let e = err("instance g : Ghost");
+        let e = err("instance g of Ghost");
         assert!(e.contains("instance `g`") && e.contains("cannot read /check/Ghost.wasm (did you compile Ghost.ts?)"), "{e}");
-        let e = err("instance g : Nobody.Here");
+        let e = err("instance g of Nobody.Here");
         assert!(e.contains("unknown object `Nobody.Here`; is it imported?"), "{e}");
 
         // Renamed, the object is still itself.
-        let p = check_with(r#"import { Greeter as G } from "./Greeter.oth" instance g : G"#, &[("Greeter", greeter)]).unwrap();
+        let p = check_with(r#"import { Greeter as G } from "./Greeter.oth" instance g of G"#, &[("Greeter", greeter)]).unwrap();
         assert_eq!(p.instances[0].type_name, "Greeter");
 
         // A module must be the one its header and schemas were built into.
@@ -1401,7 +1401,7 @@ mod tests {
             let mut loader = Loader::new(formats());
             loader.files.insert("/s/Greeter.oth".into(), with_schemas(oth, schemas).into_bytes());
             loader.files.insert("/s/Greeter.wasm".into(), module(&header, &messages));
-            loader.files.insert("/s/test.oth".into(), br#"import { Greeter } from "./Greeter.oth" instance g : Greeter"#.to_vec());
+            loader.files.insert("/s/test.oth".into(), br#"import { Greeter } from "./Greeter.oth" instance g of Greeter"#.to_vec());
             format!("{:#}", load_with(Path::new("/s/test.oth"), &mut loader).unwrap_err())
         };
         let e = stale("export object Greeter { serves { /greeting write text/plain } }", &messages);
@@ -1412,7 +1412,7 @@ mod tests {
         // Or it is imported from the module itself.
         let mut loader = Loader::new(formats());
         loader.files.insert("/m/Greeter.wasm".into(), module(&header, &messages));
-        loader.files.insert("/m/test.oth".into(), br#"import { Greeter } from "./Greeter.wasm" instance g : Greeter"#.to_vec());
+        loader.files.insert("/m/test.oth".into(), br#"import { Greeter } from "./Greeter.wasm" instance g of Greeter"#.to_vec());
         let p = load_with(Path::new("/m/test.oth"), &mut loader).unwrap();
         assert_eq!(p.instances[0].kind, Kind::Wasm { type_name: "Greeter".into(), module: "Greeter.wasm".into() });
     }
@@ -1421,74 +1421,74 @@ mod tests {
     fn a_type_is_its_name_and_fields() {
         let a = "message Point { x: i32 } object A {}";
         let b = "message Point { x: f64 } object B {}";
-        let e = err_with("instance a : A instance b : B", &[("A", a), ("B", b)]);
+        let e = err_with("instance a of A instance b of B", &[("A", a), ("B", b)]);
         assert!(e.contains("`Point` is declared one way by A.oth and another by B.oth; an image can't use both"), "{e}");
         let same = "message Point { x: i32 } object B {}";
-        assert!(check_with("instance a : A instance b : B", &[("A", a), ("B", same)]).is_ok());
+        assert!(check_with("instance a of A instance b of B", &[("A", a), ("B", same)]).is_ok());
     }
 
     #[test]
     fn startup_requests_must_be_served() {
         let greeter = "object G { serves { /greeting write Greeting  /hosts/{name} operator write text/plain, operator remove } }";
-        let ok = r#"instance g : G mount /g g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
+        let ok = r#"instance g of G mount /g from g write /g/greeting Greeting { text: "hi" } write /g/hosts/* "/www" remove /g/hosts/a"#;
         assert!(check_with(ok, &[("G", greeter)]).is_ok());
-        let e = err_with("instance g : G mount /g g write /g/nothing", &[("G", greeter)]);
+        let e = err_with("instance g of G mount /g from g write /g/nothing", &[("G", greeter)]);
         assert!(e.contains("`g` serves nothing at `/nothing`"), "{e}");
-        let e = err_with("instance g : G mount /g g read /g/greeting", &[("G", greeter)]);
+        let e = err_with("instance g of G mount /g from g read /g/greeting", &[("G", greeter)]);
         assert!(e.contains("`g` doesn't take `read` at `/greeting`; it serves `/greeting write Greeting`"), "{e}");
-        let e = err_with("instance g : G mount /g g write /g/greeting", &[("G", greeter)]);
+        let e = err_with("instance g of G mount /g from g write /g/greeting", &[("G", greeter)]);
         assert!(e.contains("doesn't take `write` at `/greeting`"), "{e}");
         let only_text = "object G { serves { /greeting write text/plain } }";
-        let e = err_with(r#"instance g : G mount /g g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
+        let e = err_with(r#"instance g of G mount /g from g write /g/greeting Greeting { text: "x" }"#, &[("G", only_text)]);
         assert!(e.contains("doesn't take `write Greeting` at `/greeting`"), "{e}");
-        let e = err_with(r#"instance g : G mount /g g write /g/greeting Config { name: "x", count: 1, ratio: 1, on: true }"#, &[("G", greeter)]);
+        let e = err_with(r#"instance g of G mount /g from g write /g/greeting Config { name: "x", count: 1, ratio: 1, on: true }"#, &[("G", greeter)]);
         assert!(e.contains("`g` doesn't take `write Config` at `/greeting`; it serves `/greeting write Greeting`"), "the message type is checked: {e}");
         let texts = "object T { serves { /plain write text/plain  /any write text/* } }";
-        let ok = r#"require t : text/plain = "x" instance t : T mount /t t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;
+        let ok = r#"require t : text/plain = "x" instance t of T mount /t from t write /t/plain "hi" write /t/any text/html "<p>" write /t/plain t"#;
         assert!(check_with(ok, &[("T", texts)]).is_ok(), "{:#}", check_with(ok, &[("T", texts)]).unwrap_err());
-        let e = err_with(r#"instance t : T mount /t t write /t/plain text/html "<p>""#, &[("T", texts)]);
+        let e = err_with(r#"instance t of T mount /t from t write /t/plain text/html "<p>""#, &[("T", texts)]);
         assert!(e.contains("doesn't take `write text/html` at `/plain`"), "{e}");
-        let e = err_with(r#"instance t : T mount /t t write /t/plain text/ "x""#, &[("T", texts)]);
+        let e = err_with(r#"instance t of T mount /t from t write /t/plain text/ "x""#, &[("T", texts)]);
         assert!(e.contains("`text/` isn't a well-formed content type"), "{e}");
-        let e = err(r#"needs /net Listener  write /net "a"  read /net/a/b"#);
+        let e = err(r#"needs Listener at /net  write /net "a"  read /net/a/b"#);
         assert!(e.contains("`/net` serves nothing at `/a/b`"), "the runtime's objects have headers too: {e}");
     }
 
     #[test]
     fn mounts_must_provide_what_is_needed_there() {
-        let echo = "object Echo { needs /dev/cons { / watch -> text/plain*, write text/plain } }";
+        let echo = "object Echo { needs { / watch -> text/plain*, write text/plain } at /dev/cons }";
         let modules = [("Echo", echo)];
-        assert!(check_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons }}"), &modules).is_ok());
+        assert!(check_with(&format!("{HEADER} instance e of Echo {{ mount /dev/cons from cons }}"), &modules).is_ok());
 
-        let e = err_with(&format!("{HEADER} instance e : Echo"), &modules);
+        let e = err_with(&format!("{HEADER} instance e of Echo"), &modules);
         assert!(e.contains("`e` needs something mounted at `/dev/cons`"), "{e}");
-        let e = err_with(&format!("{HEADER} instance e : Echo {{ mount /dev/cons cons readonly }}"), &modules);
+        let e = err_with(&format!("{HEADER} instance e of Echo {{ mount /dev/cons from cons readonly }}"), &modules);
         assert!(e.contains("`e` needs `/ write text/plain` at `/dev/cons`, but `cons` is mounted there read-only"), "{e}");
-        let files = r#"needs /f Files  write /f ".""#;
-        let e = err_with(&format!("{HEADER} {files} instance e : Echo {{ bind /dev/cons /f }}"), &modules);
+        let files = r#"needs Files at /f  write /f ".""#;
+        let e = err_with(&format!("{HEADER} {files} instance e of Echo {{ bind /f into /dev/cons }}"), &modules);
         assert!(e.contains("`e` needs `/ watch -> text/plain*` at `/dev/cons`, and `/f` serves `/ operator write text/plain, read -> */*, stat, list`, `/** read -> */*, stat, list`"), "{e}");
     }
 
     #[test]
     fn needs_under_a_pattern_cover_every_mount_there() {
         let http = "object Http {
-              needs /net/tcp {
+              needs {
                 /address        read -> text/plain
                 /accept         watch -> text/plain*
                 /{conn}/data    watch -> application/octet-stream*, write application/octet-stream
                 /{conn}         remove
-              }
-              needs /** { /** read -> */*, stat }
+              } at /net/tcp
+              needs { /** read -> */*, stat } at /**
             }";
         let site = "object Site { serves { /hits read -> text/plain  /** read -> text/html, stat } }";
-        let strict = "object Strict { needs /** { /** read -> text/html } }";
+        let strict = "object Strict { needs { /** read -> text/html } at /** }";
         let modules = [("Http", http), ("Site", site), ("Strict", strict)];
-        let net = r#"needs /net Listener  write /net "127.0.0.1:0""#;
-        let img = format!("{net} instance site : Site instance http : Http {{ bind /net/tcp /net  mount /www site  mount /other site }}");
+        let net = r#"needs Listener at /net  write /net "127.0.0.1:0""#;
+        let img = format!("{net} instance site of Site instance http of Http {{ bind /net into /net/tcp  mount /www from site  mount /other from site }}");
         assert!(check_with(&img, &modules).is_ok(), "{:#}", check_with(&img, &modules).unwrap_err());
 
         // /hits answers a read with text/plain, where Strict needs text/html everywhere.
-        let e = err_with("instance site : Site instance s : Strict { mount /www site }", &modules);
+        let e = err_with("instance site of Site instance s of Strict { mount /www from site }", &modules);
         assert!(e.contains("`s` needs `/** read -> text/html` at `/www`, and `site` serves `/hits read -> text/plain`"), "{e}");
     }
 
@@ -1498,23 +1498,23 @@ mod tests {
         import { A } from "./A.oth"
         require greeting : text/plain = "hi"
         require name : text/plain
-        needs /out { / write text/plain }
-        instance a : A { bind /out /out }
-        mount /a a
+        needs { / write text/plain } at /out
+        instance a of A { bind /out }
+        mount /a from a
         write /a/x greeting
         write /a/y name
         export /a/x at /exported
     "#;
-    const A: &str = "object A { needs /out { / write text/plain }  serves { /x write text/plain  /y write text/plain  /z read } }";
+    const A: &str = "object A { needs { / write text/plain } at /out  serves { /x write text/plain  /y write text/plain  /z read } }";
 
     fn with_site(img: &str) -> Result<Program> {
-        let b = "object B { needs /web { /exported write text/plain } }";
+        let b = "object B { needs { /exported write text/plain } at /web }";
         check_all(&format!(r#"import Site from "./site.oth" {img}"#), &[("A", A), ("B", b)], &[("site.oth", SITE)])
     }
 
     #[test]
     fn an_image_is_an_object_made_of_objects() {
-        let p = with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  instance b : B { mount /web web }"#)
+        let p = with_site(r#"instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = "x" }  instance b of B { mount /web from web }"#)
             .unwrap();
         assert_eq!(names(&p), ["cons", "web", "b", "web.a"], "its instances are named under its own");
         let (web, a) = (1, 3);
@@ -1535,34 +1535,34 @@ mod tests {
 
     #[test]
     fn an_image_is_held_to_what_it_needs_and_exports() {
-        let e = format!("{:#}", with_site(r#"instance web : Site { name = "x" }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"instance web of Site { name = "x" }"#).unwrap_err());
         assert!(e.contains("`web` needs something mounted at `/out`"), "{e}");
-        let c = "object C { needs /web { /y write text/plain } }";
+        let c = "object C { needs { /y write text/plain } at /web }";
         let e = format!(
             "{:#}",
             check_all(
-                r#"import Site from "./site.oth" instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  instance c : C { mount /web web }"#,
+                r#"import Site from "./site.oth" instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = "x" }  instance c of C { mount /web from web }"#,
                 &[("A", A), ("C", c)],
                 &[("site.oth", SITE)]
             )
             .unwrap_err()
         );
         assert!(e.contains("`c` needs `/y write text/plain` at `/web`, and `web` serves nothing there"), "only what it exports: {e}");
-        let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"instance cons of MemoryConsole  instance web of Site { mount /out from cons }"#).unwrap_err());
         assert!(e.contains("`web` needs a value for its slot `name`: `name = ...` in its block"), "{e}");
-        let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x"  nope = "y" }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = "x"  nope = "y" }"#).unwrap_err());
         assert!(e.contains("`Site` has no slot `nope`"), "{e}");
-        let e = format!("{:#}", with_site(r#"require b : Ping  instance cons : MemoryConsole  instance web : Site { mount /out cons  name = b }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"require b : Ping  instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = b }"#).unwrap_err());
         assert!(e.contains("`web`'s slot `name` is a text/plain, and isn't given one"), "{e}");
-        let e = format!("{:#}", with_site(r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = text/html "x" }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = text/html "x" }"#).unwrap_err());
         assert!(e.contains("`web`'s slot `name` is a text/plain, and isn't given one"), "{e}");
-        let e = format!("{:#}", with_site(r#"instance a : A { name = "x" }"#).unwrap_err());
+        let e = format!("{:#}", with_site(r#"instance a of A { name = "x" }"#).unwrap_err());
         assert!(e.contains("`a` is a A, which has no slots; only an image's instance takes values"), "{e}");
     }
 
     #[test]
     fn an_image_takes_its_slots_from_the_root() {
-        let p = with_site(r#"require who : text/plain  instance cons : MemoryConsole  instance web : Site { mount /out cons  name = who }"#).unwrap();
+        let p = with_site(r#"require who : text/plain  instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = who }"#).unwrap();
         assert_eq!(p.slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["who"], "only the root's are for whoever runs it");
         assert_eq!(p.startup[1].body, Some(Arg::Slot(0)));
     }
@@ -1570,8 +1570,8 @@ mod tests {
     #[test]
     fn binds_and_exports_resolve_through_other_images() {
         let p = with_site(
-            r#"instance cons : MemoryConsole  instance web : Site { mount /out cons  name = "x" }  mount /web web
-               instance c : C { bind /e /web/exported }"#,
+            r#"instance cons of MemoryConsole  instance web of Site { mount /out from cons  name = "x" }  mount /web from web
+               instance c of C { bind /web/exported into /e }"#,
         )
         .unwrap();
         let c = p.instances.iter().position(|i| i.name == "c").unwrap();
@@ -1583,7 +1583,7 @@ mod tests {
     fn images_are_imported_by_a_name() {
         let e = err(r#"import "./site.oth""#);
         assert!(e.contains("an image is no longer imported whole: import it by a name, `import Site from \"...\"`"), "{e}");
-        let loops = "import Me from \"./loop.oth\" instance me : Me";
+        let loops = "import Me from \"./loop.oth\" instance me of Me";
         let e = format!("{:#}", check_all(loops, &[], &[("loop.oth", loops)]).unwrap_err());
         assert!(e.contains("images instantiate each other in a loop"), "{e}");
     }
@@ -1591,10 +1591,10 @@ mod tests {
     #[test]
     fn describes_views_and_reach() {
         let p = check_src(
-            r#"needs /cons Console
-            instance files : PackedFiles
-            instance site : Site { mount /files files readonly }
-            instance http : Http { mount /www site  bind /dev/cons /cons }"#,
+            r#"needs Console at /cons
+            instance files of PackedFiles
+            instance site of Site { mount /files from files readonly }
+            instance http of Http { mount /www from site  bind /cons into /dev/cons }"#,
         )
         .unwrap();
         assert_eq!(

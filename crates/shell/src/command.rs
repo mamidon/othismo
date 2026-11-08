@@ -164,8 +164,8 @@ mod tests {
     #[test]
     fn only_one_request_at_a_time() {
         assert!(parse("read /a read /b").is_err());
-        assert!(parse("instance x : X").is_err());
-        assert!(parse("needs /x Console").is_err());
+        assert!(parse("instance x of X").is_err());
+        assert!(parse("needs Console at /x").is_err());
     }
 
     #[test]

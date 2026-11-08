@@ -5,16 +5,16 @@ import { Greeter, Greeting } from "./scripts/Greeter.oth"
 import { Shouter } from "./scripts/Shouter.oth"
 import { Console } from env
 
-needs /dev/cons Console
+needs Console at /dev/cons
 
-instance greeter : Greeter {
-  bind /dev/cons /dev/cons
-  mount /shouter shouter
+instance greeter of Greeter {
+  bind /dev/cons
+  mount /shouter from shouter
 }
 
-instance shouter : Shouter {
-  bind /dev/cons /dev/cons
+instance shouter of Shouter {
+  bind /dev/cons
 }
 
-mount /greeter greeter
+mount /greeter from greeter
 write /greeter/greeting Greeting { prefix: "Hello, ", excited: true }

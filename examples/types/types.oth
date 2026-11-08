@@ -3,9 +3,9 @@
 
 import { Record, Store } from "./scripts/Store.oth"
 
-instance store : Store
+instance store of Store
 
-mount /store store
+mount /store from store
 write /store/record Record {
   name: "start",
   count: 7,

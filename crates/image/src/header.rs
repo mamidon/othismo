@@ -74,7 +74,7 @@ pub struct Object {
     pub origin: Option<PathBuf>,
 }
 
-/// `needs <mount point pattern> { entries }`, or `needs <mount point> <Trait>`
+/// `needs { entries } at <mount point pattern>`, or `needs <Trait> at <mount point>`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Need {
     pub at: PathPattern,

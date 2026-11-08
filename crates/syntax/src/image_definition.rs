@@ -29,7 +29,8 @@ pub struct ImageDefinition {
     pub header: iface::File,
     pub requires: Vec<Require>,
     pub instances: Vec<Instance>,
-    /// Top-level mounts: the image's own view, which its requests resolve in.
+    /// Top-level `bind <instance> into <path>` and `mount <path> from
+    /// <instance>`: the image's own view, which its requests resolve in.
     pub mounts: Vec<Mount>,
     /// `export <path> [at <path>] [readonly]`: what an instance of the image serves.
     pub exports: Vec<Export>,
@@ -105,8 +106,9 @@ pub struct Instance {
     pub name: Ident,
     /// An object, one of the runtime's objects, or an image, as imported.
     pub type_name: Ident,
+    /// The members that bind or mount an instance.
     pub mounts: Vec<Mount>,
-    /// `bind <path> <path in the image's view> [readonly]`
+    /// The members that bind or mount a path in the image's view.
     pub binds: Vec<Bind>,
     /// `<slot> = <value>`: an instantiated image's slots.
     pub values: Vec<(Ident, Literal)>,
@@ -114,8 +116,9 @@ pub struct Instance {
     pub includes: Vec<Include>,
 }
 
-/// `bind <at> <path> [readonly]`: what `path` means in the image's own
-/// view, at `at` in the instance's.
+/// `bind <path> [into <at>] [readonly]`, or `mount <at> [from <path>]
+/// [readonly]`: what `path` means in the image's own view, at `at` in the
+/// instance's; at the same path, unless it says.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bind {
     pub at: Path,
@@ -123,7 +126,8 @@ pub struct Bind {
     pub read_only: bool,
 }
 
-/// `mount <path> <instance> [readonly]`
+/// `bind <instance> into <at> [readonly]`, or `mount <at> from <instance>
+/// [readonly]`: the instance's whole served tree, at `at`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mount {
     pub at: Path,
@@ -164,6 +168,19 @@ pub struct Include {
     pub source: String,
     pub pos: Pos,
     pub at: Option<Path>,
+}
+
+/// A `bind` or `mount`, parsed: what it binds decides which it is.
+enum Edge {
+    Instance(Mount),
+    Path(Bind),
+}
+
+/// What a `bind` or `mount` binds: an instance's served tree, or a path in
+/// the enclosing view.
+enum EdgeSource {
+    Instance(Ident),
+    Path(Path),
 }
 
 /// A path literal, as written.
@@ -480,13 +497,13 @@ fn push_type(toks: &mut Vec<(Tok, Pos)>, mut ty: String, pos: Pos, end: Pos) {
 // ---------------------------------------------------------------------------
 // Parser
 
-/// Words that can never be names. Member keywords (`mount`, `include`,
-/// `readonly` and `at`) only mean something inside an instance block, `as`
-/// only in an import, and the verbs only where a request can start.
-pub const KEYWORDS: &[&str] = &["import", "export", "from", "require", "instance", "true", "false"];
+/// Words that can never be names. Member keywords (`include`, `readonly`
+/// and `at`) only mean something where they are expected, `as` only in an
+/// import, and the verbs only where a request can start.
+pub const KEYWORDS: &[&str] = &["import", "export", "from", "into", "of", "require", "instance", "true", "false"];
 
 /// Words that start a declaration at the top of a file, besides the verbs.
-const DECLS: &[&str] = &["import", "export", "require", "instance", "mount", "message", "schemas", "protocol", "trait", "object"];
+const DECLS: &[&str] = &["import", "export", "require", "instance", "bind", "mount", "needs", "message", "schemas", "protocol", "trait", "object"];
 
 pub struct Parser {
     toks: Vec<(Tok, Pos)>,
@@ -500,6 +517,11 @@ impl Parser {
 
     pub fn peek(&self) -> &Tok {
         &self.toks[self.i].0
+    }
+
+    /// The token after the next one.
+    pub fn peek_after(&self) -> Option<&Tok> {
+        self.toks.get(self.i + 1).map(|(t, _)| t)
     }
 
     pub fn pos(&self) -> Pos {
@@ -618,7 +640,7 @@ impl Parser {
                 }
                 Tok::Ident(kw) if kw == "import" && matches!(self.toks.get(self.i + 1), Some((Tok::Str(_), _))) => bail!(
                     "{pos}: an image is no longer imported whole: import it by a name, `import Site from \"...\"`, \
-                     and make an instance of it, `instance site : Site {{ ... }}`"
+                     and make an instance of it, `instance site of Site {{ ... }}`"
                 ),
                 Tok::Ident(kw) if kw == "import" => image.header.imports.push(self.import()?),
                 Tok::Ident(kw) if kw == "needs" => {
@@ -657,9 +679,17 @@ impl Parser {
                 }
                 Tok::Ident(kw) if kw == "instance" => image.instances.push(self.instance()?),
                 Tok::Ident(kw) if kw == "require" => image.requires.push(self.require()?),
-                Tok::Ident(kw) if kw == "mount" => {
+                Tok::Ident(kw) if kw == "bind" || kw == "mount" => {
                     self.next();
-                    image.mounts.push(self.mount()?);
+                    match self.edge(&kw, pos)? {
+                        Edge::Instance(mount) => image.mounts.push(mount),
+                        Edge::Path(bind) => bail!(
+                            "{}: only an instance can be bound in the image's own view, and `{}` is a path; \
+                             bind it into an instance's view, in its block",
+                            bind.path.pos,
+                            bind.path.path
+                        ),
+                    }
                 }
                 Tok::Ident(kw) if Verb::from_keyword(&kw).is_some() => image.requests.push(self.startup_request()?),
                 Tok::Ident(kw) if kw == "control" => bail!(
@@ -669,7 +699,7 @@ impl Parser {
                 ),
                 other => bail!(
                     "{pos}: expected `import`, `export`, `schemas`, `protocol`, `trait`, `object`, `needs`, `require`, \
-                     `instance`, `mount` or a verb, found {other}"
+                     `instance`, `bind`, `mount` or a verb, found {other}"
                 ),
             }
         }
@@ -872,7 +902,15 @@ impl Parser {
     fn instance(&mut self) -> Result<Instance> {
         self.expect_kw("instance")?;
         let name = self.ident("instance name", false)?;
-        self.expect(Tok::Colon)?;
+        if *self.peek() == Tok::Colon {
+            self.next();
+            let ty = match self.peek() {
+                Tok::Ident(ty) => ty.clone(),
+                _ => "Type".into(),
+            };
+            bail!("{}: an instance names its type with `of`: `instance {} of {ty}`", name.pos, name.name);
+        }
+        self.expect_kw("of")?;
         let type_name = self.ident("instance type", true)?;
         let mut inst = Instance { name, type_name, mounts: vec![], binds: vec![], values: vec![], includes: vec![] };
         if *self.peek() != Tok::LBrace {
@@ -889,16 +927,11 @@ impl Parser {
             if *self.peek() == Tok::Eq {
                 self.next();
                 inst.values.push((Ident { name: word, pos }, self.literal()?));
-            } else if word == "mount" {
-                inst.mounts.push(self.mount()?);
-            } else if word == "bind" {
-                let at = self.path()?;
-                let path = self.path()?;
-                let read_only = self.is_kw("readonly");
-                if read_only {
-                    self.next();
+            } else if word == "bind" || word == "mount" {
+                match self.edge(&word, pos)? {
+                    Edge::Instance(mount) => inst.mounts.push(mount),
+                    Edge::Path(bind) => inst.binds.push(bind),
                 }
-                inst.binds.push(Bind { at, path, read_only });
             } else if word == "include" {
                 let source = match self.next() {
                     (Tok::Str(s), _) => s,
@@ -917,8 +950,8 @@ impl Parser {
                     _ => String::new(),
                 };
                 bail!(
-                    "{pos}: requests are made at the top level, in the image's view; mount `{}` there, e.g. \
-                     `mount /{0} {0}`, and then `{word} /{0}{at} ...`",
+                    "{pos}: requests are made at the top level, in the image's view; bind `{}` there, e.g. \
+                     `bind {0} into /{0}`, and then `{word} /{0}{at} ...`",
                     inst.name.name
                 );
             } else {
@@ -927,18 +960,72 @@ impl Parser {
         }
     }
 
-    /// What follows `mount`: `<path> <instance> [readonly]`.
-    fn mount(&mut self) -> Result<Mount> {
-        if let (Tok::Ident(target), Some((Tok::Path(at), _))) = (self.peek(), self.toks.get(self.i + 1)) {
-            bail!("{}: the mount point comes first: `mount {at} {target}`", self.pos());
-        }
-        let at = self.path()?;
-        let target = self.ident("instance name", false)?;
+    /// `bind <source> [into <path>] [readonly]` or `mount <path> [from
+    /// <source>] [readonly]`, after the keyword. The source is an instance
+    /// or a path; leaving out where it goes, or where it comes from, means
+    /// the same path, so only a path can be left out.
+    fn edge(&mut self, kw: &str, kw_pos: Pos) -> Result<Edge> {
+        let (source, at) = if kw == "bind" {
+            let source = self.edge_source("bind")?;
+            let at = if self.is_kw("into") {
+                self.next();
+                Some(self.path()?)
+            } else {
+                if let (EdgeSource::Path(from), Tok::Path(at)) = (&source, self.peek()) {
+                    bail!("{}: `bind` names what it binds first: `bind {at} into {}`", from.pos, from.path);
+                }
+                None
+            };
+            (source, at)
+        } else {
+            if let (Tok::Ident(target), Some(Tok::Path(at))) = (self.peek(), self.peek_after()) {
+                bail!("{}: the mount point comes first: `mount {at} from {target}`", self.pos());
+            }
+            let at = self.path()?;
+            let source = if self.is_kw("from") {
+                self.next();
+                self.edge_source("mount")?
+            } else {
+                if let Tok::Ident(target) = self.peek()
+                    && !["readonly", "include"].contains(&target.as_str())
+                    && !KEYWORDS.contains(&target.as_str())
+                    && !DECLS.contains(&target.as_str())
+                    && Verb::from_keyword(target).is_none()
+                    && self.peek_after() != Some(&Tok::Eq)
+                {
+                    bail!("{}: `mount` says where it mounts from: `mount {} from {target}`", self.pos(), at.path);
+                }
+                EdgeSource::Path(at.clone())
+            };
+            (source, Some(at))
+        };
         let read_only = self.is_kw("readonly");
         if read_only {
             self.next();
         }
-        Ok(Mount { at, target, read_only })
+        Ok(match source {
+            EdgeSource::Instance(target) => {
+                let Some(at) = at else {
+                    bail!("{kw_pos}: say where `{0}` goes: `bind {0} into /{0}`", target.name);
+                };
+                Edge::Instance(Mount { at, target, read_only })
+            }
+            EdgeSource::Path(path) => {
+                let at = at.unwrap_or_else(|| path.clone());
+                Edge::Path(Bind { at, path, read_only })
+            }
+        })
+    }
+
+    /// What `bind` or `mount` takes: an instance's name, or a path.
+    fn edge_source(&mut self, kw: &str) -> Result<EdgeSource> {
+        match self.next() {
+            (Tok::Path(path), pos) => Ok(EdgeSource::Path(Path { path, pos })),
+            (Tok::Ident(name), pos) if !KEYWORDS.contains(&name.as_str()) && !name.contains('.') => {
+                Ok(EdgeSource::Instance(Ident { name, pos }))
+            }
+            (other, pos) => bail!("{pos}: expected an instance or a path to {kw}, found {other}"),
+        }
     }
 
     /// A value file: `slot = "text"` or `slot = { field: value, ... }`, any
@@ -987,7 +1074,7 @@ mod tests {
 
     #[test]
     fn a_schemas_block_keeps_its_body_as_written() {
-        let src = "object A { serves { /x read } }\nexport schemas application/bson {\n  ## A } in a doc, \"and { in a string\"\n  message M { s: string }\n}\nschemas application/json { {\"type\": \"}\"} }\nmount /a a\n";
+        let src = "object A { serves { /x read } }\nexport schemas application/bson {\n  ## A } in a doc, \"and { in a string\"\n  message M { s: string }\n}\nschemas application/json { {\"type\": \"}\"} }\nmount /a from a\n";
         let img = parse(src).unwrap();
         let [bson, json] = &img.header.schemas[..] else { panic!("{:?}", img.header.schemas) };
         assert_eq!((bson.ty.name.as_str(), bson.exported, bson.at), ("application/bson", true, Pos { line: 2, col: 34 }));
@@ -1018,12 +1105,12 @@ mod tests {
             import { Greeting, Ping as Pong } from "./shapes.oth"   # trailing comment
             import { Tick } from "./other.oth"
 
-            instance cons : Console
-            instance net : Listener
+            instance cons of Console
+            instance net of Listener
             write /net "127.0.0.1:0"
-            instance echo : Echo {
-              mount /dev/cons cons
-              mount /net/tcp net readonly
+            instance echo of Echo {
+              mount /dev/cons from cons
+              mount /net/tcp from net readonly
             }
             write /echo/greeting application/bson { $type: "Greeting", prefix: "hi \"there\"", n: -3, x: 1.5, ok: true, l: [1, { a: 2 }] }
             create /echo pinged
@@ -1076,7 +1163,7 @@ mod tests {
 
     #[test]
     fn requests_can_come_anywhere() {
-        let img = parse("remove /a/x\ninstance a : A\nread /a\nrequire t : text/plain\nwatch /a").unwrap();
+        let img = parse("remove /a/x\ninstance a of A\nread /a\nrequire t : text/plain\nwatch /a").unwrap();
         let paths: Vec<_> = img.requests.iter().map(|r| (r.path.path.as_str(), r.body.is_some())).collect();
         assert_eq!(paths, [("/a/x", false), ("/a", false), ("/a", false)], "a declaration ends a body-less request");
     }
@@ -1097,7 +1184,7 @@ mod tests {
         assert!(matches!(&img.requires[2].default, Some(Literal::Tree { ty: None, .. })));
         assert!(matches!(&img.requests[0].body, Some(Literal::Name(n)) if n.name == "listen"), "a slot is named");
         assert!(parse("require : text/plain").is_err());
-        assert!(parse("instance require : P").is_err(), "`require` is a keyword");
+        assert!(parse("instance require of P").is_err(), "`require` is a keyword");
         let e = parse("require g : { }").unwrap_err().to_string();
         assert!(e.contains("expected the slot's message type or content type"), "{e}");
     }
@@ -1116,7 +1203,7 @@ mod tests {
     #[test]
     fn parses_includes() {
         let img = parse(
-            r#"instance files : Packed.Files {
+            r#"instance files of Packed.Files {
               include "./public/"
               include "robots.txt" at /robots.txt
             }"#,
@@ -1125,7 +1212,7 @@ mod tests {
         let inst = &img.instances[0];
         let incs: Vec<_> = inst.includes.iter().map(|i| (i.source.as_str(), i.at.as_ref().map(|p| p.path.as_str()))).collect();
         assert_eq!(incs, [("./public/", None), ("robots.txt", Some("/robots.txt"))]);
-        let e = parse("instance f : Packed.Files { include public/ }").unwrap_err().to_string();
+        let e = parse("instance f of Packed.Files { include public/ }").unwrap_err().to_string();
         assert!(e.contains("expected a quoted file or directory"), "{e}");
     }
 
@@ -1143,7 +1230,7 @@ mod tests {
     fn one_file_declares_and_instantiates() {
         let img = parse(
             "## A shape.\nexport trait T { / read }\nprotocol P { read }\nexport { P }\n\
-             ## An object.\nexport object O {}\ninstance o : O\nwrite /o \"hi\"",
+             ## An object.\nexport object O {}\ninstance o of O\nwrite /o \"hi\"",
         )
         .unwrap();
         let h = &img.header;
@@ -1155,9 +1242,9 @@ mod tests {
         let e = parse("export message M {}").unwrap_err().to_string();
         assert!(e.contains("message types are declared in their format's block"), "{e}");
         assert_eq!((img.instances.len(), img.requests.len()), (1, 1));
-        let e = parse("## an instance\ninstance o : O").unwrap_err().to_string();
+        let e = parse("## an instance\ninstance o of O").unwrap_err().to_string();
         assert!(e.contains("documents what follows"), "{e}");
-        assert!(parse("export instance o : O").unwrap_err().to_string().contains("`export` comes before"));
+        assert!(parse("export instance o of O").unwrap_err().to_string().contains("`export` comes before"));
     }
 
     #[test]
@@ -1218,31 +1305,82 @@ mod tests {
 
     #[test]
     fn comments_are_not_paths() {
-        let img = parse("instance a : A { mount / b # the root\n mount /c#d c }").unwrap();
+        let img = parse("instance a of A { mount / from b # the root\n mount /c#d from c }").unwrap();
         let ats: Vec<&str> = img.instances[0].mounts.iter().map(|m| m.at.path.as_str()).collect();
         assert_eq!(ats, ["/", "/c#d"], "`#` only starts a comment at the start of a token");
     }
 
     #[test]
     fn rejects_malformed_members() {
-        let e = parse("instance a : A { mount b }").unwrap_err().to_string();
+        let e = parse("instance a of A { mount b }").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
-        let e = parse("instance a : A { mount b /b }").unwrap_err().to_string();
-        assert!(e.contains("the mount point comes first: `mount /b b`"), "{e}");
+        let e = parse("instance a of A { mount b /b }").unwrap_err().to_string();
+        assert!(e.contains("the mount point comes first: `mount /b from b`"), "{e}");
         let e = parse("mount cons /dev/cons").unwrap_err().to_string();
-        assert!(e.contains("the mount point comes first: `mount /dev/cons cons`"), "{e}");
+        assert!(e.contains("the mount point comes first: `mount /dev/cons from cons`"), "{e}");
         let e = parse("write hosts").unwrap_err().to_string();
         assert!(e.contains("expected a path"), "{e}");
-        let e = parse("instance a : A { frobnicate /x }").unwrap_err().to_string();
+        let e = parse("instance a of A { frobnicate /x }").unwrap_err().to_string();
         assert!(e.contains("expected `mount`, `bind`, `include`, a slot's value or `}`"), "{e}");
-        let e = parse("instance http : H { write /hosts/* Text }").unwrap_err().to_string();
-        assert!(e.contains("requests are made at the top level, in the image's view; mount `http` there, e.g. `mount /http http`, and then `write /http/hosts/* ...`"), "{e}");
-        let e = parse("instance net : T { write / listen }").unwrap_err().to_string();
+        let e = parse("instance http of H { write /hosts/* Text }").unwrap_err().to_string();
+        assert!(e.contains("requests are made at the top level, in the image's view; bind `http` there, e.g. `bind http into /http`, and then `write /http/hosts/* ...`"), "{e}");
+        let e = parse("instance net of T { write / listen }").unwrap_err().to_string();
         assert!(e.contains("`write /net ...`"), "{e}");
         let e = parse("control /net listen").unwrap_err().to_string();
         assert!(e.contains("`control` is gone"), "{e}");
         let e = parse("frobnicate /x").unwrap_err().to_string();
         assert!(e.contains("or a verb"), "{e}");
+    }
+
+    #[test]
+    fn bind_and_mount_are_one_edge_read_either_way() {
+        let img = parse(
+            "instance http of H {\n  bind /net/tcp\n  mount /dev/cons\n  bind /a into /b readonly\n  mount /c from /d\n  \
+             bind pages into /www\n  mount /files from files readonly\n}\nbind http into /http\nmount /h from http readonly\n",
+        )
+        .unwrap();
+        let inst = &img.instances[0];
+        let binds: Vec<_> = inst.binds.iter().map(|b| (b.path.path.as_str(), b.at.path.as_str(), b.read_only)).collect();
+        assert_eq!(
+            binds,
+            [("/net/tcp", "/net/tcp", false), ("/dev/cons", "/dev/cons", false), ("/a", "/b", true), ("/d", "/c", false)],
+            "a path, from the image's view; at the same path unless it says"
+        );
+        let mounts: Vec<_> = inst.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
+        assert_eq!(mounts, [("pages", "/www", false), ("files", "/files", true)], "an instance's served tree");
+        let top: Vec<_> = img.mounts.iter().map(|m| (m.target.name.as_str(), m.at.path.as_str(), m.read_only)).collect();
+        assert_eq!(top, [("http", "/http", false), ("http", "/h", true)]);
+        let img = parse("instance a of A { mount /x }\nwrite /a/x \"hi\"").unwrap();
+        assert_eq!((img.instances[0].binds.len(), img.requests.len()), (1, 1), "a short mount ends where the next line starts");
+    }
+
+    #[test]
+    fn old_wiring_says_how_to_write_it_now() {
+        let e = |src: &str| parse(src).unwrap_err().to_string();
+        assert!(e("instance web : Site").contains("an instance names its type with `of`: `instance web of Site`"));
+        assert!(e("instance a of A { bind /net/tcp /tcp }").contains("`bind` names what it binds first: `bind /tcp into /net/tcp`"));
+        assert!(e("instance a of A { mount /www pages }").contains("`mount` says where it mounts from: `mount /www from pages`"));
+        assert!(e("mount /http http").contains("`mount /http from http`"));
+        assert!(e("needs /net/tcp Listener").contains("`needs` names what it needs first: `needs Listener at /net/tcp`"));
+        assert!(e("needs /dev/cons { / write text/plain }").contains("`needs { ... } at /dev/cons`"));
+        assert!(e("object O { needs /x T }").contains("`needs T at /x`"), "an object's needs too");
+    }
+
+    #[test]
+    fn some_edges_cannot_be_written() {
+        let e = |src: &str| parse(src).unwrap_err().to_string();
+        assert!(e("instance a of A { bind pages }").contains("say where `pages` goes: `bind pages into /pages`"));
+        assert!(e("bind /net/tcp into /tcp").contains("only an instance can be bound in the image's own view"));
+        assert!(e("mount /tcp").contains("only an instance can be bound in the image's own view"));
+        assert!(e("instance a of A { bind into into /x }").contains("expected an instance or a path to bind"));
+    }
+
+    #[test]
+    fn parses_needs() {
+        let img = parse("needs Listener at /net/tcp\nneeds { / write text/plain } at /dev/cons").unwrap();
+        let needs: Vec<_> = img.header.needs.iter().map(|n| (n.at.path.as_str(), n.entries.len())).collect();
+        assert_eq!(needs, [("/net/tcp", 1), ("/dev/cons", 1)]);
+        assert!(parse("needs Listener").unwrap_err().to_string().contains("expected `at`"));
     }
 
     #[test]
@@ -1259,14 +1397,14 @@ mod tests {
 
     #[test]
     fn reports_position() {
-        let err = parse("instance a : A {\n  mount /b b\n  bogus\n}").unwrap_err();
+        let err = parse("instance a of A {\n  mount /b from b\n  bogus\n}").unwrap_err();
         assert!(err.to_string().starts_with("3:3:"), "{err}");
     }
 
     #[test]
     fn keywords_are_not_names() {
-        assert!(parse("instance instance : P").is_err());
-        assert!(parse("instance a.b : P").is_err());
-        assert!(parse("instance write : P").is_ok(), "verbs only start a request where a declaration could");
+        assert!(parse("instance instance of P").is_err());
+        assert!(parse("instance a.b of P").is_err());
+        assert!(parse("instance write of P").is_ok(), "verbs only start a request where a declaration could");
     }
 }

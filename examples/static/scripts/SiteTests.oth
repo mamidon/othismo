@@ -4,5 +4,5 @@ import { Dialer, TestSuite } from env
 ## test dials in with one request, and checks the response's status line.
 export object SiteTests : TestSuite {
   ## The site's listener, in memory, to dial.
-  needs /net Dialer
+  needs Dialer at /net
 }

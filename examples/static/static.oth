@@ -7,12 +7,12 @@ import { Console, Listener } from env
 # Where to listen. Deploy with e.g. `--set listen=0.0.0.0:80`.
 require listen : text/plain = "127.0.0.1:8080"
 
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 
-instance web : Site {
-  bind /net/tcp  /net/tcp
-  bind /dev/cons /dev/cons
+instance web of Site {
+  bind /net/tcp
+  bind /dev/cons
 }
 
 write /net/tcp listen

@@ -28,9 +28,9 @@ const IMAGE: &str = r#"
     require listen : text/plain = "127.0.0.1:8080"
     require info : Info = { kind: "file" }
     require host : text/plain = "localhost"
-    needs /net Listener
-    instance a : A
-    mount /a a
+    needs Listener at /net
+    instance a of A
+    mount /a from a
     write /net listen
     write /a/info info
     write /a/x "literal"
@@ -95,7 +95,7 @@ fn payload_slots_are_given_whole() {
     assert_eq!(p.startup[2].body, Some(Arg::Payload(Payload::text("example.com"))));
     assert_eq!(p.slots[2].origins, [(String::new(), "--set".to_string())]);
 
-    let mut p = program("require host : text/plain instance a : A mount /a a write /a/host host");
+    let mut p = program("require host : text/plain instance a of A mount /a from a write /a/host host");
     let e = bind(&mut p, &othismo::formats(), &[]).unwrap_err().to_string();
     assert!(e.ends_with("host: required, not provided"), "{e}");
 }
@@ -135,7 +135,7 @@ fn every_problem_is_listed() {
          info.size: required, not provided\n  \
          info.mime: required, not provided"
     );
-    let mut p = program(r#"require g : Info instance a : A mount /a a write /a/info g"#);
+    let mut p = program(r#"require g : Info instance a of A mount /a from a write /a/info g"#);
     let e = bind(&mut p, &othismo::formats(), &[text("--set", "g", "kind", "x")]).unwrap_err().to_string();
     assert!(e.contains("g.size: required, not provided"), "a slot without a default needs every field: {e}");
 }
@@ -164,7 +164,7 @@ fn values_come_from_files_and_set() {
 
 #[test]
 fn an_image_without_slots_needs_nothing() {
-    let mut p = program("needs /cons Console");
+    let mut p = program("needs Console at /cons");
     bind(&mut p, &othismo::formats(), &[]).unwrap();
     let e = bind(&mut p, &othismo::formats(), &[text("--set", "x", "y", "z")]).unwrap_err().to_string();
     assert!(e.contains("there is no slot `x`"), "{e}");

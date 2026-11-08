@@ -7,7 +7,7 @@ use othismo::pack::{self, BuildOptions, Pack};
 use othismo::slots::{self, Given, GivenValue};
 use othismo::tree::Node;
 
-const A: &str = "export object A { needs /dev/cons { / write */* }  serves { / write */* } }";
+const A: &str = "export object A { needs { / write */* } at /dev/cons  serves { / write */* } }";
 
 /// Modules aren't run here, so they needn't do anything; they only need headers.
 fn a() -> Vec<u8> {
@@ -25,10 +25,10 @@ fn fixture(name: &str) -> Fixture {
             r#"import { A } from "./scripts/A.oth"
             import { B } from "./scripts/B.wasm"
             import { Console } from env
-            needs /dev/cons Console
-            instance a : A { bind /dev/cons /dev/cons }  mount /a a  write /a "ping"
-            instance b : B { mount /a a readonly }
-            instance a2 : A { bind /dev/cons /dev/cons }"#,
+            needs Console at /dev/cons
+            instance a of A { bind /dev/cons }  mount /a from a  write /a "ping"
+            instance b of B { mount /a from a readonly }
+            instance a2 of A { bind /dev/cons }"#,
         );
     f
 }
@@ -77,7 +77,7 @@ fn corrupt_and_truncated_files_are_refused() {
     assert!(err(&flipped).contains("is corrupt"), "{}", err(&flipped));
     assert!(err(&sealed[..sealed.len() - 1]).contains("out of bounds"));
     assert!(err(&sealed[..20]).contains("truncated manifest"));
-    assert!(err(b"instance a : A").contains("not a built image"));
+    assert!(err(b"instance a of A").contains("not a built image"));
 
     let mut old = sealed.clone();
     old[7] = 1;
@@ -110,12 +110,12 @@ fn unpacking_writes_modules_and_sources() {
     assert_eq!(std::fs::read(out.join("modules/A.wasm")).unwrap(), a());
     assert!(out.join("modules/B.wasm").exists());
     assert_eq!(read("sources/scripts/A.ts"), "// A's source\n");
-    assert!(read("sources/test.oth").contains("instance a2 : A"));
+    assert!(read("sources/test.oth").contains("instance a2 of A"));
 }
 
 /// An image whose only instance is `files : PackedFiles { <includes> }`.
 fn packed(f: &Fixture, includes: &str) -> anyhow::Result<Pack> {
-    f.file("test.oth", format!("import {{ PackedFiles }} from env instance files : PackedFiles {{ {includes} }}"));
+    f.file("test.oth", format!("import {{ PackedFiles }} from env instance files of PackedFiles {{ {includes} }}"));
     pack::build(&f.image(), BuildOptions::default())
 }
 
@@ -248,9 +248,9 @@ fn slots_are_sealed_unbound_and_described_once_bound() {
         r#"import { Console, Files, Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
         require root : text/plain
-        needs /net   Listener
-        needs /files Files
-        needs /cons  Console
+        needs Listener at /net
+        needs Files at /files
+        needs Console at /cons
         write /net listen
         write /files root"#,
     );
@@ -283,8 +283,8 @@ fn the_cli_layers_value_files_then_set() {
         import { Listener } from env
         require listen : text/plain = "127.0.0.1:8080"
         require info : Info
-        instance a : A
-        needs /net Listener
+        instance a of A
+        needs Listener at /net
         write /net listen"#,
     )
     .file("scripts/A.wasm", module_with("(module)", "object A {}", "message Info { kind: string, size: i64, mime: string }"))

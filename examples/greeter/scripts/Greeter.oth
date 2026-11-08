@@ -2,13 +2,13 @@
 ## there, and has `/shouter` shout each greeting.
 export object Greeter {
   ## The console: the names, and where greetings and statistics go.
-  needs /dev/cons {
+  needs {
     /  watch -> text/plain*, write text/plain
-  }
+  } at /dev/cons
   ## Something to shout each greeting.
-  needs /shouter {
+  needs {
     /  write text/plain
-  }
+  } at /shouter
 
   serves {
     ## How to greet: a `Greeting`, a prefix and whether to be excited
