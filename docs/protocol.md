@@ -33,8 +33,8 @@ resolve, and what the checker can work out from it.
 
 | Othismo | Plan 9 | Semantics |
 |---|---|---|
-| in an image: `mount <at> <instance> [readonly]` | `mount(fd, afd, old, flag, aname)`, which makes the kernel send `Tattach` | Attach an instance's whole served tree at a point in a view. Only an image can do it. |
-| in an instance block: `bind <at> <path>` | `bind(name, old, flag)` | Give an instance what `<path>` means in the image's own view. |
+| in an image: `bind <instance> into <at> [readonly]` | `mount(fd, afd, old, flag, aname)`, which makes the kernel send `Tattach` | Attach an instance's whole served tree at a point in a view. Only an image can do it. |
+| in an instance block: `bind <path> into <at>` | `bind(name, old, flag)` | Give an instance what `<path>` means in the image's own view. |
 | `bind(src, at, flags)` → status | `bind(name, old, flag)` | Make `at` in the caller's view mean whatever `src` means now. Later changes to `src` don't affect it. |
 | `unmount(at)` → status | `unmount(name, old)` | Take a mount out of the caller's view. |
 | `expose(at, src, flags)` → status | none; `exportfs` serves a whole namespace over 9P | Splice part of the caller's view into the tree it serves. Requests under `at` go straight to `src` and never reach the caller's `serve`. |
@@ -423,7 +423,7 @@ nothing takes, and `unsupported_type` for a payload whose content type the
 entry doesn't take. A client has the same methods for the requests a need
 lists, and is made with the mount point it goes through. A need for one
 mount point gets one made already, named for the mount point's last segment:
-`cons` for `needs /dev/cons`. A need under a pattern, such as `needs /**`,
+`cons` for `needs ... at /dev/cons`. A need under a pattern, such as `needs ... at /**`,
 gets only the class, to make with whichever mount point the module is told
 to use. Where an entry
 names one text type, such as `text/plain`, the methods take and give a

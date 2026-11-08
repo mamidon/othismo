@@ -109,9 +109,8 @@ Drafted in `docs/tour.md`.
 - [ ] Remote connections
 - [ ] The shell
 - [ ] Telemetry
-- [ ] The image language: dropping `bind` for `mount` everywhere, dropping
-      `readonly` for auth, better syntax for `needs` and `export` (noted in
-      the tour)
+- [ ] The image language: dropping `readonly` for auth (noted in the tour).
+      `bind`/`mount`, `needs` and `instance ... of` were settled in #9
 
 ## 12. Where it comes from
 

@@ -61,13 +61,13 @@ overridden when the image is run, from the command line:
 </code></pre>
 <p>The needs say where in the image&#39;s namespace the implementations of the TCP
 listener and the console will be available.</p>
-<pre><code class="language-text">needs /net/tcp  Listener
-needs /dev/cons Console
+<pre><code class="language-text">needs Listener at /net/tcp
+needs Console  at /dev/cons
 </code></pre>
 <p>This declares the instance of the site and how its namespace is populated.</p>
-<pre><code class="language-text">instance web : Site {
-  bind /net/tcp  /net/tcp
-  bind /dev/cons /dev/cons
+<pre><code class="language-text">instance web of Site {
+  bind /net/tcp
+  bind /dev/cons
 }
 </code></pre>
 <p>And finally, we tell the socket where to listen.</p>
@@ -86,8 +86,8 @@ import { Console, Listener, PackedFiles } from env
 <p>These are the same needs as in <code>static.oth</code>, but here they&#39;re filled by
 whoever uses the site: <code>static.oth</code>, which passes on the real socket and
 console it got from the environment.</p>
-<pre><code class="language-text">needs /net/tcp  Listener
-needs /dev/cons Console
+<pre><code class="language-text">needs Listener at /net/tcp
+needs Console  at /dev/cons
 </code></pre>
 <p>HttpServer is the only object with substantial logic inside it. It parses HTTP requests off
 a socket and turns them into Othismo requests, addressed to paths in its
@@ -96,27 +96,27 @@ configured with.</p>
 <p>The <code>bind</code> lines give it the TCP socket and the console that this image was
 given. <code>mount</code> puts a different object, one this image
 defines, into its namespace: StaticSite, at <code>/www</code>.</p>
-<pre><code class="language-text">instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www pages
+<pre><code class="language-text">instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from pages
 }
 </code></pre>
 <p>StaticSite receives requests from clients and, if they&#39;re appropriate,
 answers them with the content of the files it has been given.</p>
 <p><code>readonly</code> means that requests to this path have to be read-only, as far as
 the Othismo protocol is concerned.</p>
-<pre><code class="language-text">instance pages : StaticSite {
-  mount /files files readonly
+<pre><code class="language-text">instance pages of StaticSite {
+  mount /files from files readonly
 }
 </code></pre>
 <p>PackedFiles is the simplest. It&#39;s a set of files, baked into the image when
 the image is built.</p>
-<pre><code class="language-text">instance files : PackedFiles { include &quot;./public/&quot; }
+<pre><code class="language-text">instance files of PackedFiles { include &quot;./public/&quot; }
 </code></pre>
 <p>This puts HttpServer into the image&#39;s own namespace, so that the requests
 after it can configure it.</p>
-<pre><code class="language-text">mount /http http
+<pre><code class="language-text">mount /http from http
 </code></pre>
 <p>This configures how HttpServer routes hosts: every host goes to <code>/www</code>, where
 StaticSite is, so a <code>GET</code> for <code>/foo</code> becomes a <code>read</code> of <code>/www/foo</code>.</p>
@@ -128,14 +128,8 @@ server there.</p>
 <pre><code class="language-text">export /http/hosts at /hosts
 </code></pre>
 <blockquote>
-<p><strong>Note:</strong> some of this syntax is likely to change.</p>
-<ul>
-<li><code>bind</code> will probably go, in favour of mounting everything, whether it&#39;s an
-instance of an object or a path mounted at a different location.</li>
-<li><code>readonly</code> will probably go too, once the Othismo protocol has real auth.</li>
-<li>The syntax of <code>needs</code> and <code>export</code> could be better, compared with how
-instances are mounted.</li>
-</ul>
+<p><strong>Note:</strong> <code>readonly</code> will probably go, once the Othismo protocol has real
+auth.</p>
 </blockquote>
 <h2 id="httpservers-header">HttpServer&#39;s header</h2>
 <p>The interface for the HttpServer is described by <code>HttpServer.oth</code>. 
@@ -148,23 +142,23 @@ export object HttpServer {
 </code></pre>
 <p><code>guide</code> points at longer documentation. <code>##</code> comments (left out here) are
 the short in-line version.</p>
-<pre><code class="language-text">  needs /net/tcp Listener
+<pre><code class="language-text">  needs Listener at /net/tcp
 </code></pre>
 <p>It needs a TCP listener at <code>/net/tcp</code>. <code>Listener</code> is a trait: a named set of
 paths and the requests they accept, defined once in <code>env</code> so that every object
 needing a socket asks for the same thing.</p>
-<pre><code class="language-text">  needs /dev/cons {
+<pre><code class="language-text">  needs {
     /  write text/plain
-  }
+  } at /dev/cons
 </code></pre>
 <p>It needs a console too, but it only ever writes lines to it, so that&#39;s all it
 asks for. Anything that accepts a <code>write</code> of text at its root will do, and
 <code>site.oth</code>&#39;s Console does.</p>
-<pre><code class="language-text">  needs /** {
+<pre><code class="language-text">  needs {
     /**  read -&gt; */*, stat
-  }
+  } at /**
 </code></pre>
-<p>This is how <code>mount /www pages</code> is allowed. HttpServer doesn&#39;t know about
+<p>This is how <code>mount /www from pages</code> is allowed. HttpServer doesn&#39;t know about
 <code>/www</code>. It says that whatever else is in its view, it will <code>read</code> and <code>stat</code>
 it, any response is acceptable.</p>
 <pre><code class="language-text">  serves {

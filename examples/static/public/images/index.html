@@ -77,7 +77,7 @@ declare:</p>
 <td>the interface of a Wasm module</td>
 </tr>
 <tr>
-<td><code>needs &lt;at&gt; &lt;shape&gt;</code></td>
+<td><code>needs &lt;shape&gt; at &lt;at&gt;</code></td>
 <td>a mount point in the image&#39;s view, filled by whoever instantiates it</td>
 </tr>
 <tr>
@@ -85,7 +85,7 @@ declare:</p>
 <td>an object, or another image, made part of this one</td>
 </tr>
 <tr>
-<td><code>mount</code>, <code>bind</code></td>
+<td><code>bind</code>, <code>mount</code></td>
 <td>the views</td>
 </tr>
 <tr>
@@ -110,7 +110,7 @@ import { Listener, Console } from env
 </code></pre>
 <ul>
 <li>The <strong>default import</strong>, <code>Site</code>, is the file itself as an image: an object
-type, which <code>instance web : Site</code> makes an instance of. The name is the
+type, which <code>instance web of Site</code> makes an instance of. The name is the
 importer&#39;s choice; a file never names itself.</li>
 <li>The <strong>named imports</strong> are declarations the file exports with <code>export</code>:
 <code>export object</code>, <code>export trait</code>, <code>export protocol</code>. Anything not exported
@@ -123,9 +123,9 @@ come from it.</li>
 </ul>
 <p>Paths are relative to the importing file.</p>
 <h2 id="instances">Instances</h2>
-<pre><code class="language-text">instance pages : StaticSite { mount /files files readonly }
-instance files : PackedFiles { include &quot;./public/&quot; }
-instance web   : Site { bind /net/tcp /net/tcp }
+<pre><code class="language-text">instance pages of StaticSite { mount /files from files readonly }
+instance files of PackedFiles { include &quot;./public/&quot; }
+instance web   of Site { bind /net/tcp }
 </code></pre>
 <p>An instance&#39;s type is one of:</p>
 <ul>
@@ -140,25 +140,28 @@ those through its <code>needs</code>.</p>
 <p>Instances can be declared in any order, so an image can start from the
 instance at the top of the namespace and work down.</p>
 <h2 id="views">Views</h2>
-<pre><code class="language-text">needs /net/tcp Listener                 # the image&#39;s view: filled from outside
+<pre><code class="language-text">needs Listener at /net/tcp      # the image&#39;s view: filled from outside
 
-instance http : HttpServer {
-  bind  /net/tcp /net/tcp               # http&#39;s view: from the image&#39;s
-  mount /www pages                      # http&#39;s view: an instance&#39;s tree
+instance http of HttpServer {
+  bind /net/tcp                 # http&#39;s view: from the image&#39;s
+  bind pages into /www          # http&#39;s view: an instance&#39;s tree
 }
 
-mount /http http                        # the image&#39;s view: an instance&#39;s tree
+mount /http from http           # the image&#39;s view: an instance&#39;s tree
 </code></pre>
 <ul>
-<li><code>mount &lt;at&gt; &lt;instance&gt; [readonly]</code> puts that instance&#39;s whole served tree
-at <code>&lt;at&gt;</code>. Inside an instance&#39;s block it builds that instance&#39;s view. At the
-top level it builds the image&#39;s own view.</li>
-<li><code>bind &lt;at&gt; &lt;path&gt; [readonly]</code>, inside an instance&#39;s block, gives the
-instance what <code>&lt;path&gt;</code> means in the image&#39;s own view. It is how an image
-passes on what it was given.</li>
-<li><code>needs &lt;at&gt; &lt;shape&gt;</code>, at the top level, puts a mount point in the image&#39;s
-own view for whoever instantiates it to fill, with the shape it must have
-there.</li>
+<li><code>bind &lt;source&gt; into &lt;at&gt; [readonly]</code> and <code>mount &lt;at&gt; from &lt;source&gt; [readonly]</code> are the same thing, written either way round. Inside an
+instance&#39;s block they build that instance&#39;s view. At the top level they
+build the image&#39;s own view.</li>
+<li>The source is an <strong>instance</strong> or a <strong>path</strong>. An instance puts its whole
+served tree at <code>&lt;at&gt;</code>. A path gives the instance what that path means in
+the image&#39;s own view, which is how an image passes on what it was given.
+At the top level the source must be an instance.</li>
+<li>When a path goes to the same path, the other side can be left out:
+<code>bind /net/tcp</code> and <code>mount /net/tcp</code> both mean <code>bind /net/tcp into /net/tcp</code>.</li>
+<li><code>needs &lt;shape&gt; at &lt;at&gt;</code>, at the top level, puts a mount point in the
+image&#39;s own view for whoever instantiates it to fill, with the shape it
+must have there. An object&#39;s header writes its needs the same way.</li>
 <li><code>export &lt;path&gt; [at &lt;path&gt;] [readonly]</code> serves what <code>&lt;path&gt;</code> means in the
 image&#39;s own view, at the same path or the one after <code>at</code>, to whoever
 instantiates the image.</li>
@@ -171,24 +174,24 @@ import { HttpServer } from &quot;../../sdk/objects/http/HttpServer.oth&quot;
 import { StaticSite } from &quot;../../sdk/objects/site/StaticSite.oth&quot;
 import { Listener, Console, PackedFiles } from env
 
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 
 # HTTP in, namespace requests out. It reaches the files only through pages.
-instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www pages
+instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from pages
 }
 
 # The pages can read the files and nothing else.
-instance pages : StaticSite {
-  mount /files files readonly
+instance pages of StaticSite {
+  mount /files from files readonly
 }
 
-instance files : PackedFiles { include &quot;./public/&quot; }
+instance files of PackedFiles { include &quot;./public/&quot; }
 
-mount /http http
+mount /http from http
 
 write /http/hosts/* &quot;/www&quot;
 write /http/hosts/files.localhost &quot;/www/static&quot;
@@ -196,10 +199,10 @@ write /http/hosts/files.localhost &quot;/www/static&quot;
 # Whoever runs the site can add hosts, and nothing else.
 export /http/hosts at /hosts
 </code></pre>
-<p>For <code>instance web : Site { ... }</code>:</p>
+<p>For <code>instance web of Site { ... }</code>:</p>
 <ul>
 <li><strong>What it needs</strong> is the image&#39;s top-level <code>needs</code>. The instance block
-fills them with <code>mount</code> and <code>bind</code>, as it would for a Wasm object, and the
+fills them with <code>bind</code> and <code>mount</code>, as it would for a Wasm object, and the
 checker holds them to the same rules.</li>
 <li><strong>What it serves</strong> is what the image exports, and nothing else. Every
 other path is <code>not_found</code>, so nothing the image mounts only to configure it
@@ -227,12 +230,12 @@ import { Listener, Console } from env
 require listen : text/plain = &quot;127.0.0.1:8080&quot;
 
 # Everything this program can do to the host: one listener, and the console.
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 
-instance web : Site {
-  bind /net/tcp  /net/tcp
-  bind /dev/cons /dev/cons
+instance web of Site {
+  bind /net/tcp
+  bind /dev/cons
 }
 
 write /net/tcp listen
@@ -288,8 +291,8 @@ built and <code>--check</code> stays a true upper bound.</li>
 <li>A slot can&#39;t share its name with an instance or another slot.</li>
 </ul>
 <p>An instantiated image&#39;s slots are given in its instance block:</p>
-<pre><code class="language-text">instance web : Site {
-  bind /net/tcp /net/tcp
+<pre><code class="language-text">instance web of Site {
+  bind /net/tcp
   hosts = &quot;example.com&quot;
 }
 </code></pre>
@@ -357,11 +360,11 @@ the runtime never does. <code>--no-sources</code> leaves them out.</li>
 It is the build-time counterpart of <code>Files</code>, which reads the host at run
 time:</p>
 <pre><code class="language-text"># The host&#39;s files, live, in the root:
-needs /files Files
+needs Files at /files
 write /files &quot;/var/www&quot;
 
 # A snapshot, taken when the image is built, anywhere:
-instance files : PackedFiles {
+instance files of PackedFiles {
   include &quot;./public/&quot;
   include &quot;./prod/robots.txt&quot; at /robots.txt
 }
@@ -410,16 +413,16 @@ import Site from &quot;./site.oth&quot;
 import { SiteTests } from &quot;./scripts/SiteTests.oth&quot;
 import { MemoryListener, MemoryConsole } from env
 
-instance net  : MemoryListener
-instance cons : MemoryConsole
+instance net  of MemoryListener
+instance cons of MemoryConsole
 
-instance web : Site {
-  mount /net/tcp  net
-  mount /dev/cons cons
+instance web of Site {
+  mount /net/tcp  from net
+  mount /dev/cons from cons
 }
 
-instance tests : SiteTests {
-  mount /net net              # the site&#39;s listener, to dial
+instance tests of SiteTests {
+  mount /net from net     # the site&#39;s listener, to dial
 }
 </code></pre>
 <p><code>SiteTests</code> (in <code>examples/static/scripts/</code>) dials the site with one HTTP
