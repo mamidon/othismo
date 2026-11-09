@@ -7,7 +7,7 @@ import { FileTree } from env
 ## `/files` exposed as is, so requests there don't reach it at all.
 export object StaticSite : FileTree {
   ## The site's files. Nothing is ever written here.
-  needs /files FileTree
+  needs FileTree at /files
 
   serves {
     ## How many requests it has forwarded, as decimal text.

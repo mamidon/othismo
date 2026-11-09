@@ -21,9 +21,9 @@ fn bound(members: &str) -> String {
     let mut out: Vec<String> = vec![];
     let mut i = 0;
     while i < words.len() {
-        if words[i] == "mount" && i + 2 < words.len() && words[i + 2] == "cons" {
-            out.push(format!("bind {} /{}", words[i + 1], words[i + 2]));
-            i += 3;
+        if words[i] == "mount" && i + 3 < words.len() && words[i + 2] == "from" && words[i + 3] == "cons" {
+            out.push(format!("bind /{} into {}", words[i + 3], words[i + 1]));
+            i += 4;
         } else {
             out.push(words[i].to_string());
             i += 1;
@@ -310,8 +310,9 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
         if *w != "mount" && *w != "bind" {
             continue;
         }
-        let (at, target) = (words[i + 1], words[i + 2]);
-        let ro = words.get(i + 3) == Some(&"readonly");
+        // `mount <at> from <target>` or `bind <target> into <at>`.
+        let (at, target) = if *w == "mount" { (words[i + 1], words[i + 3]) } else { (words[i + 3], words[i + 1]) };
+        let ro = words.get(i + 4) == Some(&"readonly");
         let ty = match NEEDS.iter().find(|(path, _)| *path == target) {
             Some((_, trait_name)) => trait_name.to_string(),
             None => types[target].clone(),
@@ -333,12 +334,12 @@ fn header(ty: &str, script: &Script, members: &str, types: &std::collections::Ha
                 })
                 .collect(),
         };
-        out.push_str(&format!("  needs {at} {{ {} }}\n", entries.join("\n")));
+        out.push_str(&format!("  needs {{ {} }} at {at}\n", entries.join("\n")));
     }
-    // Not `needs {at}`, which would need something mounted there by the image.
+    // Not `needs ... at {at}`, which would need something mounted there by the image.
     for act in &script.start {
         if let Act::Bind { at, .. } = act {
-            out.push_str(&format!("  needs {at}/** {{ {} }}\n", anything(false)));
+            out.push_str(&format!("  needs {{ {} }} at {at}/**\n", anything(false)));
         }
     }
     out.push_str(&format!("  serves {{ {} }}\n}}\n", anything(false)));
@@ -356,10 +357,10 @@ fn fixture(name: &str, objects: &[(&str, &Script, &str)], extra: &str) -> Fixtur
 /// [`fixture`], with the headers in `headers` for the module types they name.
 fn fixture_with(name: &str, objects: &[(&str, &Script, &str)], extra: &str, headers: &[(&str, &str)]) -> Fixture {
     let f = Fixture::new(name);
-    let mut img = format!("{ENV}\nneeds /cons Console\n{extra}\n");
+    let mut img = format!("{ENV}\nneeds Console at /cons\n{extra}\n");
     for (obj, _, members) in objects {
         let ty = format!("{}{}", obj[..1].to_uppercase(), &obj[1..]);
-        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} : {ty} {{ {} }}\n", bound(members)));
+        img.push_str(&format!("import {{ {ty} }} from \"./scripts/{ty}.wasm\"\ninstance {obj} of {ty} {{ {} }}\n", bound(members)));
     }
     let parsed = othismo::image_definition::parse(&img).unwrap();
     let types = parsed.instances.iter().map(|i| (i.name.name.clone(), i.type_name.name.clone())).collect();
@@ -386,7 +387,7 @@ fn run_err(f: &Fixture) -> String {
 #[test]
 fn startup_requests_reach_the_instance_which_uses_its_view() {
     let a = Script { serve: Some(Steps::Each(vec![write("/out", text("hi"))])), ..Default::default() };
-    let f = fixture("startup", &[("a", &a, "mount /out cons")], "mount /a a  write /a \"ping\"  write /a/again \"ping\"");
+    let f = fixture("startup", &[("a", &a, "mount /out from cons")], "mount /a from a  write /a \"ping\"  write /a/again \"ping\"");
     assert_eq!(run(&f).unwrap(), "hi\nhi\n");
 }
 
@@ -398,7 +399,7 @@ fn paths_outside_the_view_are_not_found() {
         ..Default::default()
     };
     let b = Script { start: vec![write("/out", text("b has no view"))], ..Default::default() };
-    let f = fixture("unseen", &[("a", &a, "mount /out cons"), ("b", &b, "")], "");
+    let f = fixture("unseen", &[("a", &a, "mount /out from cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "not_found\ninvalid\nnot_supported\n");
 }
 
@@ -413,7 +414,7 @@ fn read_only_mounts_refuse_unsafe_verbs() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("readonly", &[("a", &a, "mount /b b readonly  mount /out cons"), ("b", &b, "mount /out cons")], "");
+    let f = fixture("readonly", &[("a", &a, "mount /b from b readonly  mount /out from cons"), ("b", &b, "mount /out from cons")], "");
     assert_eq!(run(&f).unwrap(), "read_only\nb served\nok\n", "b never sees the write");
 }
 
@@ -433,10 +434,10 @@ fn only_the_image_makes_operator_requests() {
         serve: Some(Steps::Each(vec![write("/out", text("b served")), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
-    let a_header = "object A { needs /out { / write */* }  needs /raw/** { /** write */* } }";
-    let b_header = "object B { needs /out { / write */* }  serves { /y operator write */* } }";
-    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /out cons")];
-    let f = fixture_with("operator", &objects, "mount /b b  write /b/y \"ping\"", &[("A", a_header), ("B", b_header)]);
+    let a_header = "object A { needs { / write */* } at /out  needs { /** write */* } at /raw/** }";
+    let b_header = "object B { needs { / write */* } at /out  serves { /y operator write */* } }";
+    let objects = [("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "mount /out from cons")];
+    let f = fixture_with("operator", &objects, "mount /b from b  write /b/y \"ping\"", &[("A", a_header), ("B", b_header)]);
     assert_eq!(run(&f).unwrap(), "b served\nforbidden\n", "b serves the image's write, never a's");
     let off = run_image(&f.image(), "", Options { no_checks: true }).unwrap();
     assert_eq!(off, "b served\nforbidden\n", "the rule holds with checks off, as read-only mounts do");
@@ -454,7 +455,7 @@ fn replies_stream_until_done() {
         serve: Some(Steps::Each(vec![more("1"), more("2"), Act::Reply { status: Status::OK, body: None, done: true }])),
         ..Default::default()
     };
-    let f = fixture("stream", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")], "");
+    let f = fixture("stream", &[("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "ok (more)\nok (more)\nok\n");
 }
 
@@ -470,7 +471,7 @@ fn forward_hands_the_request_on_in_the_servers_view() {
         ..Default::default()
     };
     let c = Script { serve: Some(Steps::Each(vec![reply(text("from c"))])), ..Default::default() };
-    let f = fixture("forward", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "mount /c c"), ("c", &c, "")], "");
+    let f = fixture("forward", &[("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "mount /c from c"), ("c", &c, "")], "");
     // The failed forward is answered at once; c's answer takes a round trip.
     assert_eq!(run(&f).unwrap(), "not_found\nfrom c\n");
 }
@@ -495,7 +496,7 @@ fn exposures_route_past_the_server() {
     };
     let f = fixture(
         "expose",
-        &[("b", &b, "mount /c c  mount /out cons"), ("c", &c, ""), ("a", &a, "mount /b b  mount /out cons")],
+        &[("b", &b, "mount /c from c  mount /out from cons"), ("c", &c, ""), ("a", &a, "mount /b from b  mount /out from cons")],
         "",
     );
     // b's expose reports Ok; the refused write is answered before the reads come back.
@@ -521,7 +522,7 @@ fn bind_and_unmount_rearrange_only_the_own_view() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("from b"))])), ..Default::default() };
-    let f = fixture("bind", &[("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")], "");
+    let f = fixture("bind", &[("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "")], "");
     assert_eq!(run(&f).unwrap(), "ok\nnot_found\nok\nnot_found\nnot_found\nfrom b\n");
 }
 
@@ -532,7 +533,7 @@ fn console_lines_stream_to_watchers() {
         answer: Some(Steps::Each(vec![Act::Echo("/cons")])),
         ..Default::default()
     };
-    let f = fixture("cat", &[("a", &a, "mount /cons cons")], "");
+    let f = fixture("cat", &[("a", &a, "mount /cons from cons")], "");
     // The end of the stream has no body; echoing it is a Write without one, which Console refuses.
     assert_eq!(run_image(&f.image(), "a\r\nb\n\nc", Options::default()).unwrap(), "a\nb\n\nc\n");
 }
@@ -544,7 +545,7 @@ fn cancel_stops_a_stream() {
         answer: Some(Steps::Nth(vec![vec![Act::Echo("/cons"), Act::Cancel]])),
         ..Default::default()
     };
-    let f = fixture("cancel", &[("a", &a, "mount /cons cons")], "");
+    let f = fixture("cancel", &[("a", &a, "mount /cons from cons")], "");
     assert_eq!(run_image(&f.image(), "a\nb\nc\n", Options::default()).unwrap(), "a\n");
 }
 
@@ -585,8 +586,8 @@ fn unversioned(out: &str) -> String {
 
 #[test]
 fn files_read_stat_and_list() {
-    let files = "needs /files Files  write /files \"public\"";
-    let f = fixture("files", &[("a", &files_script(), "bind /f /files  mount /out cons")], files);
+    let files = "needs Files at /files  write /files \"public\"";
+    let f = fixture("files", &[("a", &files_script(), "bind /files into /f  mount /out from cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
     assert_eq!(unversioned(&run(&f).unwrap()), FILES_OUTPUT);
@@ -594,8 +595,8 @@ fn files_read_stat_and_list() {
 
 #[test]
 fn packed_files_answer_like_files() {
-    let files = "instance files : PackedFiles { include \"public/\" }";
-    let f = fixture("packed", &[("a", &files_script(), "mount /f files  mount /out cons")], files);
+    let files = "instance files of PackedFiles { include \"public/\" }";
+    let f = fixture("packed", &[("a", &files_script(), "mount /f from files  mount /out from cons")], files);
     std::fs::create_dir_all(f.dir.join("public/sub")).unwrap();
     f.file("public/hello.txt", "hi");
     let pack = othismo::pack::load(&f.image()).unwrap();
@@ -611,7 +612,7 @@ fn packed_files_answer_like_files() {
 #[test]
 fn unknown_request_ids_stop_the_run() {
     let a = Script { serve: Some(Steps::Each(vec![Act::ReplyTo(7)])), ..Default::default() };
-    let f = fixture("badreq", &[("a", &a, "")], "mount /a a  write /a \"ping\"");
+    let f = fixture("badreq", &[("a", &a, "")], "mount /a from a  write /a \"ping\"");
     let e = run_err(&f);
     assert!(e.contains("instance `a` replied to unknown request 7"), "{e}");
 }
@@ -654,18 +655,18 @@ fn errors_say_why() {
 #[test]
 fn payloads_are_carried_unread() {
     let a = Script { start: vec![write("/out", Payload::new("application/bson", "not bson"))], ..Default::default() };
-    let f = fixture("unread", &[("a", &a, "mount /out cons")], "");
+    let f = fixture("unread", &[("a", &a, "mount /out from cons")], "");
     assert_eq!(run(&f).unwrap(), "application/bson (8 bytes)\n", "nothing looks inside it on the way");
 
     let a = Script { start: vec![write("/out", Payload::new("", "x"))], ..Default::default() };
-    let f = fixture("untyped", &[("a", &a, "mount /out cons")], "");
+    let f = fixture("untyped", &[("a", &a, "mount /out from cons")], "");
     assert!(run_err(&f).contains("instance `a` sent a payload without a content type"), "{}", run_err(&f));
 }
 
 /// `a` asks `b` for things, and reports each answer.
 const NARROW_A: &str = "object A {
-      needs /out { / write */* }
-      needs /b { /greeting write text/plain -> */**  /x read -> */** }
+      needs { / write */* } at /out
+      needs { /greeting write text/plain -> */**  /x read -> */** } at /b
     }";
 
 #[test]
@@ -682,7 +683,7 @@ fn requests_must_be_among_the_senders_needs() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
-    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")];
+    let objects = [("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "")];
     let f = fixture_with("needs", &objects, "", &[("A", NARROW_A)]);
     // The refusals are answered at once; b's answers take a round trip. The
     // runtime doesn't look at payloads, so the BSON one reaches b too.
@@ -695,9 +696,9 @@ fn requests_must_be_among_the_senders_needs() {
 fn requests_must_be_among_what_the_server_serves() {
     // a can only ask b for more than b serves by binding b somewhere that isn't checked against it.
     let a_header = "object A {
-          needs /out { / write */* }
-          needs /b { /x read -> text/plain }
-          needs /raw/** { /** read -> */*, stat }
+          needs { / write */* } at /out
+          needs { /x read -> text/plain } at /b
+          needs { /** read -> */*, stat } at /raw/**
         }";
     let b_header = "object B { serves { /x read -> text/plain } }";
     let a = Script {
@@ -711,7 +712,7 @@ fn requests_must_be_among_what_the_server_serves() {
         ..Default::default()
     };
     let b = Script { serve: Some(Steps::Each(vec![reply(text("b served"))])), ..Default::default() };
-    let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", &b, "")];
+    let objects = [("a", &a, "mount /b from b  mount /out from cons"), ("b", &b, "")];
     let f = fixture_with("serves", &objects, "", &[("A", a_header), ("B", b_header)]);
     assert_eq!(run(&f).unwrap(), "not_found\nnot_supported\nb served\n", "b only sees what it serves");
 }
@@ -722,9 +723,9 @@ fn only_a_stream_is_answered_more_than_once() {
     fn fix(name: &str, b: &Script, answer: &str) -> Fixture {
         let a = Script { start: vec![call(Verb::Read, "/b/x")], ..Default::default() };
         let star = if answer.ends_with('*') { "*" } else { "" };
-        let a_header = format!("object A {{ needs /out {{ / write */* }}  needs /b {{ /x read -> */*{star} }} }}");
+        let a_header = format!("object A {{ needs {{ / write */* }} at /out  needs {{ /x read -> */*{star} }} at /b }}");
         let b_header = format!("object B {{ serves {{ /x read{answer} }} }}");
-        let objects = [("a", &a, "mount /b b  mount /out cons"), ("b", b, "")];
+        let objects = [("a", &a, "mount /b from b  mount /out from cons"), ("b", b, "")];
         fixture_with(name, &objects, "", &[("A", &a_header), ("B", &b_header)])
     }
 
@@ -750,14 +751,14 @@ fn modules_cannot_import_anything_else() {
     let wat = r#"(module
       (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
       (memory (export "memory") 1))"#;
-    let f = fixture("wasi", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
+    let f = fixture("wasi", &[], "import { S } from \"./scripts/S.wasm\" instance s of S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     assert!(run_err(&f).contains("module S imports `wasi_snapshot_preview1.fd_write`, which the runtime does not provide"));
 }
 
 #[test]
 fn modules_must_export_the_entry_points() {
-    let f = fixture("exports", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
+    let f = fixture("exports", &[], "import { S } from \"./scripts/S.wasm\" instance s of S");
     f.file(
         "scripts/S.wasm",
         module(r#"(module (memory (export "memory") 1) (func (export "rt_inbox") (param i32) (result i32) (i32.const 0)))"#, "object S {}"),
@@ -776,7 +777,7 @@ fn abort_fails_the_run_naming_the_instance() {
       (func (export "rt_serve") (param i32 i32 i32 i32 i32 i32))
       (func (export "rt_answer") (param i32 i32 i32 i32 i32))
       (func (export "rt_start") (call $abort (i32.const 16) (i32.const 0) (i32.const 7) (i32.const 9))))"#;
-    let f = fixture("abort", &[], "import { S } from \"./scripts/S.wasm\" instance s : S");
+    let f = fixture("abort", &[], "import { S } from \"./scripts/S.wasm\" instance s of S");
     f.file("scripts/S.wasm", module(wat, "object S {}"));
     let err = run_err(&f);
     assert!(err.contains("instance `s` failed starting"), "{err}");
@@ -785,7 +786,7 @@ fn abort_fails_the_run_naming_the_instance() {
 
 #[test]
 fn missing_module_is_reported() {
-    let f = fixture("missing", &[], "import { Ghost } from \"./scripts/Ghost.wasm\" instance g : Ghost");
+    let f = fixture("missing", &[], "import { Ghost } from \"./scripts/Ghost.wasm\" instance g of Ghost");
     assert!(run_err(&f).contains("did you compile Ghost.ts?"));
 }
 
@@ -804,15 +805,15 @@ fn an_image_given_a_listener_in_memory_can_be_dialed() {
         ..Default::default()
     };
     let f = Fixture::new("instantiate");
-    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs /net Dialer needs /out Console }"));
+    f.file("scripts/Probe.wasm", module(&script_wat(&probe), "import { Console, Dialer } from env object Probe { needs Dialer at /net needs Console at /out }"));
     f.file(
         "test.oth",
         format!(
             "import Site from \"{}\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\n\
-             needs /out Console\n\
-             instance net : MemoryListener\ninstance cons : MemoryConsole\n\
-             instance web : Site {{\n  mount /net/tcp net\n  mount /dev/cons cons\n}}\n\
-             instance probe : Probe {{\n  mount /net net\n  bind /out /out\n}}\n",
+             needs Console at /out\n\
+             instance net of MemoryListener\ninstance cons of MemoryConsole\n\
+             instance web of Site {{\n  mount /net/tcp from net\n  mount /dev/cons from cons\n}}\n\
+             instance probe of Probe {{\n  mount /net from net\n  bind /out\n}}\n",
             site.display()
         ),
     );
@@ -832,13 +833,13 @@ fn an_instantiated_image_is_relative_to_its_own_file() {
     let f = Fixture::new("instantiate_files");
     // The image is in a directory of its own, with its files there.
     std::fs::create_dir_all(f.dir.join("site/public")).unwrap();
-    f.file("site/site.oth", &format!("{ENV}\ninstance files : PackedFiles {{ include \"public/\" }}\nmount /files files\nexport /files\n"));
+    f.file("site/site.oth", &format!("{ENV}\ninstance files of PackedFiles {{ include \"public/\" }}\nmount /files from files\nexport /files\n"));
     f.file("site/public/hello.txt", "hi");
-    let header = "import { Console } from env object Probe { needs /f { /files/** read -> */* } needs /out Console }";
+    let header = "import { Console } from env object Probe { needs { /files/** read -> */* } at /f needs Console at /out }";
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), header));
     f.file(
         "test.oth",
-        format!("import Site from \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance site : Site\ninstance probe : Probe {{\n  mount /f site\n  bind /out /out\n}}\n"),
+        format!("import Site from \"./site/site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds Console at /out\ninstance site of Site\ninstance probe of Probe {{\n  mount /f from site\n  bind /out\n}}\n"),
     );
     assert_eq!(run(&f).unwrap(), "hi\nnot_found\n");
     let described = othismo::pack::describe(&othismo::pack::load(&f.image()).unwrap(), &othismo::formats());
@@ -848,14 +849,14 @@ fn an_instantiated_image_is_relative_to_its_own_file() {
 #[test]
 fn an_images_names_are_its_own() {
     let f = Fixture::new("instantiate_names");
-    f.file("site.oth", &format!("{ENV}\ninstance cons : MemoryConsole\nmount /cons cons\n"));
-    f.file("test.oth", &format!("import Site from \"./site.oth\"\n{ENV}\ninstance cons : MemoryConsole\ninstance site : Site\nmount /cons cons\n"));
+    f.file("site.oth", &format!("{ENV}\ninstance cons of MemoryConsole\nmount /cons from cons\n"));
+    f.file("test.oth", &format!("import Site from \"./site.oth\"\n{ENV}\ninstance cons of MemoryConsole\ninstance site of Site\nmount /cons from cons\n"));
     let p = othismo::pack::load(&f.image()).unwrap();
     let names: Vec<&str> = p.program.instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["cons", "site", "site.cons"]);
     f.file("test.oth", "import \"./site.oth\"\n");
     assert!(run_err(&f).contains("an image is no longer imported whole"), "{}", run_err(&f));
-    f.file("test.oth", "import Nope from \"./nope.oth\"\ninstance n : Nope\n");
+    f.file("test.oth", "import Nope from \"./nope.oth\"\ninstance n of Nope\n");
     assert!(run_err(&f).contains("nope.oth"), "{}", run_err(&f));
 }
 
@@ -871,12 +872,12 @@ fn an_image_serves_only_what_it_exports() {
     };
     let f = Fixture::new("exports");
     f.file("scripts/A.wasm", module(&script_wat(&a), &format!("object A {{ serves {{ {} }} }}", anything(false))));
-    let probe_header = "import { Console } from env object Probe { needs /out Console  needs /web { /x read -> */** }  needs /raw/** { /** read -> */* } }";
+    let probe_header = "import { Console } from env object Probe { needs Console at /out  needs { /x read -> */** } at /web  needs { /** read -> */* } at /raw/** }";
     f.file("scripts/Probe.wasm", module(&script_wat(&probe), probe_header));
-    f.file("site.oth", "import { A } from \"./scripts/A.wasm\"\ninstance a : A\nmount /a a\nexport /a/x at /x\n");
+    f.file("site.oth", "import { A } from \"./scripts/A.wasm\"\ninstance a of A\nmount /a from a\nexport /a/x at /x\n");
     f.file(
         "test.oth",
-        format!("import Site from \"./site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds /out Console\ninstance web : Site\ninstance probe : Probe {{ mount /web web  bind /out /out }}\n"),
+        format!("import Site from \"./site.oth\"\nimport {{ Probe }} from \"./scripts/Probe.wasm\"\n{ENV}\nneeds Console at /out\ninstance web of Site\ninstance probe of Probe {{ mount /web from web  bind /out }}\n"),
     );
     assert_eq!(run(&f).unwrap(), "not_found\nfrom a\n", "the unexported path is refused at once");
 }

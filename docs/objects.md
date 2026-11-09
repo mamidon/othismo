@@ -70,7 +70,7 @@ trait Listener {
 }
 ```
 
-A trait can be used in two places. `needs /net/tcp Listener` says the object
+A trait can be used in two places. `needs Listener at /net/tcp` says the object
 needs a whole Listener at `/net/tcp`. `object StaticSite : FileTree` says
 StaticSite serves a FileTree, alongside whatever else it serves.
 

@@ -505,7 +505,7 @@ impl Shapes<'_> {
         for n in decls {
             let at = pattern(&n.at)?;
             if let Some(prev) = needs.iter().find(|p| same(&p.at, &at)) {
-                bail!("{}: `needs {}` overlaps `needs {}` exactly; one block per mount point", n.at.pos, at, prev.at);
+                bail!("{}: `needs ... at {}` overlaps `needs ... at {}` exactly; one block per mount point", n.at.pos, at, prev.at);
             }
             let mut entries = self.entries(&n.entries)?;
             for e in &mut entries {
@@ -797,10 +797,10 @@ mod tests {
         ## And reports statistics.
         object Greeter {
           ## The console, for names and greetings.
-          needs /dev/cons {
+          needs {
             /  watch -> text/plain*, write */*
-          }
-          needs /shouter { / write text/plain }
+          } at /dev/cons
+          needs { / write text/plain } at /shouter
 
           serves {
             ## Configures the greeting.
@@ -846,7 +846,7 @@ mod tests {
         }
 
         object S : Site {
-          needs /files Tree
+          needs Tree at /files
           serves { /hits read -> text/plain }
         }
     "#;
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn protocols_and_traits_can_be_imported() {
-        let file = parse(r#"import { Tree as Files, File } from "./shapes.oth" object T { needs /f Files serves { /x File } }"#).unwrap();
+        let file = parse(r#"import { Tree as Files, File } from "./shapes.oth" object T { needs Files at /f serves { /x File } }"#).unwrap();
         let mut import = |_: &Source| resolve_str(SHAPES);
         let h = resolve(&file, &mut import, &|_| unreachable!()).unwrap();
         assert_eq!(h.object("T").unwrap().needs[0].entries.len(), 2);
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn needs_leave_out_the_operators_requests() {
-        let h = resolve_str("trait T { / operator write text/plain  /x operator remove, read } object A { needs /t T }").unwrap();
+        let h = resolve_str("trait T { / operator write text/plain  /x operator remove, read } object A { needs T at /t }").unwrap();
         let entries: Vec<String> = h.objects[0].needs[0].entries.iter().map(|e| e.to_string()).collect();
         assert_eq!(entries, ["/x read"]);
     }
@@ -969,7 +969,7 @@ mod tests {
         assert!(h.exports.contains(&"Greeting".to_string()), "an exported block exports its types");
 
         // Imported, by the name it has on the wire.
-        let b = "import { Greeting } from \"./A.oth\" export object B { needs /a { /greeting write Greeting } }";
+        let b = "import { Greeting } from \"./A.oth\" export object B { needs { /greeting write Greeting } at /a }";
         let a = "export object A {} export schemas application/bson { message Greeting { text: string } }";
         let h = load_all(&[("/t/B.oth", b), ("/t/A.oth", a)]).unwrap();
         assert_eq!(h.objects[0].needs[0].entries[0].requests[0].message.as_deref(), Some("Greeting"));
@@ -1011,7 +1011,7 @@ mod tests {
         assert!(err("object A { serves { /x read -> text/ } }").contains("isn't a well-formed content type"));
         assert!(err("object A { serves { /x read, read } }").contains("takes `read` twice"));
         assert!(err("object A { serves { /{a} read /{b} stat } }").contains("already listed"));
-        assert!(err("object A { needs /** { / read } needs /** { / stat } }").contains("one block per mount point"));
+        assert!(err("object A { needs { / read } at /** needs { / stat } at /** }").contains("one block per mount point"));
         assert!(err("object A { serves { /a/**/b read } }").contains("`**` can only come last"));
         assert!(err("object A { serves { /x frob } }").contains("unknown protocol or trait `frob`"));
         assert!(err("object A { serves { /x } }").contains("expected a verb"));
@@ -1068,8 +1068,8 @@ mod tests {
     fn picks_the_most_specific_entry_and_need() {
         let h = resolve_str(
             "object A {
-              needs /net/tcp { /{conn} write application/octet-stream }
-              needs /** { /** read -> */* }
+              needs { /{conn} write application/octet-stream } at /net/tcp
+              needs { /** read -> */* } at /**
               serves { /hits read -> text/plain  /** read -> */* }
             }",
         )

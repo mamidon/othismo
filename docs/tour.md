@@ -27,16 +27,16 @@ The needs say where in the image's namespace the implementations of the TCP
 listener and the console will be available.
 
 ```text
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 ```
 
 This declares the instance of the site and how its namespace is populated.
 
 ```text
-instance web : Site {
-  bind /net/tcp  /net/tcp
-  bind /dev/cons /dev/cons
+instance web of Site {
+  bind /net/tcp
+  bind /dev/cons
 }
 ```
 
@@ -66,8 +66,8 @@ whoever uses the site: `static.oth`, which passes on the real socket and
 console it got from the environment.
 
 ```text
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 ```
 
 HttpServer is the only object with substantial logic inside it. It parses HTTP requests off
@@ -80,10 +80,10 @@ given. `mount` puts a different object, one this image
 defines, into its namespace: StaticSite, at `/www`.
 
 ```text
-instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www pages
+instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from pages
 }
 ```
 
@@ -94,8 +94,8 @@ answers them with the content of the files it has been given.
 the Othismo protocol is concerned.
 
 ```text
-instance pages : StaticSite {
-  mount /files files readonly
+instance pages of StaticSite {
+  mount /files from files readonly
 }
 ```
 
@@ -103,14 +103,14 @@ PackedFiles is the simplest. It's a set of files, baked into the image when
 the image is built.
 
 ```text
-instance files : PackedFiles { include "./public/" }
+instance files of PackedFiles { include "./public/" }
 ```
 
 This puts HttpServer into the image's own namespace, so that the requests
 after it can configure it.
 
 ```text
-mount /http http
+mount /http from http
 ```
 
 This configures how HttpServer routes hosts: every host goes to `/www`, where
@@ -128,13 +128,8 @@ server there.
 export /http/hosts at /hosts
 ```
 
-> **Note:** some of this syntax is likely to change.
->
-> - `bind` will probably go, in favour of mounting everything, whether it's an
->   instance of an object or a path mounted at a different location.
-> - `readonly` will probably go too, once the Othismo protocol has real auth.
-> - The syntax of `needs` and `export` could be better, compared with how
->   instances are mounted.
+> **Note:** `readonly` will probably go, once the Othismo protocol has real
+> auth.
 
 ## HttpServer's header
 
@@ -153,7 +148,7 @@ export object HttpServer {
 the short in-line version.
 
 ```text
-  needs /net/tcp Listener
+  needs Listener at /net/tcp
 ```
 
 It needs a TCP listener at `/net/tcp`. `Listener` is a trait: a named set of
@@ -161,9 +156,9 @@ paths and the requests they accept, defined once in `env` so that every object
 needing a socket asks for the same thing.
 
 ```text
-  needs /dev/cons {
+  needs {
     /  write text/plain
-  }
+  } at /dev/cons
 ```
 
 It needs a console too, but it only ever writes lines to it, so that's all it
@@ -171,12 +166,12 @@ asks for. Anything that accepts a `write` of text at its root will do, and
 `site.oth`'s Console does.
 
 ```text
-  needs /** {
+  needs {
     /**  read -> */*, stat
-  }
+  } at /**
 ```
 
-This is how `mount /www pages` is allowed. HttpServer doesn't know about
+This is how `mount /www from pages` is allowed. HttpServer doesn't know about
 `/www`. It says that whatever else is in its view, it will `read` and `stat`
 it, any response is acceptable.
 

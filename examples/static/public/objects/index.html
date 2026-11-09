@@ -95,7 +95,7 @@ trait Listener {
   /{conn}          remove
 }
 </code></pre>
-<p>A trait can be used in two places. <code>needs /net/tcp Listener</code> says the object
+<p>A trait can be used in two places. <code>needs Listener at /net/tcp</code> says the object
 needs a whole Listener at <code>/net/tcp</code>. <code>object StaticSite : FileTree</code> says
 StaticSite serves a FileTree, alongside whatever else it serves.</p>
 <p>Traits are names for shapes, not types to inherit from. HttpServer&#39;s

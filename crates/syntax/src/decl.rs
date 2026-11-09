@@ -195,10 +195,16 @@ impl Parser {
         }
     }
 
-    /// What follows `needs`: `<mount point> <trait>` for the trait's whole
-    /// tree, or `<mount point> { entries }`.
+    /// What follows `needs`: `<trait> at <mount point>` for the trait's
+    /// whole tree, or `{ entries } at <mount point>`.
     pub fn need(&mut self, doc: String) -> Result<NeedDecl> {
-        let at = self.path()?;
+        if let Tok::Path(at) = self.peek() {
+            let shape = match self.peek_after() {
+                Some(Tok::Ident(name)) => name.clone(),
+                _ => "{ ... }".into(),
+            };
+            bail!("{}: `needs` names what it needs first: `needs {shape} at {at}`", self.pos());
+        }
         let entries = match self.peek() {
             Tok::Ident(_) => {
                 let name = self.ident("trait name", false)?;
@@ -207,6 +213,8 @@ impl Parser {
             }
             _ => self.entries()?,
         };
+        self.expect_kw("at")?;
+        let at = self.path()?;
         Ok(NeedDecl { at, doc, entries })
     }
 

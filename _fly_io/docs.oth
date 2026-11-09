@@ -18,24 +18,24 @@ require listen : text/plain = "0.0.0.0:8080"
 
 # All it takes from the host: the socket, and the access log, which
 # `fly logs` shows.
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 
 # HTTP in, namespace requests out. Every host name is served the site.
-instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www site
+instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from site
 }
 
 # The site can read the files and nothing else.
-instance site : StaticSite {
-  mount /files files readonly
+instance site of StaticSite {
+  mount /files from files readonly
 }
 
-instance files : PackedFiles { include "./public/" }
+instance files of PackedFiles { include "./public/" }
 
-mount /http http
+mount /http from http
 
 write /net/tcp listen
 write /http/hosts/* "/www"

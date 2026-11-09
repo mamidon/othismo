@@ -49,22 +49,22 @@
             <p><span class="counter" id="hits">&ndash;</span></p>
             <p class="counter-label">requests forwarded by the site so far &middot; <a href="/hits">/hits</a></p>
           </div>
-          <pre><code>needs /net/tcp  Listener
-needs /dev/cons Console
+          <pre><code>needs Listener at /net/tcp
+needs Console  at /dev/cons
 
-instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www pages
+instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from pages
 }
 
-instance pages : StaticSite {
-  mount /files files readonly
+instance pages of StaticSite {
+  mount /files from files readonly
 }
 
-instance files : PackedFiles { include "./public/" }
+instance files of PackedFiles { include "./public/" }
 
-mount /http http
+mount /http from http
 write /http/hosts/* "/www"
 write /http/hosts/files.localhost "/www/static"</code></pre>
         </div>

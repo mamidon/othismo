@@ -5,13 +5,13 @@
 import { Record, Store } from "./scripts/Store.oth"
 import { TypesTests } from "./scripts/TypesTests.oth"
 
-instance store : Store
+instance store of Store
 
-instance tests : TypesTests {
-  mount /store store
+instance tests of TypesTests {
+  mount /store from store
 }
 
-mount /store store
+mount /store from store
 write /store/record Record {
   name: "start",
   count: 7,

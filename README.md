@@ -37,27 +37,27 @@ import { HttpServer } from "../../sdk/objects/http/HttpServer.oth"
 import { StaticSite } from "../../sdk/objects/site/StaticSite.oth"
 import { Console, Listener, PackedFiles } from env
 
-needs /net/tcp  Listener
-needs /dev/cons Console
+needs Listener at /net/tcp
+needs Console  at /dev/cons
 
 # Turns HTTP requests from the socket into requests for pathnames in its view
 # and logs to the console
-instance http : HttpServer {
-  bind  /net/tcp  /net/tcp
-  bind  /dev/cons /dev/cons
-  mount /www pages
+instance http of HttpServer {
+  bind /net/tcp
+  bind /dev/cons
+  mount /www from pages
 }
 
 # Responds to messages with static content
-instance pages : StaticSite {
-  mount /files files readonly
+instance pages of StaticSite {
+  mount /files from files readonly
 }
 
 # Said static content is found at image build time in the specified relative folder
-instance files : PackedFiles { include "./public/" }
+instance files of PackedFiles { include "./public/" }
 
 # Put http in the image's own view, so the requests below can configure it
-mount /http http
+mount /http from http
 
 # configure how the HTTP server routes hosts
 write /http/hosts/* "/www"

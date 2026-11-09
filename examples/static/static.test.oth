@@ -7,14 +7,14 @@ import Site from "./site.oth"
 import { SiteTests } from "./scripts/SiteTests.oth"
 import { MemoryConsole, MemoryListener } from env
 
-instance net  : MemoryListener
-instance cons : MemoryConsole
+instance net  of MemoryListener
+instance cons of MemoryConsole
 
-instance web : Site {
-  mount /net/tcp  net
-  mount /dev/cons cons
+instance web of Site {
+  mount /net/tcp  from net
+  mount /dev/cons from cons
 }
 
-instance tests : SiteTests {
-  mount /net net
+instance tests of SiteTests {
+  mount /net from net
 }

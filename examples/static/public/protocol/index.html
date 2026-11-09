@@ -100,12 +100,12 @@ resolve, and what the checker can work out from it.</p>
 </tr>
 </thead>
 <tbody><tr>
-<td>in an image: <code>mount &lt;at&gt; &lt;instance&gt; [readonly]</code></td>
+<td>in an image: <code>bind &lt;instance&gt; into &lt;at&gt; [readonly]</code></td>
 <td><code>mount(fd, afd, old, flag, aname)</code>, which makes the kernel send <code>Tattach</code></td>
 <td>Attach an instance&#39;s whole served tree at a point in a view. Only an image can do it.</td>
 </tr>
 <tr>
-<td>in an instance block: <code>bind &lt;at&gt; &lt;path&gt;</code></td>
+<td>in an instance block: <code>bind &lt;path&gt; into &lt;at&gt;</code></td>
 <td><code>bind(name, old, flag)</code></td>
 <td>Give an instance what <code>&lt;path&gt;</code> means in the image&#39;s own view.</td>
 </tr>
@@ -715,7 +715,7 @@ nothing takes, and <code>unsupported_type</code> for a payload whose content typ
 entry doesn&#39;t take. A client has the same methods for the requests a need
 lists, and is made with the mount point it goes through. A need for one
 mount point gets one made already, named for the mount point&#39;s last segment:
-<code>cons</code> for <code>needs /dev/cons</code>. A need under a pattern, such as <code>needs /**</code>,
+<code>cons</code> for <code>needs ... at /dev/cons</code>. A need under a pattern, such as <code>needs ... at /**</code>,
 gets only the class, to make with whichever mount point the module is told
 to use. Where an entry
 names one text type, such as <code>text/plain</code>, the methods take and give a

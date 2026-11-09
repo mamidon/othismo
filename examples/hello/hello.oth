@@ -4,8 +4,8 @@
 import { Echo } from "./scripts/Echo.oth"
 import { Console } from env
 
-needs /dev/cons Console
+needs Console at /dev/cons
 
-instance echo : Echo {
-  bind /dev/cons /dev/cons
+instance echo of Echo {
+  bind /dev/cons
 }

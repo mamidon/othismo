@@ -1,7 +1,7 @@
 # The runtime's own header, `env`, is this directory: the shapes every tree
 # of files shares, here, and one file for each trait the runtime implements,
 # with its in-memory stand-in. The image being run gets the real ones by
-# its needs, `needs /net/tcp Listener`, and the runtime picks how to run
+# its needs, `needs Listener at /net/tcp`, and the runtime picks how to run
 # them; the stand-ins are objects any image can declare. The runtime embeds
 # every file and joins them into `env`.
 #

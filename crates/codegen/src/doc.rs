@@ -36,7 +36,7 @@ pub fn env() -> String {
         "# Built-in objects\n\n\
          The objects the runtime implements, and the shapes they are made of. Console, Listener and \
          Files are the only way any object reaches the world outside the image: the image being run \
-         gets one by needing it, `needs /net/tcp Listener`, and the runtime picks how to run it. The \
+         gets one by needing it, `needs Listener at /net/tcp`, and the runtime picks how to run it. The \
          others touch nothing outside the image, and any image can declare one by its name. They are \
          declared in the runtime's own header, `env`, and this page is generated from it.\n\n",
     );
@@ -132,7 +132,7 @@ mod tests {
         ## From its files.
         object Site {
           ## The files.
-          needs /files { /** read -> */*, stat }
+          needs { /** read -> */*, stat } at /files
           serves {
             ## How many,
             ## so far.

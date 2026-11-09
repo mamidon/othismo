@@ -60,17 +60,18 @@ read-only.
 
 ## Building views
 
-An image builds each view from three lines (see
+An image builds each view from two kinds of line (see
 [Building images](images.md#views)):
 
-- `mount <at> <instance> [readonly]` puts an instance's whole served tree at
-  `<at>`.
-- `bind <at> <path> [readonly]`, in an instance block, gives the instance
-  what `<path>` means in the image's own view. That is how an image passes
-  down what it was given, including the host's objects.
-- `needs <at> <shape>`, at the top level, leaves `<at>` in the image's view to
-  be filled by whoever instantiates it: a parent image, or for the root
-  image, the runtime.
+- `bind <source> into <at> [readonly]`, or the same written the other way
+  round, `mount <at> from <source> [readonly]`. An instance as the source
+  puts its whole served tree at `<at>`. A path as the source, in an instance
+  block, gives the instance what that path means in the image's own view.
+  That is how an image passes down what it was given, including the host's
+  objects. `bind /net/tcp` is short for `bind /net/tcp into /net/tcp`.
+- `needs <shape> at <at>`, at the top level, leaves `<at>` in the image's
+  view to be filled by whoever instantiates it: a parent image, or for the
+  root image, the runtime.
 
 ## Rearranging a view
 
@@ -120,9 +121,9 @@ what it needs with `needs`, and only the root image, the one being run, has
 its needs filled by the runtime with the real thing:
 
 ```text
-needs /net/tcp  Listener      # a TCP listener
-needs /dev/cons Console       # stdin and stdout
-needs /srv/www  Files         # a directory on the host
+needs Listener at /net/tcp     # a TCP listener
+needs Console  at /dev/cons    # stdin and stdout
+needs Files    at /srv/www     # a directory on the host
 ```
 
 The trait a root need names picks the object. Each root need is an object
@@ -225,8 +226,9 @@ socket, so nothing outside the process can make a request through it.
 
 Every view has an owner, so the shell always looks from one. It starts at
 the image, which lists the **roots**: the image's own view, and every
-instance with a view that nothing mounts. Only a `mount` makes a parent; a
-`bind` or an export passes on what is already held. From a root, the shell
+instance with a view that nothing mounts. Only binding or mounting an
+instance makes a parent; binding a path, or an export, passes on what is
+already held. From a root, the shell
 steps into the views of what that view holds. The bar at the top shows the
 **route**: the shortest chain of mounts from the root entered to where it
 looks from, however it got there.

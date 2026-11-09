@@ -436,10 +436,10 @@ mod tests {
             ##
             ## At length.
             export object Greeter {
-              needs /dev/cons Console
+              needs Console at /dev/cons
               ## Something to shout with.
-              needs /shouter { / write text/plain }
-              needs /sites/** { /** read -> */*, stat }
+              needs { / write text/plain } at /shouter
+              needs { /** read -> */*, stat } at /sites/**
               serves {
                 ## How to greet.
                 /greeting       write application/bson
@@ -482,7 +482,7 @@ mod tests {
         let types = "export schemas application/bson { message Hello { name: string } message Reset {} message Unused {} }";
         let b = "import { Hello, Reset } from \"./Types.oth\"
             export object B {
-              needs /peer { /hello write Hello  /count read -> Count }
+              needs { /hello write Hello  /count read -> Count } at /peer
               serves { /x write Hello, write Reset  /count read -> Count }
             }
             export schemas application/bson { message Count { n: u32 } }";
